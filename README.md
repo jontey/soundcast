@@ -38,7 +38,13 @@ Soundcast uses a split architecture:
    npm install
    ```
 
-3. Configure environment variables (optional):
+3. Build the mediasoup client bundle:
+   ```bash
+   # This creates a bundled version of mediasoup-client for the browser
+   npm run build:mediasoup
+   ```
+
+4. Configure environment variables (optional):
    ```bash
    # Create a .env file in the root directory
    LISTEN_IP=0.0.0.0  # IP to listen on
@@ -48,9 +54,17 @@ Soundcast uses a split architecture:
 
 ## Running the Application
 
-Start the server:
+### Available Scripts
+
 ```bash
+# Start the server
 npm start
+
+# Build the mediasoup client bundle
+npm run build:mediasoup
+
+# Run in development mode with auto-restart
+npm run dev
 ```
 
 The application will be available at:
@@ -94,9 +108,19 @@ The application will be available at:
 
 ### Key Components
 
-- **mediasoup**: Handles WebRTC media routing
+- **mediasoup**: Handles WebRTC media routing (SFU - Selective Forwarding Unit)
+- **mediasoup-client**: Browser-side library for WebRTC connections
 - **Fastify**: Provides the HTTP and WebSocket server
 - **WebRTC**: Enables real-time audio communication
+
+### mediasoup Client Architecture
+
+The mediasoup client is bundled using webpack to make it available in the browser:
+
+1. **Entry Point**: `src/mediasoup-entry.js` imports the required mediasoup-client modules
+2. **Bundle Script**: `src/bundle-mediasoup.js` configures webpack to create the bundle
+3. **Output**: The bundled file is placed in `src/public/js/mediasoup-client.js`
+4. **Usage**: The bundle is included in the HTML files and provides the global `mediasoupClient` object
 
 ## Troubleshooting
 
