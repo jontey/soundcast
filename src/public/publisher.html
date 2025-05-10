@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundCast Publisher</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>SoundCast Publisher</h1>
+    
+    <div id="status" class="status info">Connecting to server...</div>
+    
+    <div>
+      <h2>Available Channels</h2>
+      <div id="channelsList">
+        <p>Loading channels...</p>
+      </div>
+    </div>
+    
+    <div id="publisherControls" class="hidden">
+      <h2>Broadcasting Controls</h2>
+      
+      <div class="audio-controls">
+        <div class="flex-container">
+          <button id="startBroadcastBtn">Start Broadcasting</button>
+          <button id="stopBroadcastBtn" disabled>Stop Broadcasting</button>
+        </div>
+        
+        <div>
+          <p>Audio Level:</p>
+          <div class="audio-meter">
+            <div id="audioMeterFill" class="audio-meter-fill"></div>
+          </div>
+        </div>
+        
+        <div>
+          <p>Audio Source:</p>
+          <select id="audioSource">
+            <option value="">Select audio source</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    // DOM Elements
+    const channelsList = document.getElementById('channelsList');
+    const publisherControls = document.getElementById('publisherControls');
+    const startBroadcastBtn = document.getElementById('startBroadcastBtn');
+    const stopBroadcastBtn = document.getElementById('stopBroadcastBtn');
+    const audioSourceSelect = document.getElementById('audioSource');
+    const audioMeterFill = document.getElementById('audioMeterFill');
+    
+    // State
+    let channels = [];
+    let selectedChannel = null;
+    let device = null;
+    let audioStream = null;
+    let audioContext = null;
+    let audioMeter = null;
+    let producerId = null;
+    let meterUpdateInterval = null;
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Connect to WebSocket
+      socket = connectWebSocket();
+      
+      // Set up WebSocket message handler
+      socket.onmessage = handleSocketMessage;
+      
+      // Set up event listeners
+      startBroadcastBtn.addEventListener('click', startBroadcasting);
+      stopBroadcastBtn.addEventListener('click', stopBroadcasting);
+      audioSourceSelect.addEventListener('change', () => {
+        if (audioSourceSelect.value) {
+          updateStatus('Audio source selected', 'info');
+        }
+      });
+      
+      // Load audio input devices
+      await loadAudioInputDevices();
+      
+      // Add refresh button for audio devices
+      const refreshDevicesBtn = document.createElement('button');
+      refreshDevicesBtn.textContent = 'Refresh Audio Devices';
+      refreshDevicesBtn.className = 'refresh-btn';
+      refreshDevicesBtn.addEventListener('click', loadAudioInputDevices);
+      audioSourceSelect.parentNode.appendChild(refreshDevicesBtn);
+    });
+    
+    // Handle WebSocket messages
+    function handleSocketMessage(event) {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('Error parsing WebSocket message:', e);
+        return;
+      }
+      
+      const { action, data: payload } = data;
+      console.log('Received action:', action, payload);
+      
+      switch (action) {
+        case 'rtpCapabilities':
+          // Store RTP capabilities
+          rtpCapabilities = payload;
+          // Request channel list
+          sendMessage('get-channels');
+          break;
+          
+        case 'channel-list':
+          // Update channels list
+          channels = payload;
+          updateChannelsList(channels);
+          break;
+          
+        case 'publisher-transport-created':
+          // Handle transport created
+          handleTransportCreated(payload);
+          break;
+          
+        case 'publisher-transport-connected':
+          // Transport connected successfully
+          updateStatus('Transport connected successfully', 'info');
+          break;
+          
+        case 'produced':
+          // Producer created
+          producerId = payload.id;
+          updateStatus('Broadcasting started!', 'success');
+          startBroadcastBtn.disabled = true;
+          stopBroadcastBtn.disabled = false;
+          break;
+          
+        case 'error':
+          // Handle error
+          updateStatus('Error: ' + payload.message, 'error');
+          break;
+          
+        case 'forced-disconnect':
+          updateStatus(`Disconnected: ${payload.reason}`, 'error');
+          stopBroadcasting();
+          break;
+          
+        default:
+          console.log('Unknown action:', action);
+      }
+    }
+    
+    // Load audio input devices
+    async function loadAudioInputDevices() {
+      try {
+        // Request microphone permission first to get labeled devices
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          // Stop the tracks immediately after getting permission
+          stream.getTracks().forEach(track => track.stop());
+        } catch (permissionError) {
+          console.warn('Could not get microphone permission:', permissionError);
+        }
+        
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        
+        audioSourceSelect.innerHTML = '<option value="">Select audio source</option>';
+        
+        audioInputs.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `Microphone ${audioSourceSelect.length}`;
+          audioSourceSelect.appendChild(option);
+        });
+        
+        // Auto-select the first device if available
+        if (audioInputs.length > 0 && audioSourceSelect.options.length > 1) {
+          audioSourceSelect.selectedIndex = 1; // Select first actual device (index 0 is the placeholder)
+        } else if (audioInputs.length === 0) {
+          updateStatus('No audio input devices found', 'error');
+        }
+      } catch (error) {
+        console.error('Error loading audio devices:', error);
+        updateStatus('Error loading audio devices: ' + error.message, 'error');
+      }
+    }
+    
+    // Update channels list
+    function updateChannelsList(channelIds) {
+      channels = channelIds;
+      
+      if (channelIds.length === 0) {
+        channelsList.innerHTML = '<p>No active channels. Ask an admin to create one.</p>';
+        publisherControls.classList.add('hidden');
+        return;
+      }
+      
+      let html = '<div class="flex-container">';
+      
+      channelIds.forEach(channelId => {
+        const isSelected = selectedChannel === channelId;
+        html += `
+          <button 
+            class="${isSelected ? 'selected' : ''}" 
+            onclick="selectChannel('${channelId}')"
+          >
+            ${channelId}
+          </button>
+        `;
+      });
+      
+      html += '</div>';
+      channelsList.innerHTML = html;
+      
+      if (selectedChannel && !channelIds.includes(selectedChannel)) {
+        selectedChannel = null;
+        publisherControls.classList.add('hidden');
+      }
+    }
+    
+    // Select a channel
+    function selectChannel(channelId) {
+      selectedChannel = channelId;
+      updateStatus(`Channel "${channelId}" selected`, 'success');
+      publisherControls.classList.remove('hidden');
+      updateChannelsList(channels);
+    }
+    
+    // Start broadcasting
+    async function startBroadcasting() {
+      if (!selectedChannel) {
+        updateStatus('Please select a channel first', 'error');
+        return;
+      }
+      
+      const audioSourceId = audioSourceSelect.value;
+      if (!audioSourceId) {
+        updateStatus('Please select an audio source', 'error');
+        return;
+      }
+      
+      try {
+        // Load mediasoup client
+        await loadMediasoupClient();
+        
+        // Create device
+        device = await createDevice();
+        
+        // Get user media
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: audioSourceId,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        
+        // Create audio context and meter
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(audioStream);
+        audioMeter = createAudioMeter(audioContext);
+        source.connect(audioMeter);
+        
+        // Start meter updates
+        meterUpdateInterval = setInterval(() => {
+          updateAudioMeter(audioMeter, audioMeterFill);
+        }, 100);
+        
+        // Create transport
+        updateStatus('Creating transport...', 'info');
+        sendMessage('create-publisher-transport', { channelId: selectedChannel });
+      } catch (error) {
+        console.error('Error starting broadcast:', error);
+        updateStatus('Error starting broadcast: ' + error.message, 'error');
+        stopBroadcasting();
+      }
+    }
+    
+    // Handle transport created
+    async function handleTransportCreated(transportParams) {
+      try {
+        // Create send transport with ICE servers
+        transportParams.iceServers = getIceServers();
+        transport = device.createSendTransport(transportParams);
+        
+        // Set up transport events
+        transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            sendMessage('connect-publisher-transport', { dtlsParameters });
+            callback();
+          } catch (error) {
+            errback(error);
+          }
+        });
+        
+        transport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
+          try {
+            // Send produce request to server and get real producer ID
+            sendMessage('produce-audio', { 
+              channelId: selectedChannel,
+              rtpParameters 
+            });
+            
+            // Use a temporary ID, the real one will be set when server responds
+            callback({ id: 'temp-producer-id' });
+          } catch (error) {
+            errback(error);
+          }
+        });
+        
+        transport.on('connectionstatechange', (state) => {
+          console.log('Transport connection state:', state);
+          if (state === 'failed' || state === 'closed') {
+            stopBroadcasting();
+          }
+        });
+        
+        // Connect transport
+        updateStatus('Connecting transport...', 'info');
+        
+        // Start producing audio after transport is set up
+        await produceAudio();
+      } catch (error) {
+        console.error('Error handling transport:', error);
+        updateStatus('Error handling transport: ' + error.message, 'error');
+        stopBroadcasting();
+      }
+    }
+    
+    // Produce audio
+    async function produceAudio() {
+      try {
+        if (!transport || !audioStream) {
+          throw new Error('Transport or audio stream not ready');
+        }
+        
+        // Get audio track
+        const track = audioStream.getAudioTracks()[0];
+        
+        // Create producer - this will trigger the transport.on('produce') event
+        // which will send the produce-audio message to the server
+        producer = await transport.produce({ track });
+        
+        updateStatus('Starting broadcast...', 'info');
+      } catch (error) {
+        console.error('Error producing audio:', error);
+        updateStatus('Error producing audio: ' + error.message, 'error');
+        stopBroadcasting();
+      }
+    }
+    
+    // Stop broadcasting
+    function stopBroadcasting() {
+      // First notify the server that we're stopping broadcasting
+      if (selectedChannel && socket && socket.readyState === WebSocket.OPEN) {
+        console.log('Notifying server about stopping broadcasting');
+        sendMessage('stop-broadcasting', { channelId: selectedChannel });
+      }
+      
+      // Stop producer
+      if (producer) {
+        console.log('Closing producer');
+        producer.close();
+        producer = null;
+      }
+      
+      // Close transport
+      if (transport) {
+        console.log('Closing transport');
+        transport.close();
+        transport = null;
+      }
+      
+      // Stop audio stream
+      if (audioStream) {
+        console.log('Stopping audio tracks');
+        audioStream.getTracks().forEach(track => track.stop());
+        audioStream = null;
+      }
+      
+      // Close audio context
+      if (audioContext) {
+        if (audioMeter) {
+          console.log('Shutting down audio meter');
+          audioMeter.shutdown();
+          audioMeter = null;
+        }
+        
+        if (audioContext.state !== 'closed') {
+          console.log('Closing audio context');
+          audioContext.close();
+        }
+        audioContext = null;
+      }
+      
+      // Clear meter update interval
+      if (meterUpdateInterval) {
+        console.log('Clearing meter update interval');
+        clearInterval(meterUpdateInterval);
+        meterUpdateInterval = null;
+      }
+      
+      // Reset UI
+      audioMeterFill.style.width = '0%';
+      startBroadcastBtn.disabled = false;
+      stopBroadcastBtn.disabled = true;
+      
+      // Reset producer ID
+      producerId = null;
+      
+      updateStatus('Broadcasting stopped', 'info');
+    }
+    
+    // Refresh channels list periodically
+    setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        sendMessage('get-channels');
+      }
+    }, 5000);
+    
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+      stopBroadcasting();
+    });
+  </script>
+</body>
+</html>

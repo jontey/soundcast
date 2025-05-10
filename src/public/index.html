@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundCast Subscriber</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>SoundCast Subscriber</h1>
+    
+    <div id="status" class="status info">Connecting to server...</div>
+    
+    <div id="joinForm">
+      <h2>Join a Channel</h2>
+      
+      <div class="flex-container">
+        <input type="text" id="displayName" placeholder="Your Display Name">
+      </div>
+      
+      <div>
+        <h3>Available Channels</h3>
+        <div id="channelsList">
+          <p>Loading channels...</p>
+        </div>
+      </div>
+    </div>
+    
+    <div id="listenerControls" class="hidden">
+      <h2>Listening to: <span id="currentChannel"></span></h2>
+      
+      <div class="audio-controls">
+        <div class="flex-container">
+          <button id="leaveChannelBtn">Leave Channel</button>
+        </div>
+        
+        <div>
+          <p>Audio Level:</p>
+          <div class="audio-meter">
+            <div id="audioMeterFill" class="audio-meter-fill"></div>
+          </div>
+        </div>
+        
+        <div class="flex-container">
+          <button id="muteBtn">Audio Off</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    // DOM Elements
+    const joinForm = document.getElementById('joinForm');
+    const displayNameInput = document.getElementById('displayName');
+    const channelsList = document.getElementById('channelsList');
+    const listenerControls = document.getElementById('listenerControls');
+    const currentChannelSpan = document.getElementById('currentChannel');
+    const leaveChannelBtn = document.getElementById('leaveChannelBtn');
+    const volumeControl = document.getElementById('volumeControl');
+    const muteBtn = document.getElementById('muteBtn');
+    const audioMeterFill = document.getElementById('audioMeterFill');
+    
+    // State
+    let channels = [];
+    let selectedChannel = null;
+    let device = null;
+    let audioElement = null;
+    let audioContext = null;
+    let audioMeter = null;
+    let audioGainNode = null;
+    let isMuted = false;
+    let meterUpdateInterval = null;
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', async () => {
+      // Connect to WebSocket
+      socket = connectWebSocket();
+      
+      // Set up WebSocket message handler
+      socket.onmessage = handleSocketMessage;
+      
+      // Set up event listeners
+      leaveChannelBtn.addEventListener('click', leaveChannel);
+      muteBtn.addEventListener('click', toggleMute);
+      
+      // Initialize mute state
+      isMuted = false;
+    });
+    
+    // Handle WebSocket messages
+    function handleSocketMessage(event) {
+      try {
+        const message = JSON.parse(event.data);
+        const { action, data } = message;
+        
+        console.log('Received action:', action, data);
+        
+        switch (action) {
+          case 'rtpCapabilities':
+            rtpCapabilities = data;
+            // Request channel list
+            sendMessage('get-channels');
+            break;
+            
+          case 'channel-list':
+            updateChannelsList(data);
+            break;
+            
+          case 'listener-transport-created':
+            handleTransportCreated(data);
+            break;
+            
+          case 'listener-transport-connected':
+            console.log('Transport connected successfully, data:', data);
+            updateStatus('Transport connected, requesting audio stream...', 'info');
+            // Ensure we have a valid transport before consuming
+            if (!transport) {
+              console.error('Transport not available even though connection message received');
+              updateStatus('Error: Transport not available', 'error');
+              break;
+            }
+            // Check if device is loaded and has rtpCapabilities
+            if (!device || !device.rtpCapabilities) {
+              console.error('Device not properly loaded with RTP capabilities');
+              updateStatus('Error: Device not properly initialized', 'error');
+              break;
+            }
+            // Log the device capabilities
+            console.log('Device RTP capabilities:', device.rtpCapabilities);
+            break;
+            
+          case 'consumer-created':
+            handleConsumerCreated(data);
+            break;
+            
+          case 'forced-disconnect':
+            updateStatus(`Disconnected: ${data.reason}`, 'error');
+            leaveChannel();
+            break;
+            
+          case 'error':
+            updateStatus(`Error: ${data.message}`, 'error');
+            break;
+        }
+      } catch (error) {
+        console.error('Error parsing message:', error);
+      }
+    }
+    
+    // Update channels list
+    function updateChannelsList(channelIds) {
+      channels = channelIds;
+      
+      if (channelIds.length === 0) {
+        channelsList.innerHTML = '<p>No active channels. Please try again later.</p>';
+        return;
+      }
+      
+      let html = '<div class="flex-container">';
+      
+      channelIds.forEach(channelId => {
+        html += `
+          <button onclick="joinChannel('${channelId}')">
+            ${channelId}
+          </button>
+        `;
+      });
+      
+      html += '</div>';
+      channelsList.innerHTML = html;
+    }
+    
+    // Join a channel
+    async function joinChannel(channelId) {
+      const displayName = displayNameInput.value.trim() || 'Anonymous';
+      
+      try {
+        // Load mediasoup client
+        await loadMediasoupClient();
+        
+        // Create device
+        device = await createDevice();
+        
+        // Request transport creation
+        selectedChannel = channelId;
+        updateStatus(`Joining channel "${channelId}"...`, 'info');
+        sendMessage('create-listener-transport', { 
+          channelId, 
+          displayName 
+        });
+      } catch (error) {
+        console.error('Error joining channel:', error);
+        updateStatus('Error joining channel: ' + error.message, 'error');
+      }
+    }
+    
+    // Handle transport created
+    async function handleTransportCreated(transportParams) {
+      try {
+        console.log('Received transport parameters:', transportParams);
+        
+        // Create receive transport with ICE servers
+        const iceServers = getIceServers();
+        console.log('Using ICE servers:', iceServers);
+        transportParams.iceServers = iceServers;
+        
+        console.log('Creating receive transport with params:', transportParams);
+        transport = device.createRecvTransport(transportParams);
+        console.log('Receive transport created:', transport.id);
+        
+        // Set up transport events
+        transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            console.log('Transport connect event triggered with dtlsParameters');
+            // Send the dtlsParameters to the server
+            sendMessage('connect-listener-transport', { dtlsParameters });
+            // Immediately call the callback to complete the connection process
+            callback();
+          } catch (error) {
+            console.error('Error in connect event:', error);
+            errback(error);
+          }
+        });
+        
+        transport.on('connectionstatechange', (state) => {
+          console.log('Transport connection state changed to:', state);
+          updateStatus(`Transport connection state: ${state}`, 'info');
+          
+          if (state === 'connected') {
+            console.log('Transport successfully connected, ready to consume');
+          } else if (state === 'failed' || state === 'closed') {
+            console.log('Transport connection failed or closed, leaving channel');
+            leaveChannel();
+          }
+        });
+        
+        // Connect transport - this will trigger the connect event above
+        updateStatus('Connecting transport...', 'info');
+        
+        // For receive transports, we don't call connect() directly
+        // Instead, the connect event will be triggered when we try to consume
+        console.log('Transport created, will connect when consuming...');
+        
+        // Proceed to consume audio immediately
+        // This will trigger the connect event with the proper parameters
+        setTimeout(() => {
+          console.log('Proceeding to consume audio...');
+          consumeAudio();
+        }, 500);
+      } catch (error) {
+        console.error('Error handling transport creation:', error);
+        updateStatus('Error handling transport: ' + error.message, 'error');
+        leaveChannel();
+      }
+    }
+    
+    // Consume audio
+    async function consumeAudio() {
+      try {
+        if (!transport) {
+          throw new Error('Transport not ready');
+        }
+        
+        // Check if device is loaded and has rtpCapabilities
+        if (!device || !device.rtpCapabilities) {
+          console.error('Device not properly loaded with RTP capabilities');
+          updateStatus('Error: Device not properly initialized', 'error');
+          return;
+        }
+        
+        console.log('Sending consume-audio request with RTP capabilities:', device.rtpCapabilities);
+        
+        // Send consume request
+        updateStatus('Connecting to audio stream...', 'info');
+        sendMessage('consume-audio', { rtpCapabilities: device.rtpCapabilities });
+      } catch (error) {
+        console.error('Error consuming audio:', error);
+        updateStatus('Error consuming audio: ' + error.message, 'error');
+        leaveChannel();
+      }
+    }
+    
+    // Handle consumer created
+    async function handleConsumerCreated(data) {
+      try {
+        console.log('Consumer created data received:', data);
+        updateStatus('Audio stream found, connecting...', 'info');
+        
+        // Create consumer
+        console.log('Creating consumer with parameters:', {
+          id: data.id,
+          producerId: data.producerId,
+          kind: data.kind,
+          rtpParameters: data.rtpParameters
+        });
+        
+        consumer = await transport.consume({
+          id: data.id,
+          producerId: data.producerId,
+          kind: data.kind,
+          rtpParameters: data.rtpParameters
+        });
+        
+        console.log('Consumer created successfully:', consumer);
+        console.log('Consumer track details:', {
+          kind: consumer.track.kind,
+          enabled: consumer.track.enabled,
+          readyState: consumer.track.readyState,
+          muted: consumer.track.muted
+        });
+        
+        // Set up audio
+        const stream = new MediaStream([consumer.track]);
+        console.log('MediaStream created with track:', consumer.track);
+        
+        // Create a hidden audio element for output
+        const audioElement = document.createElement('audio');
+        audioElement.srcObject = stream;
+        audioElement.autoplay = true;
+        audioElement.id = 'audioElement';
+        audioElement.style.display = 'none';
+        document.body.appendChild(audioElement);
+        console.log('Hidden audio element created for output');
+        
+        // Create audio context for metering
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(stream);
+        console.log('Audio context and source created');
+        
+        // Create gain node for metering only
+        audioGainNode = audioContext.createGain();
+        audioGainNode.gain.value = 1.0; // Fixed gain for visualization
+        source.connect(audioGainNode);
+        
+        // Create audio meter
+        audioMeter = createAudioMeter(audioContext);
+        audioGainNode.connect(audioMeter);
+        
+        // We don't connect to destination as we're using the audio element for output
+        console.log('Audio pipeline set up for metering only');
+        
+        // Resume audio context if it's suspended
+        if (audioContext.state === 'suspended') {
+          console.log('Resuming suspended audio context');
+          await audioContext.resume();
+        }
+        
+        // Apply initial mute state if needed
+        if (isMuted && consumer) {
+          consumer.pause();
+          console.log('Applied initial mute state to consumer');
+        }
+        
+        // Start meter updates
+        meterUpdateInterval = setInterval(() => {
+          updateAudioMeter(audioMeter, audioMeterFill);
+        }, 100);
+        
+        // Update UI
+        joinForm.classList.add('hidden');
+        listenerControls.classList.remove('hidden');
+        currentChannelSpan.textContent = selectedChannel;
+        
+        updateStatus('Connected to audio stream', 'success');
+      } catch (error) {
+        console.error('Error handling consumer:', error);
+        updateStatus('Error handling consumer: ' + error.message, 'error');
+        leaveChannel();
+      }
+    }
+    
+    // Leave channel
+    function leaveChannel() {
+      // Close consumer
+      if (consumer) {
+        console.log('Closing consumer');
+        consumer.close();
+        consumer = null;
+      }
+      
+      // Close transport
+      if (transport) {
+        console.log('Closing transport');
+        transport.close();
+        transport = null;
+      }
+      
+      // If we have a consumer, close it properly
+      if (consumer) {
+        console.log('Closing consumer');
+        consumer.close();
+        consumer = null;
+      }
+      
+      // Remove the hidden audio element
+      const audioElement = document.getElementById('audioElement');
+      if (audioElement) {
+        console.log('Removing hidden audio element');
+        audioElement.pause();
+        audioElement.srcObject = null;
+        audioElement.remove();
+      }
+      
+      // Close audio context
+      if (audioContext) {
+        if (audioMeter) {
+          console.log('Shutting down audio meter');
+          audioMeter.shutdown();
+          audioMeter = null;
+        }
+        
+        if (audioContext.state !== 'closed') {
+          console.log('Closing audio context');
+          audioContext.close();
+        }
+        audioContext = null;
+        audioGainNode = null;
+      }
+      
+      // Clear meter update interval
+      if (meterUpdateInterval) {
+        console.log('Clearing meter update interval');
+        clearInterval(meterUpdateInterval);
+        meterUpdateInterval = null;
+      }
+      
+      // Reset UI
+      joinForm.classList.remove('hidden');
+      listenerControls.classList.add('hidden');
+      audioMeterFill.style.width = '0%';
+      selectedChannel = null;
+      
+      // Notify server that we're leaving the channel
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        console.log('Notifying server about leaving channel');
+        sendMessage('leave-channel', {});
+      }
+      
+      updateStatus('Left channel', 'info');
+    }
+    
+    // Toggle audio on/off
+    function toggleMute() {
+      isMuted = !isMuted;
+      console.log('Audio toggled:', isMuted ? 'off' : 'on');
+      
+      // Use the proper mediasoup Consumer API methods to control audio
+      if (consumer) {
+        if (isMuted) {
+          // Use the consumer's pause() method to mute the audio
+          // This internally sets track.enabled = false
+          consumer.pause();
+          console.log('Consumer paused (muted)');
+        } else {
+          // Use the consumer's resume() method to unmute the audio
+          // This internally sets track.enabled = true
+          consumer.resume();
+          console.log('Consumer resumed (unmuted)');
+        }
+      } else {
+        console.warn('Consumer not found - audio control may not work');
+      }
+      
+      // Also update the gain node for the audio meter visualization
+      if (audioGainNode) {
+        audioGainNode.gain.value = isMuted ? 0 : 1.0;
+        console.log('Set gain node value for visualization:', audioGainNode.gain.value);
+      }
+      
+      // Update button text
+      muteBtn.textContent = isMuted ? 'Audio On' : 'Audio Off';
+    }
+    
+    // Refresh channels list periodically
+    setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN && !selectedChannel) {
+        sendMessage('get-channels');
+      }
+    }, 5000);
+    
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+      leaveChannel();
+    });
+  </script>
+</body>
+</html>

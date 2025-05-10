@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoundCast Admin</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>SoundCast Admin Panel</h1>
+    
+    <div id="status" class="status info">Connecting to server...</div>
+    
+    <div class="flex-container">
+      <a href="/publisher.html" target="_blank">Open Publisher Page</a>
+      <a href="/subscriber.html" target="_blank">Open Subscriber Page</a>
+    </div>
+    
+    <div>
+      <h2>Create Channel</h2>
+      <div class="flex-container">
+        <input type="text" id="channelName" placeholder="Channel Name">
+        <button id="createChannelBtn">Create Channel</button>
+      </div>
+    </div>
+    
+    <div>
+      <h2>Active Channels</h2>
+      <div id="channelsList">
+        <p>No active channels</p>
+      </div>
+    </div>
+    
+    <div>
+      <h2>Channel Subscribers</h2>
+      <div id="subscribersList">
+        <p>No subscribers</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    // DOM Elements
+    const channelNameInput = document.getElementById('channelName');
+    const createChannelBtn = document.getElementById('createChannelBtn');
+    const channelsList = document.getElementById('channelsList');
+    const subscribersList = document.getElementById('subscribersList');
+    
+    // State
+    let channels = [];
+    let subscribers = {};
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      // Connect to WebSocket
+      socket = connectWebSocket();
+      
+      // Set up WebSocket message handler
+      socket.onmessage = handleSocketMessage;
+      
+      // Set up event listeners
+      createChannelBtn.addEventListener('click', createChannel);
+    });
+    
+    // Handle WebSocket messages
+    function handleSocketMessage(event) {
+      try {
+        const message = JSON.parse(event.data);
+        const { action, data } = message;
+        
+        console.log('Received action:', action, data);
+        
+        switch (action) {
+          case 'rtpCapabilities':
+            rtpCapabilities = data;
+            // Request channel list
+            sendMessage('get-channels');
+            // Request subscribers list
+            sendMessage('admin-get-channels-subscribers');
+            break;
+            
+          case 'channel-list':
+            updateChannelsList(data);
+            break;
+            
+          case 'channels-subscribers':
+            updateSubscribersList(data);
+            break;
+            
+          case 'channel-created':
+            updateStatus(`Channel ${data.channelId} created successfully`, 'success');
+            sendMessage('get-channels');
+            break;
+            
+          case 'channel-deleted':
+            updateStatus(`Channel ${data.channelId} deleted successfully`, 'success');
+            sendMessage('get-channels');
+            break;
+            
+          case 'subscriber-removed':
+            updateStatus(`Subscriber removed from channel ${data.channelId}`, 'success');
+            sendMessage('admin-get-channels-subscribers');
+            break;
+            
+          case 'error':
+            updateStatus(`Error: ${data.message}`, 'error');
+            break;
+        }
+      } catch (error) {
+        console.error('Error parsing message:', error);
+      }
+    }
+    
+    // Create a new channel
+    function createChannel() {
+      const channelId = channelNameInput.value.trim();
+      
+      if (!channelId) {
+        updateStatus('Please enter a channel name', 'error');
+        return;
+      }
+      
+      sendMessage('admin-create-channel', { channelId });
+      channelNameInput.value = '';
+    }
+    
+    // Delete a channel
+    function deleteChannel(channelId) {
+      if (confirm(`Are you sure you want to delete channel "${channelId}"?`)) {
+        sendMessage('admin-delete-channel', { channelId });
+      }
+    }
+    
+    // Remove a subscriber
+    function removeSubscriber(channelId, consumerId) {
+      if (confirm('Are you sure you want to remove this subscriber?')) {
+        sendMessage('admin-remove-subscriber', { channelId, consumerId });
+      }
+    }
+    
+    // Update channels list
+    function updateChannelsList(channelIds) {
+      channels = channelIds;
+      
+      if (channelIds.length === 0) {
+        channelsList.innerHTML = '<p>No active channels</p>';
+        return;
+      }
+      
+      let html = '<table>';
+      html += '<tr><th>Channel Name</th><th>Actions</th></tr>';
+      
+      channelIds.forEach(channelId => {
+        html += `
+          <tr>
+            <td>${channelId}</td>
+            <td>
+              <button class="danger" onclick="deleteChannel('${channelId}')">Delete</button>
+            </td>
+          </tr>
+        `;
+      });
+      
+      html += '</table>';
+      channelsList.innerHTML = html;
+    }
+    
+    // Update subscribers list
+    function updateSubscribersList(data) {
+      subscribers = data;
+      
+      let hasSubscribers = false;
+      let html = '';
+      
+      for (const channelId in data) {
+        const channelSubscribers = data[channelId];
+        
+        if (channelSubscribers.length > 0) {
+          hasSubscribers = true;
+          
+          html += `<h3>Channel: ${channelId}</h3>`;
+          html += '<table>';
+          html += '<tr><th>Subscriber ID</th><th>Name</th><th>Actions</th></tr>';
+          
+          channelSubscribers.forEach(subscriber => {
+            html += `
+              <tr>
+                <td>${subscriber.id}</td>
+                <td>${subscriber.name}</td>
+                <td>
+                  <button class="danger" onclick="removeSubscriber('${channelId}', '${subscriber.id}')">Remove</button>
+                </td>
+              </tr>
+            `;
+          });
+          
+          html += '</table>';
+        }
+      }
+      
+      if (!hasSubscribers) {
+        html = '<p>No subscribers</p>';
+      }
+      
+      subscribersList.innerHTML = html;
+    }
+    
+    // Refresh data periodically
+    setInterval(() => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        sendMessage('get-channels');
+        sendMessage('admin-get-channels-subscribers');
+      }
+    }, 5000);
+  </script>
+</body>
+</html>
