@@ -70,9 +70,6 @@
       // Connect to WebSocket
       socket = connectWebSocket();
       
-      // Set up WebSocket message handler
-      socket.onmessage = handleSocketMessage;
-      
       // Set up event listeners
       startBroadcastBtn.addEventListener('click', startBroadcasting);
       stopBroadcastBtn.addEventListener('click', stopBroadcasting);
@@ -92,6 +89,11 @@
       refreshDevicesBtn.addEventListener('click', loadAudioInputDevices);
       audioSourceSelect.parentNode.appendChild(refreshDevicesBtn);
     });
+    
+    function onConnected(socket) {
+      // Set up WebSocket message handler
+      socket.onmessage = handleSocketMessage;
+    }
     
     // Handle WebSocket messages
     function handleSocketMessage(event) {

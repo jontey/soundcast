@@ -5,9 +5,19 @@ let transport;
 let producer;
 let consumer;
 let statusElement;
+let reconnectAttempts = 0;
+let reconnectTimer;
+let maxReconnectAttempts = 100;
+let reconnectInterval = 1000; // Start with 1 second, will increase exponentially
 
 // Connect to WebSocket server
 function connectWebSocket() {
+  // Clear any existing reconnect timer
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
   
@@ -15,20 +25,45 @@ function connectWebSocket() {
   
   socket.onopen = () => {
     updateStatus('Connected to server', 'success');
+    // Reset reconnect attempts on successful connection
+    reconnectAttempts = 0;
+    reconnectInterval = 1000;
     // Request RTP capabilities once connected
+    onConnected(socket);
     socket.send(JSON.stringify({ action: 'get-rtpCapabilities' }));
   };
   
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     updateStatus('Disconnected from server', 'error');
+    attemptReconnect();
   };
   
   socket.onerror = (error) => {
     console.error('WebSocket error:', error);
     updateStatus('WebSocket error', 'error');
+    // We don't attempt reconnect here as onclose will be called after an error
   };
   
   return socket;
+}
+
+// Attempt to reconnect with exponential backoff
+function attemptReconnect() {
+  if (reconnectAttempts >= maxReconnectAttempts) {
+    updateStatus(`Failed to reconnect after ${maxReconnectAttempts} attempts`, 'error');
+    return;
+  }
+  
+  reconnectAttempts++;
+  const delay = reconnectInterval * Math.pow(1.5, reconnectAttempts - 1); // Exponential backoff
+  const cappedDelay = Math.min(delay, 30000); // Cap at 30 seconds
+  
+  updateStatus(`Reconnecting in ${Math.round(cappedDelay/1000)} seconds... (Attempt ${reconnectAttempts}/${maxReconnectAttempts})`, 'info');
+  
+  reconnectTimer = setTimeout(() => {
+    updateStatus('Attempting to reconnect...', 'info');
+    connectWebSocket();
+  }, cappedDelay);
 }
 
 // Update status message

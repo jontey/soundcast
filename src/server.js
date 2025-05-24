@@ -58,15 +58,15 @@ const clients = new Map();
   
 // Broadcast updated channel list to all clients
 function broadcastChannelList() {
-    const list = Array.from(channels.keys());
-    for (const [clientId, client] of clients.entries()) {
-      // In newer versions of fastify-websocket, the connection is the socket
-      client.socket.send(JSON.stringify({ 
-        action: 'channel-list', 
-        data: list 
-      }));
-    }
+  const list = Array.from(channels.keys());
+  for (const [clientId, client] of clients.entries()) {
+    // In newer versions of fastify-websocket, the connection is the socket
+    client.socket.send(JSON.stringify({ 
+      action: 'channel-list', 
+      data: list 
+    }));
   }
+}
 
 // Helper to create WebRTC transport
 async function createWebRtcTransport() {
@@ -541,7 +541,7 @@ fastify.register(async function (fastify) {
             }
             
             if (!consumerChannel.producer) {
-              fastify.log.warn(`No active producer in channel ${clientInfo.channelId}`);
+              fastify.log.warn(`No active publisher in channel ${clientInfo.channelId}`);
               connection.send(JSON.stringify({
                 action: 'error',
                 data: { message: 'No active publisher in this channel' }

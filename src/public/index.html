@@ -78,9 +78,6 @@
       // Connect to WebSocket
       socket = connectWebSocket();
       
-      // Set up WebSocket message handler
-      socket.onmessage = handleSocketMessage;
-      
       // Set up event listeners
       leaveChannelBtn.addEventListener('click', leaveChannel);
       muteBtn.addEventListener('click', toggleMute);
@@ -88,6 +85,11 @@
       // Initialize mute state
       isMuted = false;
     });
+
+    function onConnected(socket) {
+      // Set up WebSocket message handler
+      socket.onmessage = handleSocketMessage;
+    }
     
     // Handle WebSocket messages
     function handleSocketMessage(event) {
