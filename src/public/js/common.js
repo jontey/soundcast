@@ -3,7 +3,7 @@ let socket;
 let rtpCapabilities;
 let transport;
 let producer;
-let consumer;
+let consumer; // legacy single consumer reference
 let statusElement;
 let reconnectAttempts = 0;
 let reconnectTimer;

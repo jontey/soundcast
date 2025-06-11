@@ -51,7 +51,8 @@ const mediaCodecs = [{
 const router = await worker.createRouter({ mediaCodecs });
 
 // In-memory channel store
-const channels = new Map();  // channelId -> { producerTransport, producer, consumers: Map }
+// channelId -> { producers: Map<producerId, { transport, producer, clientId }>, consumers: Map }
+const channels = new Map();
 
 // Store active connections
 const clients = new Map();
@@ -130,7 +131,8 @@ fastify.register(async function (fastify) {
         displayName: null,
         transport: null,
         producer: null,
-        consumer: null
+        consumers: [],
+        rtpCapabilities: null
       };
       
       // Add to clients map
@@ -173,10 +175,9 @@ fastify.register(async function (fastify) {
             }
 
             // Create new channel
-            channels.set(data.channelId, { 
-              producerTransport: null, 
-              producer: null, 
-              consumers: new Map() 
+            channels.set(data.channelId, {
+              producers: new Map(),
+              consumers: new Map()
             });
             
             clientInfo.isAdmin = true;
@@ -199,10 +200,15 @@ fastify.register(async function (fastify) {
             }
 
             const channel = channels.get(data.channelId);
-            
-            // Close producer transport if exists
-            if (channel.producerTransport) {
-              channel.producerTransport.close();
+
+            // Close all producer transports
+            for (const [prodId, prodInfo] of channel.producers) {
+              if (prodInfo.transport) {
+                prodInfo.transport.close();
+              }
+              if (prodInfo.producer) {
+                prodInfo.producer.close();
+              }
             }
             
             // Close all consumer transports
@@ -305,39 +311,6 @@ fastify.register(async function (fastify) {
 
             const publisherChannel = channels.get(data.channelId);
             
-            // Check if channel already has a producer
-            if (publisherChannel.producer) {
-              fastify.log.warn(`Channel ${data.channelId} already has a publisher. Cleaning up old publisher...`);
-              
-              try {
-                // Force cleanup of the existing producer
-                if (publisherChannel.producer) {
-                  fastify.log.info(`Closing existing producer ${publisherChannel.producer.id}`);
-                  try {
-                    publisherChannel.producer.close();
-                  } catch (error) {
-                    fastify.log.error(`Error closing existing producer: ${error.message}`);
-                  }
-                  publisherChannel.producer = null;
-                }
-                
-                // Close existing producer transport
-                if (publisherChannel.producerTransport) {
-                  fastify.log.info(`Closing existing producer transport`);
-                  try {
-                    publisherChannel.producerTransport.close();
-                  } catch (error) {
-                    fastify.log.error(`Error closing existing producer transport: ${error.message}`);
-                  }
-                  publisherChannel.producerTransport = null;
-                }
-                
-                fastify.log.info(`Old publisher resources cleaned up for channel ${data.channelId}`);
-              } catch (error) {
-                fastify.log.error(`Error cleaning up old publisher resources: ${error.message}`);
-              }
-            }
-            
             // Create transport
             const { transport, params } = await createWebRtcTransport();
             
@@ -346,8 +319,7 @@ fastify.register(async function (fastify) {
             clientInfo.isPublisher = true;
             clientInfo.channelId = data.channelId;
             
-            // Store transport in channel
-            publisherChannel.producerTransport = transport;
+
             
             connection.send(JSON.stringify({
               action: 'publisher-transport-created',
@@ -413,19 +385,76 @@ fastify.register(async function (fastify) {
               });
               
               // Store producer
-              clientInfo.producer = producer;
               const publishChannel = channels.get(clientInfo.channelId);
-              publishChannel.producerTransport = clientInfo.transport;
-              publishChannel.producer = producer;
+              const producerId = uuidv4();
+              clientInfo.producer = { id: producerId, producer };
+              publishChannel.producers.set(producerId, {
+                transport: clientInfo.transport,
+                producer,
+                clientId
+              });
               
               fastify.log.info(`Audio producer created successfully with id ${producer.id}`);
               connection.send(JSON.stringify({
                 action: 'produced',
-                data: { id: producer.id }
+                data: { id: producerId }
               }));
               
-              // Notify all listeners in this channel that a producer is available
+              // Notify all clients that the channel list has changed
               broadcastChannelList();
+
+              // Create consumers for existing listeners in the same channel
+              for (const [otherId, otherClient] of clients) {
+                if (
+                  otherClient.isListener &&
+                  otherClient.channelId === clientInfo.channelId &&
+                  otherClient.transport &&
+                  otherClient.rtpCapabilities
+                ) {
+                  try {
+                    if (
+                      router.canConsume({
+                        producerId: producer.id,
+                        rtpCapabilities: otherClient.rtpCapabilities
+                      })
+                    ) {
+                      const newConsumer = await otherClient.transport.consume({
+                        producerId: producer.id,
+                        rtpCapabilities: otherClient.rtpCapabilities,
+                        paused: false
+                      });
+                      const newConsumerId = uuidv4();
+                      otherClient.consumers.push({
+                        id: newConsumerId,
+                        consumer: newConsumer,
+                        producerId
+                      });
+                      publishChannel.consumers.set(newConsumerId, {
+                        transport: otherClient.transport,
+                        consumer: newConsumer,
+                        clientId: otherId,
+                        displayName: otherClient.displayName,
+                        producerId
+                      });
+                      otherClient.socket.send(
+                        JSON.stringify({
+                          action: 'consumer-created',
+                          data: {
+                            id: newConsumerId,
+                            producerId,
+                            kind: newConsumer.kind,
+                            rtpParameters: newConsumer.rtpParameters
+                          }
+                        })
+                      );
+                    }
+                  } catch (err) {
+                    fastify.log.error(
+                      `Error creating consumer for listener ${otherId}: ${err.message}`
+                    );
+                  }
+                }
+              }
             } catch (error) {
               fastify.log.error(`Error creating producer: ${error.message}`);
               connection.send(JSON.stringify({
@@ -450,7 +479,7 @@ fastify.register(async function (fastify) {
             const listenerChannel = channels.get(data.channelId);
             
             // Check if channel has a producer
-            if (!listenerChannel.producer) {
+            if (listenerChannel.producers.size === 0) {
               fastify.log.warn(`Client ${clientId} tried to join channel ${data.channelId} with no active publisher`);
               connection.send(JSON.stringify({
                 action: 'error',
@@ -540,7 +569,7 @@ fastify.register(async function (fastify) {
               break;
             }
             
-            if (!consumerChannel.producer) {
+            if (consumerChannel.producers.size === 0) {
               fastify.log.warn(`No active publisher in channel ${clientInfo.channelId}`);
               connection.send(JSON.stringify({
                 action: 'error',
@@ -548,59 +577,48 @@ fastify.register(async function (fastify) {
               }));
               break;
             }
-            
+
             try {
-              // Validate producer is still active
-              if (!consumerChannel.producer.closed) {
-                fastify.log.info(`Creating consumer for client ${clientId} with producer ${consumerChannel.producer.id}`);
-                
-                // Check if client has required RTP capabilities
-                if (!router.canConsume({
-                  producerId: consumerChannel.producer.id,
-                  rtpCapabilities: data.rtpCapabilities
-                })) {
-                  fastify.log.warn(`Client ${clientId} cannot consume the producer due to RTP capabilities mismatch`);
-                  connection.send(JSON.stringify({
-                    action: 'error',
-                    data: { message: 'RTP capabilities mismatch' }
-                  }));
-                  break;
+              clientInfo.rtpCapabilities = data.rtpCapabilities;
+              const consumersData = [];
+
+              for (const [prodId, prodInfo] of consumerChannel.producers) {
+                if (prodInfo.producer.closed) continue;
+
+                if (!router.canConsume({ producerId: prodInfo.producer.id, rtpCapabilities: data.rtpCapabilities })) {
+                  fastify.log.warn(`Client ${clientId} cannot consume producer ${prodId} due to RTP capabilities mismatch`);
+                  continue;
                 }
-                
-                // Create consumer
+
                 const consumerObj = await clientInfo.transport.consume({
-                  producerId: consumerChannel.producer.id,
+                  producerId: prodInfo.producer.id,
                   rtpCapabilities: data.rtpCapabilities,
                   paused: false
                 });
-                
-                // Store consumer
-                clientInfo.consumer = consumerObj;
+
                 const consumerId = uuidv4();
+                clientInfo.consumers.push({ id: consumerId, consumer: consumerObj, producerId: prodId });
                 consumerChannel.consumers.set(consumerId, {
                   transport: clientInfo.transport,
                   consumer: consumerObj,
-                  clientId: clientId,
-                  displayName: clientInfo.displayName
+                  clientId,
+                  displayName: clientInfo.displayName,
+                  producerId: prodId
                 });
-                
-                fastify.log.info(`Consumer created successfully for client ${clientId}, sending response`);
-                connection.send(JSON.stringify({
-                  action: 'consumer-created',
-                  data: {
-                    id: consumerId,
-                    producerId: consumerChannel.producer.id,
-                    kind: consumerObj.kind,
-                    rtpParameters: consumerObj.rtpParameters
-                  }
-                }));
-              } else {
-                fastify.log.warn(`Producer in channel ${clientInfo.channelId} is closed`);
-                connection.send(JSON.stringify({
-                  action: 'error',
-                  data: { message: 'Producer is closed' }
-                }));
+
+                consumersData.push({
+                  id: consumerId,
+                  producerId: prodId,
+                  kind: consumerObj.kind,
+                  rtpParameters: consumerObj.rtpParameters
+                });
               }
+
+              connection.send(JSON.stringify({
+                action: 'consumer-created',
+                data: consumersData
+              }));
+              fastify.log.info(`Created ${consumersData.length} consumers for listener ${clientId}`);
             } catch (error) {
               fastify.log.error(`Error creating consumer for client ${clientId}: ${error.message}`);
               connection.send(JSON.stringify({
@@ -619,35 +637,41 @@ fastify.register(async function (fastify) {
             }
             
             const stopBroadcastChannel = channels.get(data.channelId);
-            
+
             try {
-              // Force cleanup regardless of who the publisher is
               fastify.log.info(`Cleaning up publisher resources for channel ${data.channelId}`);
-              
-              // Close producer if it exists
-              if (stopBroadcastChannel.producer) {
-                fastify.log.info(`Closing producer ${stopBroadcastChannel.producer.id}`);
-                try {
-                  stopBroadcastChannel.producer.close();
-                } catch (error) {
-                  fastify.log.error(`Error closing producer: ${error.message}`);
+
+              if (clientInfo.isPublisher && clientInfo.producer) {
+                const { id: prodId, producer } = clientInfo.producer;
+                if (producer) {
+                  try {
+                    producer.close();
+                  } catch (error) {
+                    fastify.log.error(`Error closing producer: ${error.message}`);
+                  }
                 }
-                stopBroadcastChannel.producer = null;
-              }
-              
-              // Close producer transport if it exists
-              if (stopBroadcastChannel.producerTransport) {
-                fastify.log.info(`Closing producer transport`);
-                try {
-                  stopBroadcastChannel.producerTransport.close();
-                } catch (error) {
-                  fastify.log.error(`Error closing producer transport: ${error.message}`);
+
+                if (clientInfo.transport) {
+                  try {
+                    clientInfo.transport.close();
+                  } catch {}
                 }
-                stopBroadcastChannel.producerTransport = null;
-              }
-              
-              // Reset client info if this client is the publisher
-              if (clientInfo.isPublisher && clientInfo.channelId === data.channelId) {
+
+                stopBroadcastChannel.producers.delete(prodId);
+
+                // Remove related consumers
+                for (const [consumerId, consumer] of stopBroadcastChannel.consumers) {
+                  if (consumer.producerId === prodId) {
+                    if (consumer.consumer) consumer.consumer.close();
+                    stopBroadcastChannel.consumers.delete(consumerId);
+                    if (consumer.clientId && clients.has(consumer.clientId)) {
+                      const listenerClient = clients.get(consumer.clientId);
+                      listenerClient.consumers = listenerClient.consumers.filter(c => c.id !== consumerId);
+                      listenerClient.socket.send(JSON.stringify({ action: 'producer-stopped', data: { producerId: prodId } }));
+                    }
+                  }
+                }
+
                 clientInfo.isPublisher = false;
                 clientInfo.producer = null;
                 clientInfo.transport = null;
@@ -679,47 +703,27 @@ fastify.register(async function (fastify) {
               const channel = channels.get(clientInfo.channelId);
               fastify.log.info(`Removing listener from channel ${clientInfo.channelId}`);
               
-              // Find and remove consumer from channel
-              let consumerRemoved = false;
+              // Remove all consumers for this listener
               for (const [consumerId, consumer] of channel.consumers) {
                 if (consumer.clientId === clientId) {
-                  fastify.log.info(`Removing consumer ${consumerId} from channel ${clientInfo.channelId}`);
-                  
-                  // Close consumer if it exists
                   if (consumer.consumer) {
-                    try {
-                      consumer.consumer.close();
-                    } catch (error) {
-                      fastify.log.error(`Error closing consumer: ${error.message}`);
-                    }
+                    try { consumer.consumer.close(); } catch {}
                   }
-                  
-                  // Close transport if it exists
-                  if (consumer.transport) {
-                    try {
-                      consumer.transport.close();
-                    } catch (error) {
-                      fastify.log.error(`Error closing consumer transport: ${error.message}`);
-                    }
-                  }
-                  
                   channel.consumers.delete(consumerId);
-                  consumerRemoved = true;
-                  break;
                 }
               }
-              
-              if (consumerRemoved) {
-                fastify.log.info(`Consumer removed from channel ${clientInfo.channelId}`);
-              } else {
-                fastify.log.warn(`No consumer found for client ${clientId} in channel ${clientInfo.channelId}`);
+
+              if (clientInfo.transport) {
+                try { clientInfo.transport.close(); } catch {}
               }
+
+              clientInfo.consumers = [];
               
               // Reset client info
               clientInfo.isListener = false;
               clientInfo.channelId = null;
               clientInfo.transport = null;
-              clientInfo.consumer = null;
+              clientInfo.consumers = [];
             }
             break;
             
@@ -739,40 +743,43 @@ fastify.register(async function (fastify) {
         
         if (clientInfo.isPublisher && clientInfo.channelId && channels.has(clientInfo.channelId)) {
           const channel = channels.get(clientInfo.channelId);
-          
-          // Close all consumer transports
-          for (const [consumerId, consumer] of channel.consumers) {
-            if (consumer.transport) {
-              consumer.transport.close();
+
+          if (clientInfo.producer) {
+            const { id: prodId, producer } = clientInfo.producer;
+            if (producer) {
+              try { producer.close(); } catch {}
             }
-            
-            // Notify listener about forced disconnect
-            if (consumer.clientId && clients.has(consumer.clientId)) {
-              const listenerClient = clients.get(consumer.clientId);
-              // In newer versions of fastify-websocket, the connection is the socket directly
-              listenerClient.socket.send(JSON.stringify({
-                action: 'forced-disconnect',
-                data: { reason: 'Publisher disconnected' }
-              }));
+            channel.producers.delete(prodId);
+
+            for (const [consumerId, consumer] of channel.consumers) {
+              if (consumer.producerId === prodId) {
+                if (consumer.consumer) {
+                  try { consumer.consumer.close(); } catch {}
+                }
+                if (consumer.clientId && clients.has(consumer.clientId)) {
+                  const listenerClient = clients.get(consumer.clientId);
+                  listenerClient.consumers = listenerClient.consumers.filter(c => c.id !== consumerId);
+                  listenerClient.socket.send(JSON.stringify({ action: 'producer-stopped', data: { producerId: prodId } }));
+                }
+                channel.consumers.delete(consumerId);
+              }
             }
           }
-          
-          // Clear producer
-          channel.producerTransport = null;
-          channel.producer = null;
-          channel.consumers.clear();
         }
-        
+
         if (clientInfo.isListener && clientInfo.channelId && channels.has(clientInfo.channelId)) {
           const channel = channels.get(clientInfo.channelId);
-          
+
           // Remove consumer from channel
           for (const [consumerId, consumer] of channel.consumers) {
             if (consumer.clientId === clientId) {
+              if (consumer.consumer) {
+                try { consumer.consumer.close(); } catch {}
+              }
               channel.consumers.delete(consumerId);
-              break;
             }
           }
+          clientInfo.consumers = [];
         }
         
         // Remove client from clients map
