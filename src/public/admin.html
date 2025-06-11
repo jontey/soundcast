@@ -170,9 +170,11 @@
     // Update channels list
     function updateChannelsList(channelIds) {
       channels = channelIds;
-      
+
       if (channelIds.length === 0) {
         channelsList.innerHTML = '<p>No active channels</p>';
+        // still refresh publisher options in case all channels were removed
+        updatePublishersList(publishers);
         return;
       }
       
@@ -192,6 +194,9 @@
       
       html += '</table>';
       channelsList.innerHTML = html;
+
+      // Refresh publisher dropdowns to include new channel list
+      updatePublishersList(publishers);
     }
     
     // Update subscribers list
