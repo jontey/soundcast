@@ -400,8 +400,61 @@ fastify.register(async function (fastify) {
                 data: { id: producerId }
               }));
               
-              // Notify all listeners in this channel that a producer is available
+              // Notify all clients that the channel list has changed
               broadcastChannelList();
+
+              // Create consumers for existing listeners in the same channel
+              for (const [otherId, otherClient] of clients) {
+                if (
+                  otherClient.isListener &&
+                  otherClient.channelId === clientInfo.channelId &&
+                  otherClient.transport &&
+                  otherClient.rtpCapabilities
+                ) {
+                  try {
+                    if (
+                      router.canConsume({
+                        producerId: producer.id,
+                        rtpCapabilities: otherClient.rtpCapabilities
+                      })
+                    ) {
+                      const newConsumer = await otherClient.transport.consume({
+                        producerId: producer.id,
+                        rtpCapabilities: otherClient.rtpCapabilities,
+                        paused: false
+                      });
+                      const newConsumerId = uuidv4();
+                      otherClient.consumers.push({
+                        id: newConsumerId,
+                        consumer: newConsumer,
+                        producerId
+                      });
+                      publishChannel.consumers.set(newConsumerId, {
+                        transport: otherClient.transport,
+                        consumer: newConsumer,
+                        clientId: otherId,
+                        displayName: otherClient.displayName,
+                        producerId
+                      });
+                      otherClient.socket.send(
+                        JSON.stringify({
+                          action: 'consumer-created',
+                          data: {
+                            id: newConsumerId,
+                            producerId,
+                            kind: newConsumer.kind,
+                            rtpParameters: newConsumer.rtpParameters
+                          }
+                        })
+                      );
+                    }
+                  } catch (err) {
+                    fastify.log.error(
+                      `Error creating consumer for listener ${otherId}: ${err.message}`
+                    );
+                  }
+                }
+              }
             } catch (error) {
               fastify.log.error(`Error creating producer: ${error.message}`);
               connection.send(JSON.stringify({
