@@ -139,6 +139,10 @@
             handleConsumerCreated(data);
             break;
 
+          case 'waiting-for-publisher':
+            updateStatus('Waiting for publisher...', 'info');
+            break;
+
           case 'producer-stopped':
             handleProducerStopped(data.producerId);
             break;
@@ -194,10 +198,13 @@
         // Request transport creation
         selectedChannel = channelId;
         updateStatus(`Joining channel "${channelId}"...`, 'info');
-        sendMessage('create-listener-transport', { 
-          channelId, 
-          displayName 
+        sendMessage('create-listener-transport', {
+          channelId,
+          displayName
         });
+        joinForm.classList.add('hidden');
+        listenerControls.classList.remove('hidden');
+        currentChannelSpan.textContent = channelId;
       } catch (error) {
         console.error('Error joining channel:', error);
         updateStatus('Error joining channel: ' + error.message, 'error');

@@ -579,17 +579,7 @@ fastify.register(async function (fastify) {
             }
 
             const listenerChannel = channels.get(data.channelId);
-            
-            // Check if channel has a producer
-            if (listenerChannel.producers.size === 0) {
-              fastify.log.warn(`Client ${clientId} tried to join channel ${data.channelId} with no active publisher`);
-              connection.send(JSON.stringify({
-                action: 'error',
-                data: { message: 'No active publisher in this channel' }
-              }));
-              break;
-            }
-            
+
             try {
               // Create transport
               fastify.log.info(`Creating listener transport for client ${clientId}`);
@@ -672,11 +662,9 @@ fastify.register(async function (fastify) {
             }
             
             if (consumerChannel.producers.size === 0) {
-              fastify.log.warn(`No active publisher in channel ${clientInfo.channelId}`);
-              connection.send(JSON.stringify({
-                action: 'error',
-                data: { message: 'No active publisher in this channel' }
-              }));
+              fastify.log.info(`Listener ${clientId} waiting for publisher in channel ${clientInfo.channelId}`);
+              clientInfo.rtpCapabilities = data.rtpCapabilities;
+              connection.send(JSON.stringify({ action: 'waiting-for-publisher' }));
               break;
             }
 
