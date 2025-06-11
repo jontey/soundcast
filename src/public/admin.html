@@ -40,6 +40,13 @@
         <p>No subscribers</p>
       </div>
     </div>
+
+    <div>
+      <h2>Publishers</h2>
+      <div id="publishersList">
+        <p>No publishers</p>
+      </div>
+    </div>
   </div>
 
   <script src="/js/common.js"></script>
@@ -49,10 +56,12 @@
     const createChannelForm = document.getElementById('createChannelForm');
     const channelsList = document.getElementById('channelsList');
     const subscribersList = document.getElementById('subscribersList');
+    const publishersList = document.getElementById('publishersList');
     
     // State
     let channels = [];
     let subscribers = {};
+    let publishers = [];
     
     // Initialize
     document.addEventListener('DOMContentLoaded', () => {
@@ -81,8 +90,9 @@
             rtpCapabilities = data;
             // Request channel list
             sendMessage('get-channels');
-            // Request subscribers list
+            // Request subscribers and publishers list
             sendMessage('admin-get-channels-subscribers');
+            sendMessage('admin-get-publishers');
             break;
             
           case 'channel-list':
@@ -92,6 +102,10 @@
             
           case 'channels-subscribers':
             updateSubscribersList(data);
+            break;
+
+          case 'publishers-list':
+            updatePublishersList(data);
             break;
             
           case 'channel-created':
@@ -106,6 +120,12 @@
             
           case 'subscriber-removed':
             updateStatus(`Subscriber removed from channel ${data.channelId}`, 'success');
+            sendMessage('admin-get-channels-subscribers');
+            break;
+
+          case 'publisher-channel-changed':
+            updateStatus(`Publisher moved to ${data.newChannelId}`, 'success');
+            sendMessage('admin-get-publishers');
             sendMessage('admin-get-channels-subscribers');
             break;
             
@@ -150,9 +170,11 @@
     // Update channels list
     function updateChannelsList(channelIds) {
       channels = channelIds;
-      
+
       if (channelIds.length === 0) {
         channelsList.innerHTML = '<p>No active channels</p>';
+        // still refresh publisher options in case all channels were removed
+        updatePublishersList(publishers);
         return;
       }
       
@@ -172,6 +194,9 @@
       
       html += '</table>';
       channelsList.innerHTML = html;
+
+      // Refresh publisher dropdowns to include new channel list
+      updatePublishersList(publishers);
     }
     
     // Update subscribers list
@@ -213,12 +238,57 @@
       
       subscribersList.innerHTML = html;
     }
+
+    // Update publishers list
+    function updatePublishersList(data) {
+      publishers = data;
+
+      if (!data || data.length === 0) {
+        publishersList.innerHTML = '<p>No publishers</p>';
+        return;
+      }
+
+      let html = '<table>';
+      html += '<tr><th>Publisher ID</th><th>Channel</th><th>Action</th></tr>';
+
+      data.forEach(pub => {
+        const options = channels
+          .map(c => `<option value="${c}" ${c === pub.channelId ? 'selected' : ''}>${c}</option>`)
+          .join('');
+        html += `
+          <tr>
+            <td>${pub.id}</td>
+            <td>
+              <select id="channelSelect_${pub.id}">${options}</select>
+            </td>
+            <td>
+              <button onclick="changePublisherChannel('${pub.id}')">Change</button>
+            </td>
+          </tr>
+        `;
+      });
+
+      html += '</table>';
+      publishersList.innerHTML = html;
+    }
+
+    // Change publisher channel
+    function changePublisherChannel(publisherId) {
+      const select = document.getElementById('channelSelect_' + publisherId);
+      const newChannelId = select ? select.value : '';
+      if (!newChannelId) {
+        updateStatus('Please select a channel', 'error');
+        return;
+      }
+      sendMessage('admin-change-publisher-channel', { publisherId, newChannelId });
+    }
     
     // Refresh data periodically
     setInterval(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         sendMessage('get-channels');
         sendMessage('admin-get-channels-subscribers');
+        sendMessage('admin-get-publishers');
       }
     }, 5000);
   </script>
