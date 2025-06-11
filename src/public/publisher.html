@@ -64,6 +64,7 @@
     let audioMeter = null;
     let producerId = null;
     let meterUpdateInterval = null;
+    let isBroadcasting = false;
     
     // Initialize
     document.addEventListener('DOMContentLoaded', async () => {
@@ -138,6 +139,7 @@
           updateStatus('Broadcasting started!', 'success');
           startBroadcastBtn.disabled = true;
           stopBroadcastBtn.disabled = false;
+          isBroadcasting = true;
           break;
           
         case 'error':
@@ -153,9 +155,15 @@
         case 'admin-channel-changed':
           updateStatus(`Channel changed by admin to ${payload.channelId}`, 'info');
           if (selectedChannel !== payload.channelId) {
-            stopBroadcasting();
+            const wasBroadcasting = isBroadcasting;
+            if (wasBroadcasting) {
+              stopBroadcasting();
+            }
             selectedChannel = payload.channelId;
             updateChannelsList(channels);
+            if (wasBroadcasting) {
+              startBroadcasting();
+            }
           }
           break;
           
@@ -235,10 +243,19 @@
     
     // Select a channel
     function selectChannel(channelId) {
+      const wasBroadcasting = isBroadcasting;
+      if (wasBroadcasting) {
+        stopBroadcasting();
+      }
+
       selectedChannel = channelId;
       updateStatus(`Channel "${channelId}" selected`, 'success');
       publisherControls.classList.remove('hidden');
       updateChannelsList(channels);
+
+      if (wasBroadcasting) {
+        startBroadcasting();
+      }
     }
     
     // Start broadcasting
@@ -423,7 +440,9 @@
       
       // Reset producer ID
       producerId = null;
-      
+
+      isBroadcasting = false;
+
       updateStatus('Broadcasting stopped', 'info');
     }
     
