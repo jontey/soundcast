@@ -149,6 +149,15 @@
           updateStatus(`Disconnected: ${payload.reason}`, 'error');
           stopBroadcasting();
           break;
+
+        case 'admin-channel-changed':
+          updateStatus(`Channel changed by admin to ${payload.channelId}`, 'info');
+          if (selectedChannel !== payload.channelId) {
+            stopBroadcasting();
+            selectedChannel = payload.channelId;
+            updateChannelsList(channels);
+          }
+          break;
           
         default:
           console.log('Unknown action:', action);

@@ -259,8 +259,8 @@ fastify.register(async function (fastify) {
             break;
 
           case 'admin-remove-subscriber':
-            if (!data.channelId || !data.consumerId || 
-                !channels.has(data.channelId) || 
+            if (!data.channelId || !data.consumerId ||
+                !channels.has(data.channelId) ||
                 !channels.get(data.channelId).consumers.has(data.consumerId)) {
               connection.send(JSON.stringify({
                 action: 'error',
@@ -293,11 +293,113 @@ fastify.register(async function (fastify) {
             clientInfo.isAdmin = true;
             connection.send(JSON.stringify({
               action: 'subscriber-removed',
-              data: { 
+              data: {
                 channelId: data.channelId,
                 consumerId: data.consumerId
               }
             }));
+            break;
+
+          case 'admin-get-publishers':
+            const publishers = [];
+            for (const [id, c] of clients.entries()) {
+              if (c.isPublisher) {
+                publishers.push({ id, channelId: c.channelId });
+              }
+            }
+
+            clientInfo.isAdmin = true;
+            connection.send(JSON.stringify({
+              action: 'publishers-list',
+              data: publishers
+            }));
+            break;
+
+          case 'admin-change-publisher-channel':
+            if (!data.publisherId || !data.newChannelId ||
+                !clients.has(data.publisherId) ||
+                !channels.has(data.newChannelId)) {
+              connection.send(JSON.stringify({
+                action: 'error',
+                data: { message: 'Invalid publisher or channel ID' }
+              }));
+              break;
+            }
+
+            const publisherClient = clients.get(data.publisherId);
+            if (!publisherClient.isPublisher) {
+              connection.send(JSON.stringify({
+                action: 'error',
+                data: { message: 'Target client is not a publisher' }
+              }));
+              break;
+            }
+
+            if (publisherClient.channelId === data.newChannelId) {
+              connection.send(JSON.stringify({
+                action: 'error',
+                data: { message: 'Publisher already in that channel' }
+              }));
+              break;
+            }
+
+            const oldChannelId = publisherClient.channelId;
+            const oldChannel = channels.get(oldChannelId);
+            const newChannel = channels.get(data.newChannelId);
+
+            if (publisherClient.producer) {
+              const { id: prodId, producer } = publisherClient.producer;
+
+              // Remove consumers of this producer from old channel
+              for (const [consumerId, consumer] of oldChannel.consumers) {
+                if (consumer.producerId === prodId) {
+                  if (consumer.consumer) consumer.consumer.close();
+                  oldChannel.consumers.delete(consumerId);
+
+                  if (consumer.clientId && clients.has(consumer.clientId)) {
+                    const listener = clients.get(consumer.clientId);
+                    listener.consumers = listener.consumers.filter(c => c.id !== consumerId);
+                    listener.socket.send(JSON.stringify({ action: 'producer-stopped', data: { producerId: prodId } }));
+                  }
+                }
+              }
+
+              // Move producer map entry
+              oldChannel.producers.delete(prodId);
+              newChannel.producers.set(prodId, { transport: publisherClient.transport, producer, clientId: data.publisherId });
+
+              // Create consumers for listeners in the new channel
+              for (const [otherId, otherClient] of clients.entries()) {
+                if (otherClient.isListener && otherClient.channelId === data.newChannelId && otherClient.transport && otherClient.rtpCapabilities) {
+                  if (router.canConsume({ producerId: producer.id, rtpCapabilities: otherClient.rtpCapabilities })) {
+                    const newConsumer = await otherClient.transport.consume({ producerId: producer.id, rtpCapabilities: otherClient.rtpCapabilities, paused: false });
+                    const newConsumerId = uuidv4();
+                    otherClient.consumers.push({ id: newConsumerId, consumer: newConsumer, producerId: prodId });
+                    newChannel.consumers.set(newConsumerId, { transport: otherClient.transport, consumer: newConsumer, clientId: otherId, displayName: otherClient.displayName, producerId: prodId });
+
+                    otherClient.socket.send(JSON.stringify({
+                      action: 'consumer-created',
+                      data: [{ id: newConsumerId, producerId: prodId, kind: newConsumer.kind, rtpParameters: newConsumer.rtpParameters }]
+                    }));
+                  }
+                }
+              }
+            }
+
+            publisherClient.channelId = data.newChannelId;
+
+            connection.send(JSON.stringify({
+              action: 'publisher-channel-changed',
+              data: { publisherId: data.publisherId, newChannelId: data.newChannelId }
+            }));
+
+            if (clients.has(data.publisherId)) {
+              const pubSocket = clients.get(data.publisherId).socket;
+              pubSocket.send(JSON.stringify({ action: 'admin-channel-changed', data: { channelId: data.newChannelId } }));
+            }
+
+            // Broadcast updated channel list
+            broadcastChannelList();
             break;
 
           case 'create-publisher-transport':
