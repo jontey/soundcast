@@ -70,6 +70,8 @@
     let audioContext = null;
     let audioMeter = null;
     let audioGainNode = null;
+    let audioStream = null;
+    let consumers = [];
     let isMuted = false;
     let meterUpdateInterval = null;
     
@@ -135,6 +137,10 @@
             
           case 'consumer-created':
             handleConsumerCreated(data);
+            break;
+
+          case 'producer-stopped':
+            handleProducerStopped(data.producerId);
             break;
             
           case 'forced-disconnect':
@@ -287,84 +293,59 @@
     // Handle consumer created
     async function handleConsumerCreated(data) {
       try {
-        console.log('Consumer created data received:', data);
-        updateStatus('Audio stream found, connecting...', 'info');
-        
-        // Create consumer
-        console.log('Creating consumer with parameters:', {
-          id: data.id,
-          producerId: data.producerId,
-          kind: data.kind,
-          rtpParameters: data.rtpParameters
-        });
-        
-        consumer = await transport.consume({
-          id: data.id,
-          producerId: data.producerId,
-          kind: data.kind,
-          rtpParameters: data.rtpParameters
-        });
-        
-        console.log('Consumer created successfully:', consumer);
-        console.log('Consumer track details:', {
-          kind: consumer.track.kind,
-          enabled: consumer.track.enabled,
-          readyState: consumer.track.readyState,
-          muted: consumer.track.muted
-        });
-        
-        // Set up audio
-        const stream = new MediaStream([consumer.track]);
-        console.log('MediaStream created with track:', consumer.track);
-        
-        // Create a hidden audio element for output
-        const audioElement = document.createElement('audio');
-        audioElement.srcObject = stream;
-        audioElement.autoplay = true;
-        audioElement.id = 'audioElement';
-        audioElement.style.display = 'none';
-        document.body.appendChild(audioElement);
-        console.log('Hidden audio element created for output');
-        
-        // Create audio context for metering
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioContext.createMediaStreamSource(stream);
-        console.log('Audio context and source created');
-        
-        // Create gain node for metering only
-        audioGainNode = audioContext.createGain();
-        audioGainNode.gain.value = 1.0; // Fixed gain for visualization
-        source.connect(audioGainNode);
-        
-        // Create audio meter
-        audioMeter = createAudioMeter(audioContext);
-        audioGainNode.connect(audioMeter);
-        
-        // We don't connect to destination as we're using the audio element for output
-        console.log('Audio pipeline set up for metering only');
-        
-        // Resume audio context if it's suspended
-        if (audioContext.state === 'suspended') {
-          console.log('Resuming suspended audio context');
-          await audioContext.resume();
+        const entries = Array.isArray(data) ? data : [data];
+        if (!audioStream) {
+          audioStream = new MediaStream();
         }
-        
-        // Apply initial mute state if needed
-        if (isMuted && consumer) {
-          consumer.pause();
-          console.log('Applied initial mute state to consumer');
+
+        for (const item of entries) {
+          console.log('Creating consumer with parameters:', item);
+          const c = await transport.consume({
+            id: item.id,
+            producerId: item.producerId,
+            kind: item.kind,
+            rtpParameters: item.rtpParameters
+          });
+
+          consumers.push({ consumer: c, producerId: item.producerId });
+          audioStream.addTrack(c.track);
+
+          if (isMuted) {
+            c.pause();
+          }
         }
-        
-        // Start meter updates
-        meterUpdateInterval = setInterval(() => {
-          updateAudioMeter(audioMeter, audioMeterFill);
-        }, 100);
-        
-        // Update UI
+
+        if (!audioElement) {
+          audioElement = document.createElement('audio');
+          audioElement.autoplay = true;
+          audioElement.id = 'audioElement';
+          audioElement.style.display = 'none';
+          document.body.appendChild(audioElement);
+        }
+
+        audioElement.srcObject = audioStream;
+
+        if (!audioContext) {
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const source = audioContext.createMediaStreamSource(audioStream);
+          audioGainNode = audioContext.createGain();
+          audioGainNode.gain.value = 1.0;
+          source.connect(audioGainNode);
+          audioMeter = createAudioMeter(audioContext);
+          audioGainNode.connect(audioMeter);
+
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+
+          meterUpdateInterval = setInterval(() => {
+            updateAudioMeter(audioMeter, audioMeterFill);
+          }, 100);
+        }
+
         joinForm.classList.add('hidden');
         listenerControls.classList.remove('hidden');
         currentChannelSpan.textContent = selectedChannel;
-        
         updateStatus('Connected to audio stream', 'success');
       } catch (error) {
         console.error('Error handling consumer:', error);
@@ -372,28 +353,37 @@
         leaveChannel();
       }
     }
+
+    function handleProducerStopped(producerId) {
+      const remaining = [];
+      consumers.forEach(c => {
+        if (c.producerId === producerId) {
+          try { c.consumer.close(); } catch {}
+          if (audioStream) audioStream.removeTrack(c.consumer.track);
+        } else {
+          remaining.push(c);
+        }
+      });
+      consumers = remaining;
+
+      if (consumers.length === 0) {
+        leaveChannel();
+      }
+    }
     
     // Leave channel
     function leaveChannel() {
-      // Close consumer
-      if (consumer) {
-        console.log('Closing consumer');
-        consumer.close();
-        consumer = null;
-      }
-      
+      // Close consumers
+      consumers.forEach(c => {
+        try { c.close(); } catch (e) {}
+      });
+      consumers = [];
+
       // Close transport
       if (transport) {
         console.log('Closing transport');
         transport.close();
         transport = null;
-      }
-      
-      // If we have a consumer, close it properly
-      if (consumer) {
-        console.log('Closing consumer');
-        consumer.close();
-        consumer = null;
       }
       
       // Remove the hidden audio element
@@ -403,7 +393,9 @@
         audioElement.pause();
         audioElement.srcObject = null;
         audioElement.remove();
+        audioElement = null;
       }
+      audioStream = null;
       
       // Close audio context
       if (audioContext) {
@@ -449,18 +441,14 @@
       console.log('Audio toggled:', isMuted ? 'off' : 'on');
       
       // Use the proper mediasoup Consumer API methods to control audio
-      if (consumer) {
-        if (isMuted) {
-          // Use the consumer's pause() method to mute the audio
-          // This internally sets track.enabled = false
-          consumer.pause();
-          console.log('Consumer paused (muted)');
-        } else {
-          // Use the consumer's resume() method to unmute the audio
-          // This internally sets track.enabled = true
-          consumer.resume();
-          console.log('Consumer resumed (unmuted)');
-        }
+      if (consumers.length > 0) {
+        consumers.forEach(c => {
+          if (isMuted) {
+            c.pause();
+          } else {
+            c.resume();
+          }
+        });
       } else {
         console.warn('Consumer not found - audio control may not work');
       }
