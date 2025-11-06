@@ -6,6 +6,10 @@ import mediasoup from 'mediasoup';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
+import { initDatabase } from './db/database.js';
+import { registerApiRoutes } from './routes/api.js';
+import { getRoomBySlug } from './db/models/room.js';
+import { verifyInterpreterToken } from './db/models/interpreter.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -16,18 +20,26 @@ const fastify = Fastify({
   logger: true
 });
 
+// Initialize database
+const dbPath = process.env.DB_PATH || './soundcast.db';
+initDatabase(dbPath);
+console.log('Database initialized');
+
 // Fastify setup
 fastify.register(fastifyStatic, {
   root: path.join(__dirname, 'public'),
-  prefix: '/' // optional: default '/'  
+  prefix: '/' // optional: default '/'
 });
 
 // Register WebSocket plugin
 fastify.register(fastifyWebsocket, {
-  options: { 
+  options: {
     maxPayload: 1048576 // 1MB max payload
   }
 });
+
+// Register REST API routes
+fastify.register(registerApiRoutes);
 
 // mediasoup Worker
 const worker = await mediasoup.createWorker({
@@ -877,6 +889,179 @@ fastify.register(async function (fastify) {
       });
     });
   });
+
+// Room-based WebSocket endpoints for multi-tenant support
+fastify.register(async function (fastify) {
+  // Listener endpoint: /ws/room/:slug/listen
+  fastify.get('/ws/room/:slug/listen', { websocket: true }, (connection, req) => {
+    const { slug } = req.params;
+    const clientId = uuidv4();
+
+    fastify.log.info(`New listener connection for room: ${slug}, client: ${clientId}`);
+
+    // Verify room exists
+    const room = getRoomBySlug(slug);
+
+    if (!room) {
+      fastify.log.warn(`Room not found: ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Room not found' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Parse ICE servers from JSON
+    let iceServers;
+    try {
+      iceServers = JSON.parse(room.coturn_config_json);
+    } catch (e) {
+      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid room configuration' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Send configuration message
+    const config = {
+      type: 'config',
+      data: {
+        sfuUrl: room.sfu_url,
+        iceServers: iceServers,
+        isLocalOnly: room.is_local_only
+      }
+    };
+
+    connection.send(JSON.stringify(config));
+    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}`);
+
+    // Handle messages (WebRTC signaling relay)
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'webrtc_signal') {
+          // In a full implementation, this would relay to the SFU
+          // For now, we just log it
+          fastify.log.info(`WebRTC signal from listener ${clientId}: ${payload.data.payload.type}`);
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from listener ${clientId}: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`Listener ${clientId} disconnected from room ${slug}`);
+    });
+  });
+
+  // Interpreter endpoint: /ws/room/:slug/interpret?token=xxx
+  fastify.get('/ws/room/:slug/interpret', { websocket: true }, (connection, req) => {
+    const { slug } = req.params;
+    const token = req.query.token;
+    const clientId = uuidv4();
+
+    fastify.log.info(`New interpreter connection for room: ${slug}, client: ${clientId}`);
+
+    // Verify token is provided
+    if (!token) {
+      fastify.log.warn(`Missing token for interpreter connection to room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Missing token' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Verify interpreter token
+    const interpreter = verifyInterpreterToken(token);
+
+    if (!interpreter) {
+      fastify.log.warn(`Invalid token for interpreter connection to room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid token' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Verify room exists and matches interpreter's room
+    const room = getRoomBySlug(slug);
+
+    if (!room) {
+      fastify.log.warn(`Room not found: ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Room not found' }
+      }));
+      connection.close();
+      return;
+    }
+
+    if (room.id !== interpreter.room_id) {
+      fastify.log.warn(`Interpreter ${interpreter.id} attempted to join wrong room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Token not valid for this room' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Parse ICE servers from JSON
+    let iceServers;
+    try {
+      iceServers = JSON.parse(room.coturn_config_json);
+    } catch (e) {
+      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid room configuration' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Send configuration message with target language
+    const config = {
+      type: 'config',
+      data: {
+        sfuUrl: room.sfu_url,
+        iceServers: iceServers,
+        isLocalOnly: room.is_local_only,
+        targetLanguage: interpreter.target_language
+      }
+    };
+
+    connection.send(JSON.stringify(config));
+    fastify.log.info(`Config sent to interpreter ${clientId} (${interpreter.name}) for room ${slug}`);
+
+    // Handle messages (WebRTC signaling relay)
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'webrtc_signal') {
+          // In a full implementation, this would relay to the SFU
+          // For now, we just log it
+          fastify.log.info(`WebRTC signal from interpreter ${clientId}: ${payload.data.payload.type}`);
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from interpreter ${clientId}: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`Interpreter ${clientId} (${interpreter.name}) disconnected from room ${slug}`);
+    });
+  });
+});
 
   const PORT = process.env.PORT || 3000;
   const HOST = process.env.HOST || '0.0.0.0';
