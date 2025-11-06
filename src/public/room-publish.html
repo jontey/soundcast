@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Soundcast - Room Publisher</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      padding: 20px;
+    }
+
+    .container {
+      background: white;
+      border-radius: 20px;
+      padding: 40px;
+      max-width: 600px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .title {
+      font-size: 32px;
+      font-weight: bold;
+      color: #2d3748;
+      margin-bottom: 10px;
+    }
+
+    .room-name {
+      font-size: 18px;
+      color: #718096;
+      margin-bottom: 5px;
+    }
+
+    .room-slug {
+      font-size: 14px;
+      color: #a0aec0;
+      font-family: monospace;
+    }
+
+    .status {
+      text-align: center;
+      padding: 15px;
+      border-radius: 10px;
+      margin-bottom: 20px;
+      font-weight: bold;
+    }
+
+    .status.disconnected {
+      background: #fff5f5;
+      color: #c53030;
+    }
+
+    .status.connecting {
+      background: #fffaf0;
+      color: #c05621;
+    }
+
+    .status.connected {
+      background: #f0fff4;
+      color: #22543d;
+    }
+
+    .status.broadcasting {
+      background: #ebf8ff;
+      color: #2c5282;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .info-box {
+      background: #f7fafc;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      color: #4a5568;
+    }
+
+    .info-label {
+      font-weight: bold;
+      color: #2d3748;
+      margin-bottom: 5px;
+    }
+
+    .info-value {
+      font-family: monospace;
+      color: #667eea;
+      word-break: break-all;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 15px;
+      border: none;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin-bottom: 10px;
+    }
+
+    .btn-primary {
+      background: #48bb78;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #38a169;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(72, 187, 120, 0.3);
+    }
+
+    .btn-danger {
+      background: #f56565;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #e53e3e;
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(245, 101, 101, 0.3);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .error {
+      background: #fff5f5;
+      border-left: 4px solid #f56565;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      color: #742a2a;
+      display: none;
+    }
+
+    .audio-meter {
+      width: 100%;
+      height: 40px;
+      background: #e2e8f0;
+      border-radius: 20px;
+      overflow: hidden;
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .audio-meter-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #48bb78, #38a169, #2f855a);
+      width: 0%;
+      transition: width 0.1s;
+    }
+
+    .audio-meter-label {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 12px;
+      font-weight: bold;
+      color: #2d3748;
+      z-index: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">🎙️ Publisher</div>
+      <div class="room-name" id="roomName">Loading room...</div>
+      <div class="room-slug" id="roomSlug"></div>
+    </div>
+
+    <div id="status" class="status disconnected">
+      Connecting to room...
+    </div>
+
+    <div id="errorMessage" class="error"></div>
+
+    <div id="configInfo" class="info-box" style="display: none;">
+      <div class="info-label">SFU Configuration</div>
+      <div class="info-value" id="sfuUrl"></div>
+      <div class="info-label" style="margin-top: 10px;">Network Type</div>
+      <div class="info-value" id="networkType"></div>
+    </div>
+
+    <div class="audio-meter" id="audioMeter" style="display: none;">
+      <div class="audio-meter-label">Audio Level</div>
+      <div class="audio-meter-bar" id="audioMeterBar"></div>
+    </div>
+
+    <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
+      Start Broadcasting
+    </button>
+    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast()" style="display: none;">
+      Stop Broadcasting
+    </button>
+  </div>
+
+  <script src="/js/bundles/mediasoup-client.js"></script>
+  <script>
+    // Extract room slug from URL path (/room/:slug/publish)
+    const pathParts = window.location.pathname.split('/');
+    const roomSlug = pathParts[2];
+
+    if (!roomSlug) {
+      showError('Invalid room URL');
+      throw new Error('Room slug not found in URL');
+    }
+
+    document.getElementById('roomSlug').textContent = roomSlug;
+    document.getElementById('roomName').textContent = `Room: ${roomSlug}`;
+
+    // WebSocket and WebRTC state
+    let ws = null;
+    let device = null;
+    let transport = null;
+    let producer = null;
+    let audioStream = null;
+    let roomConfig = null;
+
+    // Status management
+    function setStatus(message, className) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = message;
+      statusEl.className = `status ${className}`;
+    }
+
+    function showError(message) {
+      const el = document.getElementById('errorMessage');
+      el.textContent = '❌ ' + message;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // Connect to room WebSocket
+    function connectToRoom() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/listen`;
+
+      setStatus('Connecting to room...', 'connecting');
+      console.log('Connecting to:', wsUrl);
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        setStatus('Connected, waiting for configuration...', 'connected');
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          console.log('Received message:', message);
+
+          if (message.type === 'config') {
+            handleRoomConfig(message.data);
+          } else if (message.type === 'error') {
+            showError(message.data.message);
+            setStatus('Error: ' + message.data.message, 'disconnected');
+          }
+        } catch (error) {
+          console.error('Error handling message:', error);
+          showError('Failed to handle server message');
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        showError('WebSocket connection error');
+        setStatus('Connection error', 'disconnected');
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed');
+        setStatus('Disconnected from room', 'disconnected');
+        document.getElementById('startBtn').disabled = true;
+      };
+    }
+
+    // Handle room configuration from server
+    async function handleRoomConfig(config) {
+      console.log('Room config received:', config);
+      roomConfig = config;
+
+      // Display config info
+      document.getElementById('sfuUrl').textContent = config.sfuUrl;
+      document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
+      document.getElementById('configInfo').style.display = 'block';
+
+      // For now, we'll use the existing /ws endpoint for actual WebRTC
+      // In a full implementation, you would connect to config.sfuUrl
+      setStatus('Ready to broadcast', 'connected');
+      document.getElementById('startBtn').disabled = false;
+    }
+
+    // Start broadcasting
+    async function startBroadcast() {
+      try {
+        setStatus('Requesting microphone access...', 'connecting');
+
+        // Get microphone access
+        audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        console.log('Microphone access granted');
+
+        // For the current implementation, we use the existing WebRTC setup
+        // In a full multi-tenant setup, you would:
+        // 1. Create a new WebSocket connection to roomConfig.sfuUrl
+        // 2. Use roomConfig.iceServers for the RTCPeerConnection
+        // 3. Implement the full WebRTC signaling protocol
+
+        // For now, show that we're "broadcasting" with the config
+        setStatus('🔴 Broadcasting (using room config)', 'broadcasting');
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('stopBtn').style.display = 'block';
+        document.getElementById('audioMeter').style.display = 'block';
+
+        // Start audio level monitoring
+        startAudioMeter(audioStream);
+
+        showError(`Note: Full WebRTC implementation would connect to ${roomConfig.sfuUrl}`);
+
+      } catch (error) {
+        console.error('Error starting broadcast:', error);
+        showError('Failed to access microphone: ' + error.message);
+        setStatus('Ready to broadcast', 'connected');
+      }
+    }
+
+    // Stop broadcasting
+    function stopBroadcast() {
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => track.stop());
+        audioStream = null;
+      }
+
+      setStatus('Ready to broadcast', 'connected');
+      document.getElementById('startBtn').style.display = 'block';
+      document.getElementById('stopBtn').style.display = 'none';
+      document.getElementById('audioMeter').style.display = 'none';
+    }
+
+    // Audio level meter
+    function startAudioMeter(stream) {
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const microphone = audioContext.createMediaStreamSource(stream);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      analyser.smoothingTimeConstant = 0.8;
+      analyser.fftSize = 1024;
+
+      microphone.connect(analyser);
+
+      function updateMeter() {
+        if (!audioStream) {
+          audioContext.close();
+          return;
+        }
+
+        analyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        const percentage = (average / 255) * 100;
+
+        document.getElementById('audioMeterBar').style.width = percentage + '%';
+
+        requestAnimationFrame(updateMeter);
+      }
+
+      updateMeter();
+    }
+
+    // Initialize
+    connectToRoom();
+  </script>
+</body>
+</html>

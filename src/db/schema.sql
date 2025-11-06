@@ -35,8 +35,23 @@ CREATE TABLE IF NOT EXISTS interpreters (
     FOREIGN KEY (room_id) REFERENCES rooms(id)
 );
 
+-- 2.4. SFU Model (for local SFU registration)
+CREATE TABLE IF NOT EXISTS sfus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    url TEXT NOT NULL, -- WebSocket URL of the SFU
+    announced_ip TEXT NOT NULL, -- Public/announced IP address
+    port INTEGER NOT NULL, -- WebSocket port
+    secret_key_hash TEXT NOT NULL, -- Hashed secret key for authentication
+    status TEXT NOT NULL DEFAULT 'online', -- online, offline, error
+    last_heartbeat DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_rooms_tenant_id ON rooms(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rooms_slug ON rooms(slug);
 CREATE INDEX IF NOT EXISTS idx_interpreters_room_id ON interpreters(room_id);
 CREATE INDEX IF NOT EXISTS idx_interpreters_join_token_hash ON interpreters(join_token_hash);
+CREATE INDEX IF NOT EXISTS idx_sfus_status ON sfus(status);
+CREATE INDEX IF NOT EXISTS idx_sfus_last_heartbeat ON sfus(last_heartbeat);

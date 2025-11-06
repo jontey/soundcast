@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
+import { registerSfuRoutes } from './routes/sfu-api.js';
 import { getRoomBySlug } from './db/models/room.js';
 import { verifyInterpreterToken } from './db/models/interpreter.js';
 
@@ -40,6 +41,39 @@ fastify.register(fastifyWebsocket, {
 
 // Register REST API routes
 fastify.register(registerApiRoutes);
+
+// Register SFU management routes
+fastify.register(registerSfuRoutes);
+
+// Room-specific HTML routes
+fastify.get('/room/:slug/publish', async (request, reply) => {
+  const { slug } = request.params;
+
+  // Verify room exists
+  const room = getRoomBySlug(slug);
+  if (!room) {
+    return reply.code(404).send('Room not found');
+  }
+
+  return reply.sendFile('room-publish.html');
+});
+
+fastify.get('/room/:slug/listen', async (request, reply) => {
+  const { slug } = request.params;
+
+  // Verify room exists
+  const room = getRoomBySlug(slug);
+  if (!room) {
+    return reply.code(404).send('Room not found');
+  }
+
+  return reply.sendFile('room-listen.html');
+});
+
+// Tenant admin route
+fastify.get('/tenant-admin', async (request, reply) => {
+  return reply.sendFile('tenant-admin.html');
+});
 
 // mediasoup Worker
 const worker = await mediasoup.createWorker({

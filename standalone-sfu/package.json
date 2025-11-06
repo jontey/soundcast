@@ -1,0 +1,42 @@
+{
+  "name": "soundcast-sfu",
+  "version": "1.0.0",
+  "description": "Soundcast Standalone SFU Server - Packaged executable for local deployments",
+  "main": "sfu-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node sfu-server.js",
+    "build": "npm run build:all",
+    "build:all": "npm run build:win && npm run build:mac && npm run build:linux",
+    "build:win": "pkg sfu-server.js --target node18-win-x64 --output dist/soundcast-sfu-windows.exe",
+    "build:mac": "pkg sfu-server.js --target node18-macos-x64 --output dist/soundcast-sfu-macos",
+    "build:linux": "pkg sfu-server.js --target node18-linux-x64 --output dist/soundcast-sfu-linux"
+  },
+  "bin": {
+    "soundcast-sfu": "./sfu-server.js"
+  },
+  "pkg": {
+    "targets": [
+      "node18-win-x64",
+      "node18-macos-x64",
+      "node18-linux-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "keywords": [
+    "soundcast",
+    "sfu",
+    "webrtc",
+    "mediasoup"
+  ],
+  "author": "Soundcast Team",
+  "license": "MIT",
+  "dependencies": {
+    "mediasoup": "^3.15.7",
+    "ws": "^8.18.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  }
+}
