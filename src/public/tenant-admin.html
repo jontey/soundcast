@@ -367,7 +367,9 @@
     <div id="roomsSection" class="section" style="display: none;">
       <div class="section-title">
         Your Rooms
-        <span id="wsStatusIndicator" style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px; vertical-align: middle;" title="Connecting..."></span>
+        <span id="wsStatusIndicator"
+          style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px; vertical-align: middle;"
+          title="Connecting..."></span>
         <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
         <button onclick="loadRooms()" class="btn btn-secondary"
           style="float: right; margin-right: 10px;">Refresh</button>
@@ -692,13 +694,6 @@
               <div class="url-value">
                 <span>${baseUrl}/room/${room.slug}/listen</span>
                 <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')">Copy</button>
-              </div>
-            </div>
-            <div class="url-group">
-              <div class="url-label">Publisher URL (requires token)</div>
-              <div class="url-value">
-                <span>${baseUrl}/room/${room.slug}/publish?token=...</span>
-                <span style="font-size: 11px; color: #718096;">(Add publisher to get token)</span>
               </div>
             </div>
           </div>

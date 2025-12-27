@@ -581,6 +581,8 @@
         case 'waiting-for-publisher':
           setStatus('Waiting for publisher...', 'connected');
           document.getElementById('playerStatus').textContent = 'Waiting for audio stream...';
+          document.getElementById('audioControls').style.display = 'block';
+          document.getElementById('muteBtn').style.display = 'none'; // Hide mute when no audio
           break;
 
         case 'producer-stopped':
@@ -749,6 +751,7 @@
         document.getElementById('volumeControl').style.display = 'block';
         document.getElementById('audioMeter').style.display = 'block';
         document.getElementById('audioControls').style.display = 'block';
+        document.getElementById('muteBtn').style.display = ''; // Show mute button when audio playing
       } catch (error) {
         console.error('Error handling consumer:', error);
         showError('Error handling consumer: ' + error.message);
@@ -773,7 +776,8 @@
         setStatus('Waiting for publisher...', 'connected');
         document.getElementById('playerStatus').textContent = 'Publisher disconnected';
         document.getElementById('audioMeter').style.display = 'none';
-        document.getElementById('audioControls').style.display = 'none';
+        document.getElementById('audioControls').style.display = 'block';
+        document.getElementById('muteBtn').style.display = 'none'; // Hide mute when no audio
       }
     }
 
