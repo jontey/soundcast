@@ -6,20 +6,23 @@
   "type": "module",
   "scripts": {
     "start": "node sfu-server.js",
-    "build": "npm run build:all",
-    "build:all": "npm run build:win && npm run build:mac && npm run build:linux",
-    "build:win": "pkg sfu-server.js --target node18-win-x64 --output dist/soundcast-sfu-windows.exe",
-    "build:mac": "pkg sfu-server.js --target node18-macos-x64 --output dist/soundcast-sfu-macos",
-    "build:linux": "pkg sfu-server.js --target node18-linux-x64 --output dist/soundcast-sfu-linux"
+    "bundle": "esbuild sfu-server.js --bundle --platform=node --format=cjs --outfile=dist/sfu-server.cjs --external:mediasoup",
+    "download-workers": "node scripts/download-workers.js",
+    "dist": "node scripts/build-dist.js",
+    "dist:macos-arm64": "node scripts/build-dist.js macos-arm64",
+    "dist:linux": "node scripts/build-dist.js linux",
+    "dist:linux-arm64": "node scripts/build-dist.js linux-arm64",
+    "dist:windows": "node scripts/build-dist.js windows"
   },
   "bin": {
     "soundcast-sfu": "./sfu-server.js"
   },
   "pkg": {
     "targets": [
-      "node18-win-x64",
-      "node18-macos-x64",
-      "node18-linux-x64"
+      "node18-macos-arm64",
+      "node18-linux-x64",
+      "node18-linux-arm64",
+      "node18-win-x64"
     ],
     "outputPath": "dist"
   },
@@ -32,11 +35,12 @@
   "author": "Soundcast Team",
   "license": "MIT",
   "dependencies": {
-    "mediasoup": "^3.15.7",
-    "ws": "^8.18.0",
-    "node-fetch": "^3.3.2"
+    "mediasoup": "3.19.14",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
+    "esbuild": "^0.27.2",
     "pkg": "^5.8.1"
   }
 }
