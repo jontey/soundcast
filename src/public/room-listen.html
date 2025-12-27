@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -80,8 +81,15 @@
     }
 
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.7;
+      }
     }
 
     .info-box {
@@ -111,11 +119,6 @@
       border-radius: 15px;
       text-align: center;
       margin-bottom: 20px;
-    }
-
-    .player-icon {
-      font-size: 80px;
-      margin-bottom: 15px;
     }
 
     .player-status {
@@ -174,17 +177,6 @@
       display: none;
     }
 
-    .interpreter-badge {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 10px 20px;
-      border-radius: 20px;
-      display: inline-block;
-      margin-top: 10px;
-      font-size: 14px;
-      font-weight: bold;
-    }
-
     .ice-servers {
       max-height: 100px;
       overflow-y: auto;
@@ -195,21 +187,98 @@
       font-family: monospace;
       margin-top: 5px;
     }
+
+    .audio-meter {
+      width: 100%;
+      height: 20px;
+      background: #e2e8f0;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 15px;
+    }
+
+    .audio-meter-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #48bb78, #38a169, #2f855a);
+      width: 0%;
+      transition: width 0.1s;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin: 5px;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5a67d8;
+    }
+
+    .btn-danger {
+      background: #f56565;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #e53e3e;
+    }
+
+    .channel-selector {
+      margin-bottom: 20px;
+    }
+
+    .channel-select {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      background: white;
+      margin-top: 8px;
+    }
+
+    .channel-select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .channel-label {
+      font-weight: bold;
+      color: #2d3748;
+      font-size: 14px;
+    }
   </style>
 </head>
+
 <body>
   <div class="container">
     <div class="header">
-      <div class="title">🎧 Listener</div>
+      <div class="title">Listener</div>
       <div class="room-name" id="roomName">Loading room...</div>
-      <div class="room-slug" id="roomSlug"></div>
     </div>
 
-    <div id="status" class="status disconnected">
-      Connecting to room...
+    <div id="status" class="status connecting">
+      Loading room...
     </div>
 
     <div id="errorMessage" class="error"></div>
+
+    <div id="channelSelectorContainer" class="channel-selector" style="display: none;">
+      <label class="channel-label">Select Channel</label>
+      <select id="channelSelect" class="channel-select">
+        <option value="">Select a channel to listen to</option>
+      </select>
+    </div>
 
     <div id="configInfo" class="info-box" style="display: none;">
       <div class="info-label">SFU Configuration</div>
@@ -218,16 +287,21 @@
       <div class="info-value" id="networkType"></div>
       <div class="info-label" style="margin-top: 10px;">ICE Servers</div>
       <div class="ice-servers" id="iceServers"></div>
-      <div id="interpreterInfo" style="display: none;">
-        <div class="interpreter-badge">
-          🌐 Interpreter Mode: <span id="targetLanguage"></span>
-        </div>
-      </div>
     </div>
 
     <div class="player-card">
-      <div class="player-icon" id="playerIcon">🔇</div>
-      <div class="player-status" id="playerStatus">Waiting for audio stream...</div>
+      <div class="player-status" id="playerStatus">Click Start to begin listening</div>
+
+      <div id="startSection" style="margin-top: 15px;">
+        <button id="startBtn" class="btn btn-primary" onclick="startListening()"
+          style="font-size: 18px; padding: 15px 40px;">
+          Start Listening
+        </button>
+      </div>
+
+      <div class="audio-meter" id="audioMeter" style="display: none;">
+        <div class="audio-meter-bar" id="audioMeterBar"></div>
+      </div>
 
       <div class="volume-control" id="volumeControl" style="display: none;">
         <div class="volume-label">
@@ -236,34 +310,49 @@
         </div>
         <input type="range" min="0" max="100" value="100" class="volume-slider" id="volumeSlider">
       </div>
+
+      <div id="audioControls" style="display: none; margin-top: 15px;">
+        <button id="muteBtn" class="btn btn-primary" onclick="toggleMute()">Mute</button>
+        <button id="leaveBtn" class="btn btn-danger" onclick="leaveChannel()">Leave Channel</button>
+      </div>
     </div>
 
     <audio id="audioPlayer" autoplay></audio>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
+  <script src="/js/common.js"></script>
   <script>
     // Extract room slug from URL path (/room/:slug/listen)
     const pathParts = window.location.pathname.split('/');
     const roomSlug = pathParts[2];
-
-    // Check if this is an interpreter connection (has ?token parameter)
-    const urlParams = new URLSearchParams(window.location.search);
-    const interpreterToken = urlParams.get('token');
-    const isInterpreter = !!interpreterToken;
 
     if (!roomSlug) {
       showError('Invalid room URL');
       throw new Error('Room slug not found in URL');
     }
 
-    document.getElementById('roomSlug').textContent = roomSlug;
     document.getElementById('roomName').textContent = `Room: ${roomSlug}`;
 
-    // WebSocket and WebRTC state
-    let ws = null;
+    // Check for debug mode
+    const urlParams = new URLSearchParams(window.location.search);
+    const debugMode = urlParams.has('debug');
+
+    // WebSocket and WebRTC state (prefixed to avoid conflicts with common.js globals)
+    let ws = null;           // Room WebSocket (for config)
+    let sfuWs = null;        // SFU WebSocket (for WebRTC signaling)
     let roomConfig = null;
+    let listenDevice = null;
+    let recvTransport = null;
+    let listenConsumers = [];
+    let listenAudioStream = null;
     let audioElement = document.getElementById('audioPlayer');
+    let listenAudioContext = null;
+    let listenAudioMeter = null;
+    let listenAudioGainNode = null;
+    let listenMeterUpdateInterval = null;
+    let isMuted = false;
+    let selectedChannel = null;
 
     // Status management
     function setStatus(message, className) {
@@ -274,36 +363,30 @@
 
     function showError(message) {
       const el = document.getElementById('errorMessage');
-      el.textContent = '❌ ' + message;
+      el.textContent = message;
       el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
     }
 
     // Connect to room WebSocket
     function connectToRoom() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      let wsUrl;
-
-      if (isInterpreter) {
-        wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/interpret?token=${interpreterToken}`;
-        setStatus('Connecting as interpreter...', 'connecting');
-      } else {
-        wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/listen`;
-        setStatus('Connecting to room...', 'connecting');
-      }
+      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/listen`;
+      setStatus('Connecting to room...', 'connecting');
 
       console.log('Connecting to:', wsUrl);
 
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('Room WebSocket connected');
         setStatus('Connected, waiting for configuration...', 'connected');
       };
 
       ws.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('Received message:', message);
+          console.log('Received room message:', message);
 
           if (message.type === 'config') {
             handleRoomConfig(message.data);
@@ -324,9 +407,8 @@
       };
 
       ws.onclose = () => {
-        console.log('WebSocket closed');
+        console.log('Room WebSocket closed');
         setStatus('Disconnected from room', 'disconnected');
-        document.getElementById('playerIcon').textContent = '🔇';
         document.getElementById('playerStatus').textContent = 'Disconnected';
       };
     }
@@ -336,32 +418,398 @@
       console.log('Room config received:', config);
       roomConfig = config;
 
-      // Display config info
-      document.getElementById('sfuUrl').textContent = config.sfuUrl;
-      document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
-
-      // Display ICE servers
-      const iceServersEl = document.getElementById('iceServers');
-      iceServersEl.textContent = JSON.stringify(config.iceServers, null, 2);
-
-      // If interpreter, show target language
-      if (config.targetLanguage) {
-        document.getElementById('targetLanguage').textContent = config.targetLanguage.toUpperCase();
-        document.getElementById('interpreterInfo').style.display = 'block';
+      // Display config info (only in debug mode)
+      if (debugMode) {
+        document.getElementById('sfuUrl').textContent = config.sfuUrl;
+        document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
+        document.getElementById('iceServers').textContent = JSON.stringify(config.iceServers, null, 2);
+        document.getElementById('configInfo').style.display = 'block';
       }
 
-      document.getElementById('configInfo').style.display = 'block';
+      // Populate channel selector
+      const channels = config.channels || [];
+      const channelSelect = document.getElementById('channelSelect');
+      channelSelect.innerHTML = '<option value="">Select a channel to listen to</option>';
 
-      // For now, we simulate listening
-      // In a full implementation, you would:
-      // 1. Create a new WebSocket connection to config.sfuUrl
-      // 2. Create RTCPeerConnection with config.iceServers
-      // 3. Implement the full WebRTC signaling protocol
-      setStatus('Ready to receive audio', 'connected');
-      document.getElementById('playerIcon').textContent = '🎧';
-      document.getElementById('playerStatus').textContent = 'Waiting for publisher...';
+      if (channels.length > 0) {
+        channels.forEach(channel => {
+          const option = document.createElement('option');
+          option.value = channel;
+          option.textContent = channel;
+          channelSelect.appendChild(option);
+        });
 
-      showError(`Note: Full WebRTC implementation would connect to ${config.sfuUrl}`);
+        // Auto-select first channel if only one
+        if (channels.length === 1) {
+          channelSelect.selectedIndex = 1;
+          selectedChannel = channels[0];
+        }
+
+        document.getElementById('channelSelectorContainer').style.display = 'block';
+        setStatus('Select a channel and click Start', 'connected');
+        document.getElementById('playerStatus').textContent = 'Select a channel to listen';
+      } else {
+        // No channels available
+        setStatus('No channels available', 'connected');
+        document.getElementById('playerStatus').textContent = 'No channels available yet';
+        document.getElementById('startBtn').disabled = true;
+      }
+
+      // Don't connect to SFU yet - wait for user to click Start Listening
+    }
+
+    // Connect to SFU WebSocket
+    function connectToSfu(sfuUrl) {
+      console.log('Connecting to SFU:', sfuUrl);
+      setStatus('Connecting to SFU...', 'connecting');
+
+      sfuWs = new WebSocket(sfuUrl);
+
+      sfuWs.onopen = () => {
+        console.log('SFU WebSocket connected');
+        // Request RTP capabilities
+        sfuWs.send(JSON.stringify({ action: 'get-rtpCapabilities' }));
+      };
+
+      sfuWs.onmessage = handleSfuMessage;
+
+      sfuWs.onerror = (error) => {
+        console.error('SFU WebSocket error:', error);
+        showError('Failed to connect to SFU');
+        setStatus('SFU connection error', 'disconnected');
+      };
+
+      sfuWs.onclose = () => {
+        console.log('SFU WebSocket closed');
+        if (recvTransport) {
+          leaveChannel();
+        }
+      };
+    }
+
+    // Handle SFU messages
+    async function handleSfuMessage(event) {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('Error parsing SFU message:', e);
+        return;
+      }
+
+      const { action, data: payload } = data;
+      console.log('SFU message:', action, payload);
+
+      switch (action) {
+        case 'rtpCapabilities':
+          rtpCapabilities = payload;
+          await joinRoom();
+          break;
+
+        case 'listener-transport-created':
+          await handleTransportCreated(payload);
+          break;
+
+        case 'listener-transport-connected':
+          console.log('Transport connected successfully');
+          break;
+
+        case 'consumer-created':
+          await handleConsumerCreated(payload);
+          break;
+
+        case 'waiting-for-publisher':
+          setStatus('Waiting for publisher...', 'connected');
+          document.getElementById('playerStatus').textContent = 'Waiting for audio stream...';
+          break;
+
+        case 'producer-stopped':
+          handleProducerStopped(payload.producerId);
+          break;
+
+        case 'left-channel':
+          console.log('Successfully left channel');
+          break;
+
+        case 'error':
+          showError(payload.message);
+          setStatus('Error: ' + payload.message, 'disconnected');
+          break;
+
+        default:
+          console.log('Unknown SFU action:', action);
+      }
+    }
+
+    // Join room - create device and request transport
+    async function joinRoom() {
+      try {
+        // Ensure a channel is selected
+        if (!selectedChannel) {
+          const channelSelect = document.getElementById('channelSelect');
+          selectedChannel = channelSelect.value;
+        }
+
+        if (!selectedChannel) {
+          setStatus('Please select a channel', 'connected');
+          document.getElementById('playerStatus').textContent = 'Select a channel first';
+          return;
+        }
+
+        // Create mediasoup device
+        listenDevice = new mediasoupClient.Device();
+        await listenDevice.load({ routerRtpCapabilities: rtpCapabilities });
+
+        // Request transport creation
+        setStatus('Creating transport...', 'connecting');
+        sfuWs.send(JSON.stringify({
+          action: 'create-listener-transport',
+          data: {
+            channelId: `${roomSlug}:${selectedChannel}`,
+            displayName: 'Listener'
+          }
+        }));
+      } catch (error) {
+        console.error('Error joining room:', error);
+        showError('Error joining room: ' + error.message);
+      }
+    }
+
+    // Handle transport created
+    async function handleTransportCreated(transportParams) {
+      try {
+        console.log('Received transport parameters:', transportParams);
+
+        // Create receive transport with dynamic ICE servers from room config
+        const iceServers = getIceServersFromConfig(roomConfig);
+        console.log('Using ICE servers:', iceServers);
+        transportParams.iceServers = iceServers;
+
+        recvTransport = listenDevice.createRecvTransport(transportParams);
+        console.log('Receive transport created:', recvTransport.id);
+
+        // Set up transport events
+        recvTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            console.log('Transport connect event triggered');
+            sfuWs.send(JSON.stringify({
+              action: 'connect-listener-transport',
+              data: { dtlsParameters }
+            }));
+            callback();
+          } catch (error) {
+            console.error('Error in connect event:', error);
+            errback(error);
+          }
+        });
+
+        recvTransport.on('connectionstatechange', (state) => {
+          console.log('Transport connection state:', state);
+          if (state === 'failed' || state === 'closed') {
+            leaveChannel();
+          }
+        });
+
+        // Request to consume audio
+        setStatus('Connecting to audio stream...', 'connecting');
+        setTimeout(() => {
+          console.log('Proceeding to consume audio...');
+          consumeAudio();
+        }, 500);
+      } catch (error) {
+        console.error('Error handling transport:', error);
+        showError('Error setting up transport: ' + error.message);
+        leaveChannel();
+      }
+    }
+
+    // Consume audio
+    function consumeAudio() {
+      if (!recvTransport || !listenDevice || !listenDevice.rtpCapabilities) {
+        showError('Device or transport not ready');
+        return;
+      }
+
+      console.log('Sending consume-audio request');
+      sfuWs.send(JSON.stringify({
+        action: 'consume-audio',
+        data: { rtpCapabilities: listenDevice.rtpCapabilities }
+      }));
+    }
+
+    // Handle consumer created
+    async function handleConsumerCreated(data) {
+      try {
+        const entries = Array.isArray(data) ? data : [data];
+        if (!listenAudioStream) {
+          listenAudioStream = new MediaStream();
+        }
+
+        for (const item of entries) {
+          console.log('Creating consumer with parameters:', item);
+          const c = await recvTransport.consume({
+            id: item.id,
+            producerId: item.producerId,
+            kind: item.kind,
+            rtpParameters: item.rtpParameters
+          });
+
+          listenConsumers.push({ consumer: c, producerId: item.producerId });
+          listenAudioStream.addTrack(c.track);
+
+          if (isMuted) {
+            c.pause();
+          }
+        }
+
+        audioElement.srcObject = listenAudioStream;
+
+        // Set up audio processing (AudioContext was pre-created in startListening)
+        if (listenAudioContext && !listenAudioMeter) {
+          const source = listenAudioContext.createMediaStreamSource(listenAudioStream);
+          listenAudioGainNode = listenAudioContext.createGain();
+          listenAudioGainNode.gain.value = 1.0;
+          source.connect(listenAudioGainNode);
+          listenAudioMeter = createAudioMeter(listenAudioContext);
+          listenAudioGainNode.connect(listenAudioMeter);
+
+          // Resume if suspended (should not happen since created in user gesture)
+          if (listenAudioContext.state === 'suspended') {
+            await listenAudioContext.resume();
+          }
+
+          listenMeterUpdateInterval = setInterval(() => {
+            updateAudioMeter(listenAudioMeter, document.getElementById('audioMeterBar'));
+          }, 100);
+        }
+
+        // Update UI
+        setStatus(`Listening to ${selectedChannel}`, 'listening');
+        document.getElementById('playerStatus').textContent = 'Audio playing';
+        document.getElementById('volumeControl').style.display = 'block';
+        document.getElementById('audioMeter').style.display = 'block';
+        document.getElementById('audioControls').style.display = 'block';
+      } catch (error) {
+        console.error('Error handling consumer:', error);
+        showError('Error handling consumer: ' + error.message);
+        leaveChannel();
+      }
+    }
+
+    // Handle producer stopped
+    function handleProducerStopped(producerId) {
+      const remaining = [];
+      listenConsumers.forEach(c => {
+        if (c.producerId === producerId) {
+          try { c.consumer.close(); } catch { }
+          if (listenAudioStream) listenAudioStream.removeTrack(c.consumer.track);
+        } else {
+          remaining.push(c);
+        }
+      });
+      listenConsumers = remaining;
+
+      if (listenConsumers.length === 0) {
+        setStatus('Waiting for publisher...', 'connected');
+        document.getElementById('playerStatus').textContent = 'Publisher disconnected';
+        document.getElementById('audioMeter').style.display = 'none';
+        document.getElementById('audioControls').style.display = 'none';
+      }
+    }
+
+    // Resume audio context on user interaction
+    function resumeAudioContext() {
+      if (listenAudioContext && listenAudioContext.state === 'suspended') {
+        listenAudioContext.resume().then(() => {
+          console.log('AudioContext resumed');
+          document.getElementById('clickToPlay').style.display = 'none';
+        }).catch(err => {
+          console.error('Failed to resume AudioContext:', err);
+        });
+      } else {
+        document.getElementById('clickToPlay').style.display = 'none';
+      }
+    }
+
+    // Toggle mute
+    function toggleMute() {
+      isMuted = !isMuted;
+
+      listenConsumers.forEach(c => {
+        if (isMuted) {
+          c.consumer.pause();
+        } else {
+          c.consumer.resume();
+        }
+      });
+
+      if (listenAudioGainNode) {
+        listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
+      }
+
+      document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
+    }
+
+    // Leave room
+    function leaveChannel() {
+      // Notify SFU
+      if (sfuWs && sfuWs.readyState === WebSocket.OPEN) {
+        sfuWs.send(JSON.stringify({
+          action: 'leave-channel',
+          data: {}
+        }));
+      }
+
+      // Close consumers
+      listenConsumers.forEach(c => {
+        try { c.consumer.close(); } catch { }
+      });
+      listenConsumers = [];
+
+      // Close transport
+      if (recvTransport) {
+        recvTransport.close();
+        recvTransport = null;
+      }
+
+      // Stop audio
+      if (audioElement) {
+        audioElement.pause();
+        audioElement.srcObject = null;
+      }
+      listenAudioStream = null;
+
+      // Close audio context
+      if (listenAudioContext) {
+        if (listenAudioMeter) {
+          listenAudioMeter.shutdown();
+          listenAudioMeter = null;
+        }
+        if (listenAudioContext.state !== 'closed') {
+          listenAudioContext.close();
+        }
+        listenAudioContext = null;
+        listenAudioGainNode = null;
+      }
+
+      if (listenMeterUpdateInterval) {
+        clearInterval(listenMeterUpdateInterval);
+        listenMeterUpdateInterval = null;
+      }
+
+      // Update UI
+      setStatus('Select a channel and click Start', 'connected');
+      document.getElementById('playerStatus').textContent = 'Select a channel to listen';
+      document.getElementById('volumeControl').style.display = 'none';
+      document.getElementById('audioMeter').style.display = 'none';
+      document.getElementById('audioControls').style.display = 'none';
+      document.getElementById('audioMeterBar').style.width = '0%';
+      document.getElementById('startSection').style.display = 'block';
+
+      // Show channel selector again if channels are available
+      if (roomConfig && roomConfig.channels && roomConfig.channels.length > 0) {
+        document.getElementById('channelSelectorContainer').style.display = 'block';
+      }
     }
 
     // Volume control
@@ -374,23 +822,46 @@
       volumeValue.textContent = volume + '%';
     });
 
-    // When audio starts playing
-    audioElement.addEventListener('playing', () => {
-      setStatus('🔴 Listening to audio', 'listening');
-      document.getElementById('playerIcon').textContent = '🔊';
-      document.getElementById('playerStatus').textContent = 'Audio playing';
-      document.getElementById('volumeControl').style.display = 'block';
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+      leaveChannel();
     });
 
-    // When audio is paused/stopped
-    audioElement.addEventListener('pause', () => {
-      setStatus('Ready to receive audio', 'connected');
-      document.getElementById('playerIcon').textContent = '🎧';
-      document.getElementById('playerStatus').textContent = 'Audio paused';
+    // Start listening - called when user clicks the button (user gesture)
+    function startListening() {
+      // Check if a channel is selected
+      const channelSelect = document.getElementById('channelSelect');
+      selectedChannel = channelSelect.value;
+
+      if (!selectedChannel && roomConfig && roomConfig.channels && roomConfig.channels.length > 0) {
+        showError('Please select a channel first');
+        return;
+      }
+
+      if (!roomConfig || !roomConfig.sfuUrl) {
+        showError('Room configuration not loaded yet');
+        return;
+      }
+
+      document.getElementById('startSection').style.display = 'none';
+      document.getElementById('channelSelectorContainer').style.display = 'none';
+      document.getElementById('playerStatus').textContent = 'Connecting to SFU...';
+
+      // Pre-create AudioContext here (inside user gesture) to avoid autoplay issues
+      listenAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Now connect to SFU
+      connectToSfu(roomConfig.sfuUrl);
+    }
+
+    // Channel selector change handler
+    document.getElementById('channelSelect').addEventListener('change', function (e) {
+      selectedChannel = e.target.value;
     });
 
-    // Initialize
+    // Connect to room on page load to get channels list
     connectToRoom();
   </script>
 </body>
+
 </html>

@@ -9,16 +9,28 @@
 <body>
   <div class="container">
     <h1>SoundCast Subscriber</h1>
-    
+
+    <!-- Multi-tenant room join section -->
+    <div id="roomJoinSection" style="background: #f0f9ff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea;">
+      <h2 style="margin-top: 0;">Join a Room (Multi-Tenant)</h2>
+      <p style="color: #718096; margin-bottom: 15px;">Enter a room slug to join a specific room:</p>
+      <div class="flex-container" style="gap: 10px;">
+        <input type="text" id="roomSlugInput" placeholder="Enter room slug (e.g., my-meeting-1)" style="flex: 1;">
+        <button onclick="goToRoom()" style="white-space: nowrap;">Join Room</button>
+      </div>
+    </div>
+
+    <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">
+
     <div id="status" class="status info">Connecting to server...</div>
-    
+
     <div id="joinForm">
-      <h2>Join a Channel</h2>
-      
+      <h2>Join a Channel (Legacy)</h2>
+
       <div class="flex-container">
         <input type="text" id="displayName" placeholder="Your Display Name">
       </div>
-      
+
       <div>
         <h3>Available Channels</h3>
         <div id="channelsList">
@@ -480,6 +492,23 @@
     // Handle page unload
     window.addEventListener('beforeunload', () => {
       leaveChannel();
+    });
+
+    // Multi-tenant room navigation
+    function goToRoom() {
+      const slug = document.getElementById('roomSlugInput').value.trim();
+      if (!slug) {
+        alert('Please enter a room slug');
+        return;
+      }
+      window.location.href = `/room/${slug}/listen`;
+    }
+
+    // Allow Enter key to submit room slug
+    document.getElementById('roomSlugInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        goToRoom();
+      }
     });
   </script>
 </body>

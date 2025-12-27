@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,9 +16,16 @@
     .header {
       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       color: white;
-      padding: 30px;
+      padding: 10px;
       border-radius: 10px;
       margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: bold;
+      color: white;
+      margin: 0px;
     }
 
     .api-key-section {
@@ -103,6 +111,16 @@
       color: #22543d;
     }
 
+    .badge.pending {
+      background: #fefcbf;
+      color: #744210;
+    }
+
+    .badge.offline {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+
     .room-urls {
       background: white;
       padding: 15px;
@@ -163,6 +181,15 @@
 
     .btn-primary:hover {
       background: #5568d3;
+    }
+
+    .btn-danger {
+      background: #e53e3e;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c53030;
     }
 
     .btn-secondary {
@@ -302,32 +329,58 @@
       padding: 40px;
       color: #718096;
     }
+
+    .sfu-key {
+      font-family: monospace;
+      font-size: 14px;
+      background: #edf2f7;
+      padding: 8px 12px;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+
+    .sfu-details {
+      font-size: 13px;
+      color: #718096;
+      margin-top: 8px;
+    }
   </style>
 </head>
+
 <body>
   <div class="container">
     <div class="header">
-      <h1>Soundcast Tenant Admin</h1>
-      <p>Manage your rooms and interpreters</p>
+      <h1>Soundcast Admin</h1>
     </div>
 
-    <div class="api-key-section">
-      <h3>API Key Configuration</h3>
-      <p>Enter your tenant API key to manage rooms:</p>
-      <input type="password" id="apiKeyInput" class="api-key-input" placeholder="Enter your API key">
-      <button onclick="loadRooms()" class="btn btn-primary" style="margin-top: 10px;">Load Rooms</button>
+    <div id="apiKeySection" class="api-key-section">
+      <h3>Tenant Key Configuration</h3>
+      <form id="apiKeyForm" onsubmit="loadRooms(event)">
+        <input type="text" id="apiKeyInput" class="api-key-input" placeholder="Enter your Tenant key">
+        <button type="submit" class="btn btn-primary" style="margin-top: 10px;">Load Rooms</button>
+      </form>
     </div>
 
     <div id="errorMessage" class="error" style="display: none;"></div>
     <div id="successMessage" class="success" style="display: none;"></div>
 
-    <div class="section">
+    <div id="roomsSection" class="section" style="display: none;">
       <div class="section-title">
         Your Rooms
         <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
       </div>
       <div id="roomsList">
-        <div class="loading">Enter your API key to load rooms</div>
+        <div class="loading">Loading rooms...</div>
+      </div>
+    </div>
+
+    <div id="sfuSection" class="section" style="display: none;">
+      <div class="section-title">
+        SFU Servers
+        <button onclick="generateSfuKey()" class="btn btn-primary" style="float: right;">+ Generate SFU Key</button>
+      </div>
+      <div id="sfusList">
+        <div class="loading">Loading SFU keys...</div>
       </div>
     </div>
   </div>
@@ -355,45 +408,44 @@
           </select>
           <div id="sfuLoadStatus" style="font-size: 12px; margin-top: 5px; color: #718096;"></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">SFU WebSocket URL</label>
-          <input type="text" id="sfuUrl" class="form-input" required placeholder="ws://localhost:3000/ws">
-          <div style="font-size: 12px; margin-top: 5px; color: #718096;">
-            <span id="sfuUrlHelper">Enter the WebSocket URL of your SFU server</span>
-          </div>
-        </div>
+        <input type="hidden" id="sfuUrl">
         <div class="form-group">
           <label class="form-label">TURN/STUN Configuration (JSON)</label>
-          <textarea id="coturnConfig" class="form-input" rows="5" required>[{"urls": "stun:stun.l.google.com:19302"}]</textarea>
+          <textarea id="coturnConfig" class="form-input" rows="5"
+            required>[{"urls": "stun:stun.l.google.com:19302"}]</textarea>
         </div>
         <button type="submit" class="btn btn-primary">Create Room</button>
       </form>
     </div>
   </div>
 
-  <!-- Add Interpreter Modal -->
-  <div id="addInterpreterModal" class="modal">
+  <!-- Add Publisher Modal -->
+  <div id="addPublisherModal" class="modal">
     <div class="modal-content">
-      <span class="close-modal" onclick="closeModal('addInterpreterModal')">&times;</span>
-      <div class="modal-header">Add Interpreter</div>
-      <form id="addInterpreterForm" onsubmit="addInterpreter(event)">
-        <input type="hidden" id="interpreterRoomSlug">
+      <span class="close-modal" onclick="closeModal('addPublisherModal')">&times;</span>
+      <div class="modal-header">Add Publisher</div>
+      <form id="addPublisherForm" onsubmit="addPublisher(event)">
+        <input type="hidden" id="publisherRoomSlug">
         <div class="form-group">
-          <label class="form-label">Interpreter Name</label>
-          <input type="text" id="interpreterName" class="form-input" required placeholder="e.g., Maria Rodriguez">
+          <label class="form-label">Publisher Name</label>
+          <input type="text" id="publisherName" class="form-input" required placeholder="e.g., Main Speaker">
         </div>
         <div class="form-group">
-          <label class="form-label">Target Language Code</label>
-          <input type="text" id="targetLanguage" class="form-input" required placeholder="e.g., es, fr, zh" maxlength="5">
+          <label class="form-label">Channel Name</label>
+          <input type="text" id="publisherChannelName" class="form-input" required
+            placeholder="e.g., main, spanish, french">
         </div>
-        <button type="submit" class="btn btn-secondary">Add Interpreter</button>
+        <button type="submit" class="btn btn-secondary">Add Publisher</button>
       </form>
-      <div id="newTokenDisplay" style="display: none; margin-top: 20px;">
+      <div id="newPublisherTokenDisplay" style="display: none; margin-top: 20px;">
         <div class="success">
-          <strong>Interpreter Added!</strong><br>
+          <strong>Publisher Added!</strong><br>
           <strong>Join Token (save this!):</strong><br>
-          <code id="newToken" style="font-size: 16px; user-select: all;"></code><br>
-          <button onclick="copyToken()" class="btn btn-primary" style="margin-top: 10px;">Copy Token</button>
+          <code id="newPublisherToken" style="font-size: 16px; user-select: all;"></code><br>
+          <strong style="margin-top: 10px; display: block;">Publisher URL:</strong>
+          <code id="publisherJoinUrl" style="font-size: 12px; user-select: all; word-break: break-all;"></code><br>
+          <button onclick="copyPublisherToken()" class="btn btn-primary" style="margin-top: 10px;">Copy Token</button>
+          <button onclick="copyPublisherUrl()" class="btn btn-secondary" style="margin-top: 10px;">Copy URL</button>
         </div>
       </div>
     </div>
@@ -427,7 +479,14 @@
       setTimeout(() => el.style.display = 'none', 5000);
     }
 
-    async function loadRooms() {
+    function showAuthenticatedView() {
+      document.getElementById('apiKeySection').style.display = 'none';
+      document.getElementById('roomsSection').style.display = 'block';
+      document.getElementById('sfuSection').style.display = 'block';
+    }
+
+    async function loadRooms(event) {
+      event.preventDefault();
       const apiKey = getApiKey();
       if (!apiKey) return;
 
@@ -446,7 +505,11 @@
         }
 
         const data = await response.json();
+
+        // Success - show authenticated view
+        showAuthenticatedView();
         displayRooms(data.rooms);
+        loadSfuList(); // Also load SFU list
       } catch (error) {
         showError(error.message);
         document.getElementById('roomsList').innerHTML = '<div class="loading">Failed to load rooms</div>';
@@ -475,30 +538,32 @@
           </div>
           <div class="room-urls">
             <div class="url-group">
-              <div class="url-label">Publisher URL</div>
-              <div class="url-value">
-                <span>${baseUrl}/room/${room.slug}/publish</span>
-                <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/publish')">Copy</button>
-              </div>
-            </div>
-            <div class="url-group">
-              <div class="url-label">Listener URL</div>
+              <div class="url-label">Listener URL (public)</div>
               <div class="url-value">
                 <span>${baseUrl}/room/${room.slug}/listen</span>
                 <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')">Copy</button>
               </div>
             </div>
+            <div class="url-group">
+              <div class="url-label">Publisher URL (requires token)</div>
+              <div class="url-value">
+                <span>${baseUrl}/room/${room.slug}/publish?token=...</span>
+                <span style="font-size: 11px; color: #718096;">(Add publisher to get token)</span>
+              </div>
+            </div>
           </div>
           <div style="margin-top: 15px;">
-            <button onclick="showInterpreters('${room.slug}')" class="btn btn-secondary">Manage Interpreters</button>
-            <button onclick="showAddInterpreterModal('${room.slug}')" class="btn btn-primary">+ Add Interpreter</button>
+            <button onclick="showPublishers('${room.slug}')" class="btn btn-secondary">Manage Publishers</button>
+            <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-primary">+ Add Publisher</button>
+            <button onclick="deleteRoom('${room.slug}')" class="btn btn-danger" style="margin-left: 10px;">Delete Room</button>
           </div>
-          <div id="interpreters-${room.slug}" class="interpreters-list" style="display: none;"></div>
+          <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
         </div>
       `).join('');
     }
 
     function escapeHtml(text) {
+      if (!text) return '';
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
@@ -506,22 +571,173 @@
 
     function copyToClipboard(text) {
       navigator.clipboard.writeText(text).then(() => {
-        showSuccess('URL copied to clipboard!');
+        showSuccess('Copied to clipboard!');
       });
     }
 
-    function copyToken() {
-      const token = document.getElementById('newToken').textContent;
+    function copyPublisherToken() {
+      const token = document.getElementById('newPublisherToken').textContent;
       navigator.clipboard.writeText(token).then(() => {
-        showSuccess('Token copied to clipboard!');
+        showSuccess('Publisher token copied to clipboard!');
       });
+    }
+
+    function copyPublisherUrl() {
+      const url = document.getElementById('publisherJoinUrl').textContent;
+      navigator.clipboard.writeText(url).then(() => {
+        showSuccess('Publisher URL copied to clipboard!');
+      });
+    }
+
+    function showAddPublisherModal(slug) {
+      document.getElementById('publisherRoomSlug').value = slug;
+      document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      document.getElementById('addPublisherModal').style.display = 'block';
+    }
+
+    async function addPublisher(event) {
+      event.preventDefault();
+
+      const slug = document.getElementById('publisherRoomSlug').value;
+      const name = document.getElementById('publisherName').value;
+      const channel_name = document.getElementById('publisherChannelName').value;
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name, channel_name })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to add publisher');
+        }
+
+        const data = await response.json();
+        const baseUrl = window.location.origin;
+        document.getElementById('newPublisherToken').textContent = data.join_token;
+        document.getElementById('publisherJoinUrl').textContent = `${baseUrl}/room/${slug}/publish?token=${data.join_token}`;
+        document.getElementById('newPublisherTokenDisplay').style.display = 'block';
+        document.getElementById('addPublisherForm').reset();
+        showSuccess('Publisher added successfully!');
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function showPublishers(slug) {
+      const container = document.getElementById(`publishers-${slug}`);
+
+      if (container.style.display === 'block') {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.innerHTML = '<div style="padding: 10px;">Loading...</div>';
+      container.style.display = 'block';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          container.innerHTML = '<div style="padding: 10px; color: #718096;">No publishers added yet</div>';
+          return;
+        }
+
+        const baseUrl = window.location.origin;
+        container.innerHTML = data.publishers.map(pub => `
+          <div class="interpreter-item" style="flex-direction: column; align-items: stretch;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <div class="interpreter-info">
+                <div class="interpreter-name">${escapeHtml(pub.name)}</div>
+                <div class="interpreter-lang">Channel: ${escapeHtml(pub.channel_name)}</div>
+              </div>
+              <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+            </div>
+            <div class="url-value" style="font-size: 11px;">
+              <span style="word-break: break-all;">${baseUrl}/room/${slug}/publish?token=${pub.join_token}</span>
+              <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${slug}/publish?token=${pub.join_token}')">Copy</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        container.innerHTML = '<div style="padding: 10px; color: #f56565;">Failed to load publishers</div>';
+      }
+    }
+
+    async function deletePublisher(slug, publisherId) {
+      if (!confirm('Are you sure you want to delete this publisher?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete publisher');
+        }
+
+        showSuccess('Publisher deleted successfully!');
+        showPublishers(slug); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function deleteRoom(slug) {
+      if (!confirm(`Are you sure you want to delete this room? This will also delete all publishers in this room.`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete room');
+        }
+
+        showSuccess('Room deleted successfully!');
+        loadRooms(); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
     }
 
     async function loadAvailableSfus() {
       try {
         document.getElementById('sfuLoadStatus').textContent = 'Loading SFUs...';
 
-        const response = await fetch(`${API_BASE}/sfu/list`);
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
         if (!response.ok) {
           throw new Error('Failed to load SFUs');
         }
@@ -532,19 +748,22 @@
         // Clear existing options (except first one)
         select.innerHTML = '<option value="">-- Select an SFU --</option>';
 
-        if (data.sfus && data.sfus.length > 0) {
-          data.sfus.forEach(sfu => {
+        // Only show online SFUs
+        const onlineSfus = data.sfus.filter(sfu => sfu.status === 'online' && sfu.url);
+
+        if (onlineSfus.length > 0) {
+          onlineSfus.forEach(sfu => {
             const option = document.createElement('option');
             option.value = sfu.url;
-            option.textContent = `${sfu.name} (${sfu.status})`;
+            option.textContent = `${sfu.name || 'Unnamed'} (${sfu.url})`;
             option.dataset.sfuId = sfu.id;
             select.appendChild(option);
           });
 
-          document.getElementById('sfuLoadStatus').textContent = `${data.sfus.length} SFU(s) available`;
+          document.getElementById('sfuLoadStatus').textContent = `${onlineSfus.length} online SFU(s) available`;
           document.getElementById('sfuLoadStatus').style.color = '#48bb78';
         } else {
-          document.getElementById('sfuLoadStatus').textContent = 'No SFUs registered yet';
+          document.getElementById('sfuLoadStatus').textContent = 'No online SFUs available';
           document.getElementById('sfuLoadStatus').style.color = '#f56565';
         }
       } catch (error) {
@@ -554,19 +773,22 @@
       }
     }
 
+    function getDefaultSfuUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}/ws`;
+    }
+
     function toggleSfuMode() {
       const isLocal = document.getElementById('isLocalOnly').checked;
       const sfuSelectGroup = document.getElementById('sfuSelectGroup');
-      const sfuUrlHelper = document.getElementById('sfuUrlHelper');
 
       if (isLocal) {
         sfuSelectGroup.style.display = 'block';
-        sfuUrlHelper.textContent = 'Select from available local SFUs or enter a custom URL';
         loadAvailableSfus();
       } else {
         sfuSelectGroup.style.display = 'none';
-        sfuUrlHelper.textContent = 'Enter the WebSocket URL of your SFU server';
         document.getElementById('sfuSelect').value = '';
+        document.getElementById('sfuUrl').value = getDefaultSfuUrl();
       }
     }
 
@@ -580,7 +802,8 @@
     }
 
     function showCreateRoomModal() {
-      if (!getApiKey()) return;
+      // Set default SFU URL
+      document.getElementById('sfuUrl').value = getDefaultSfuUrl();
       document.getElementById('createRoomModal').style.display = 'block';
       // Pre-load SFUs if local mode is enabled
       if (document.getElementById('isLocalOnly').checked) {
@@ -588,20 +811,118 @@
       }
     }
 
-    function showAddInterpreterModal(slug) {
-      document.getElementById('interpreterRoomSlug').value = slug;
-      document.getElementById('newTokenDisplay').style.display = 'none';
-      document.getElementById('addInterpreterModal').style.display = 'block';
-    }
-
     function closeModal(modalId) {
       document.getElementById(modalId).style.display = 'none';
       if (modalId === 'createRoomModal') {
         document.getElementById('createRoomForm').reset();
       }
-      if (modalId === 'addInterpreterModal') {
-        document.getElementById('addInterpreterForm').reset();
-        document.getElementById('newTokenDisplay').style.display = 'none';
+      if (modalId === 'addPublisherModal') {
+        document.getElementById('addPublisherForm').reset();
+        document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      }
+    }
+
+    async function generateSfuKey() {
+      try {
+        const response = await fetch(`${API_BASE}/sfu/keys`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to generate SFU key');
+        }
+
+        const data = await response.json();
+        showSuccess(`SFU key generated! Key: ${data.secret_key}`);
+
+        // Copy to clipboard
+        navigator.clipboard.writeText(data.secret_key);
+
+        // Refresh the list
+        loadSfuList();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function loadSfuList() {
+      const container = document.getElementById('sfusList');
+      container.innerHTML = '<div class="loading">Loading SFU keys...</div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load SFU keys');
+        }
+
+        const data = await response.json();
+
+        if (!data.sfus || data.sfus.length === 0) {
+          container.innerHTML = '<div class="loading">No SFU keys yet. Click "+ Generate SFU Key" to create one.</div>';
+          return;
+        }
+
+        container.innerHTML = data.sfus.map(sfu => {
+          const statusClass = sfu.status === 'online' ? 'public' : (sfu.status === 'pending' ? 'pending' : 'offline');
+          const statusColor = sfu.status === 'online' ? '#48bb78' : (sfu.status === 'pending' ? '#ecc94b' : '#f56565');
+
+          return `
+          <div class="room-card" style="border-left-color: ${statusColor};">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+              <div class="sfu-key">${escapeHtml(sfu.secret_key)}</div>
+              <div>
+                <button class="copy-btn" onclick="copyToClipboard('${sfu.secret_key}')">Copy Key</button>
+                <button class="copy-btn" style="background: #e53e3e; margin-left: 5px;" onclick="deleteSfuKey(${sfu.id})">Delete</button>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="sfu-details">
+                ${sfu.name ? `<strong>${escapeHtml(sfu.name)}</strong> - ` : '<em>Not registered</em> - '}
+                ${sfu.url ? escapeHtml(sfu.url) : 'Waiting for SFU to connect...'}
+              </div>
+              <span class="badge ${statusClass}">${sfu.status}</span>
+            </div>
+            ${sfu.last_heartbeat ? `<div style="font-size: 11px; color: #a0aec0; margin-top: 5px;">Last heartbeat: ${new Date(sfu.last_heartbeat).toLocaleString()}</div>` : ''}
+          </div>
+        `}).join('');
+      } catch (error) {
+        container.innerHTML = '<div class="loading" style="color: #f56565;">Failed to load SFU keys</div>';
+      }
+    }
+
+    async function deleteSfuKey(id) {
+      if (!confirm('Are you sure you want to delete this SFU key? Any connected SFU using this key will be disconnected.')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/sfu/keys/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete SFU key');
+        }
+
+        showSuccess('SFU key deleted successfully!');
+        loadSfuList(); // Refresh the list
+      } catch (error) {
+        showError(error.message);
       }
     }
 
@@ -648,90 +969,13 @@
       }
     }
 
-    async function addInterpreter(event) {
-      event.preventDefault();
-
-      const slug = document.getElementById('interpreterRoomSlug').value;
-      const name = document.getElementById('interpreterName').value;
-      const targetLanguage = document.getElementById('targetLanguage').value;
-
-      try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/interpreters`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${currentApiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name,
-            target_language: targetLanguage
-          })
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to add interpreter');
-        }
-
-        const data = await response.json();
-        document.getElementById('newToken').textContent = data.join_token;
-        document.getElementById('newTokenDisplay').style.display = 'block';
-        document.getElementById('addInterpreterForm').reset();
-        showSuccess('Interpreter added successfully!');
-      } catch (error) {
-        showError(error.message);
-      }
-    }
-
-    async function showInterpreters(slug) {
-      const container = document.getElementById(`interpreters-${slug}`);
-
-      if (container.style.display === 'block') {
-        container.style.display = 'none';
-        return;
-      }
-
-      container.innerHTML = '<div style="padding: 10px;">Loading...</div>';
-      container.style.display = 'block';
-
-      try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/interpreters`, {
-          headers: {
-            'Authorization': `Bearer ${currentApiKey}`
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to load interpreters');
-        }
-
-        const data = await response.json();
-
-        if (data.interpreters.length === 0) {
-          container.innerHTML = '<div style="padding: 10px; color: #718096;">No interpreters added yet</div>';
-          return;
-        }
-
-        const baseUrl = window.location.origin;
-        container.innerHTML = data.interpreters.map(interp => `
-          <div class="interpreter-item">
-            <div class="interpreter-info">
-              <div class="interpreter-name">${escapeHtml(interp.name)}</div>
-              <div class="interpreter-lang">Language: ${escapeHtml(interp.target_language)}</div>
-            </div>
-          </div>
-        `).join('');
-      } catch (error) {
-        container.innerHTML = '<div style="padding: 10px; color: #f56565;">Failed to load interpreters</div>';
-      }
-    }
-
     // Close modals on outside click
-    window.onclick = function(event) {
+    window.onclick = function (event) {
       if (event.target.classList.contains('modal')) {
         event.target.style.display = 'none';
       }
     };
   </script>
 </body>
+
 </html>

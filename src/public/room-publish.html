@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -50,6 +51,17 @@
       font-family: monospace;
     }
 
+    .channel-name {
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #ebf8ff;
+      color: #2c5282;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 600;
+      display: inline-block;
+    }
+
     .status {
       text-align: center;
       padding: 15px;
@@ -80,8 +92,15 @@
     }
 
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.7;
+      }
     }
 
     .info-box {
@@ -182,14 +201,30 @@
       color: #2d3748;
       z-index: 1;
     }
+
+    .audio-source-select {
+      width: 100%;
+      padding: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 15px;
+      background: white;
+    }
+
+    .audio-source-select:focus {
+      outline: none;
+      border-color: #667eea;
+    }
   </style>
 </head>
+
 <body>
   <div class="container">
     <div class="header">
-      <div class="title">🎙️ Publisher</div>
+      <div class="title">Publisher</div>
       <div class="room-name" id="roomName">Loading room...</div>
-      <div class="room-slug" id="roomSlug"></div>
+      <div class="channel-name" id="channelName" style="display: none;"></div>
     </div>
 
     <div id="status" class="status disconnected">
@@ -203,6 +238,13 @@
       <div class="info-value" id="sfuUrl"></div>
       <div class="info-label" style="margin-top: 10px;">Network Type</div>
       <div class="info-value" id="networkType"></div>
+    </div>
+
+    <div id="audioSourceContainer" style="display: none;">
+      <label class="info-label">Audio Source</label>
+      <select id="audioSource" class="audio-source-select">
+        <option value="">Select audio source</option>
+      </select>
     </div>
 
     <div class="audio-meter" id="audioMeter" style="display: none;">
@@ -219,26 +261,42 @@
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
+  <script src="/js/common.js"></script>
   <script>
     // Extract room slug from URL path (/room/:slug/publish)
     const pathParts = window.location.pathname.split('/');
     const roomSlug = pathParts[2];
+
+    // Extract publisher token and debug mode from URL query params
+    const urlParams = new URLSearchParams(window.location.search);
+    const publisherToken = urlParams.get('token');
+    const debugMode = urlParams.has('debug');
 
     if (!roomSlug) {
       showError('Invalid room URL');
       throw new Error('Room slug not found in URL');
     }
 
-    document.getElementById('roomSlug').textContent = roomSlug;
+    if (!publisherToken) {
+      showError('Publisher token required. Please use a valid publisher URL with token.');
+      document.getElementById('status').textContent = 'Missing publisher token';
+      document.getElementById('status').className = 'status disconnected';
+      throw new Error('Publisher token not found in URL');
+    }
+
     document.getElementById('roomName').textContent = `Room: ${roomSlug}`;
 
-    // WebSocket and WebRTC state
-    let ws = null;
-    let device = null;
-    let transport = null;
-    let producer = null;
-    let audioStream = null;
+    // WebSocket and WebRTC state (prefixed to avoid conflicts with common.js globals)
+    let ws = null;           // Room WebSocket (for config)
+    let sfuWs = null;        // SFU WebSocket (for WebRTC signaling)
+    let pubDevice = null;
+    let pubTransport = null;
+    let pubProducer = null;
+    let pubAudioStream = null;
     let roomConfig = null;
+    let pubAudioContext = null;
+    let pubAudioMeter = null;
+    let pubMeterUpdateInterval = null;
 
     // Status management
     function setStatus(message, className) {
@@ -249,15 +307,51 @@
 
     function showError(message) {
       const el = document.getElementById('errorMessage');
-      el.textContent = '❌ ' + message;
+      el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
     }
 
-    // Connect to room WebSocket
+    // Load audio input devices
+    async function loadAudioInputDevices() {
+      try {
+        // Request microphone permission first to get labeled devices
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(track => track.stop());
+        } catch (permissionError) {
+          console.warn('Could not get microphone permission:', permissionError);
+        }
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+
+        const audioSourceSelect = document.getElementById('audioSource');
+        audioSourceSelect.innerHTML = '<option value="">Select audio source</option>';
+
+        audioInputs.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `Microphone ${audioSourceSelect.length}`;
+          audioSourceSelect.appendChild(option);
+        });
+
+        // Auto-select the first device if available
+        if (audioInputs.length > 0 && audioSourceSelect.options.length > 1) {
+          audioSourceSelect.selectedIndex = 1;
+        }
+
+        document.getElementById('audioSourceContainer').style.display = 'block';
+      } catch (error) {
+        console.error('Error loading audio devices:', error);
+        showError('Error loading audio devices: ' + error.message);
+      }
+    }
+
+    // Connect to room WebSocket (for configuration)
     function connectToRoom() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/listen`;
+      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/publish?token=${publisherToken}`;
 
       setStatus('Connecting to room...', 'connecting');
       console.log('Connecting to:', wsUrl);
@@ -265,14 +359,14 @@
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('Room WebSocket connected');
         setStatus('Connected, waiting for configuration...', 'connected');
       };
 
       ws.onmessage = async (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log('Received message:', message);
+          console.log('Received room message:', message);
 
           if (message.type === 'config') {
             handleRoomConfig(message.data);
@@ -293,7 +387,7 @@
       };
 
       ws.onclose = () => {
-        console.log('WebSocket closed');
+        console.log('Room WebSocket closed');
         setStatus('Disconnected from room', 'disconnected');
         document.getElementById('startBtn').disabled = true;
       };
@@ -304,25 +398,185 @@
       console.log('Room config received:', config);
       roomConfig = config;
 
-      // Display config info
-      document.getElementById('sfuUrl').textContent = config.sfuUrl;
-      document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
-      document.getElementById('configInfo').style.display = 'block';
+      // Display channel name
+      if (config.channelName) {
+        const channelEl = document.getElementById('channelName');
+        channelEl.textContent = `Channel: ${config.channelName}`;
+        channelEl.style.display = 'inline-block';
+      }
 
-      // For now, we'll use the existing /ws endpoint for actual WebRTC
-      // In a full implementation, you would connect to config.sfuUrl
-      setStatus('Ready to broadcast', 'connected');
-      document.getElementById('startBtn').disabled = false;
+      // Display config info (only in debug mode)
+      if (debugMode) {
+        document.getElementById('sfuUrl').textContent = config.sfuUrl;
+        document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
+        document.getElementById('configInfo').style.display = 'block';
+      }
+
+      // Load audio devices
+      await loadAudioInputDevices();
+
+      // Connect to SFU
+      connectToSfu(config.sfuUrl);
+    }
+
+    // Connect to SFU WebSocket
+    function connectToSfu(sfuUrl) {
+      console.log('Connecting to SFU:', sfuUrl);
+      setStatus('Connecting to SFU...', 'connecting');
+
+      sfuWs = new WebSocket(sfuUrl);
+
+      sfuWs.onopen = () => {
+        console.log('SFU WebSocket connected');
+        // Request RTP capabilities
+        sfuWs.send(JSON.stringify({ action: 'get-rtpCapabilities' }));
+      };
+
+      sfuWs.onmessage = handleSfuMessage;
+
+      sfuWs.onerror = (error) => {
+        console.error('SFU WebSocket error:', error);
+        showError('Failed to connect to SFU');
+        setStatus('SFU connection error', 'disconnected');
+      };
+
+      sfuWs.onclose = () => {
+        console.log('SFU WebSocket closed');
+        if (pubProducer) {
+          stopBroadcast();
+        }
+      };
+    }
+
+    // Handle SFU messages
+    async function handleSfuMessage(event) {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        console.error('Error parsing SFU message:', e);
+        return;
+      }
+
+      const { action, data: payload } = data;
+      console.log('SFU message:', action, payload);
+
+      switch (action) {
+        case 'rtpCapabilities':
+          rtpCapabilities = payload;
+          setStatus('Ready to broadcast', 'connected');
+          document.getElementById('startBtn').disabled = false;
+          break;
+
+        case 'publisher-transport-created':
+          await handleTransportCreated(payload);
+          break;
+
+        case 'publisher-transport-connected':
+          console.log('Transport connected successfully');
+          break;
+
+        case 'produced':
+          console.log('Producer created:', payload.id);
+          setStatus('Broadcasting', 'broadcasting');
+          break;
+
+        case 'error':
+          showError(payload.message);
+          setStatus('Error: ' + payload.message, 'disconnected');
+          break;
+
+        default:
+          console.log('Unknown SFU action:', action);
+      }
+    }
+
+    // Handle transport created
+    async function handleTransportCreated(transportParams) {
+      try {
+        // Create send transport with dynamic ICE servers from room config
+        const iceServers = getIceServersFromConfig(roomConfig);
+        transportParams.iceServers = iceServers;
+
+        pubTransport = pubDevice.createSendTransport(transportParams);
+
+        // Set up transport events
+        pubTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            sfuWs.send(JSON.stringify({
+              action: 'connect-publisher-transport',
+              data: { dtlsParameters }
+            }));
+            callback();
+          } catch (error) {
+            errback(error);
+          }
+        });
+
+        pubTransport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
+          try {
+            sfuWs.send(JSON.stringify({
+              action: 'produce-audio',
+              data: {
+                channelId: `${roomSlug}:${roomConfig.channelName}`,
+                rtpParameters
+              }
+            }));
+            callback({ id: 'temp-producer-id' });
+          } catch (error) {
+            errback(error);
+          }
+        });
+
+        pubTransport.on('connectionstatechange', (state) => {
+          console.log('Transport connection state:', state);
+          if (state === 'failed' || state === 'closed') {
+            stopBroadcast();
+          }
+        });
+
+        // Start producing audio
+        await produceAudio();
+      } catch (error) {
+        console.error('Error handling transport:', error);
+        showError('Error setting up transport: ' + error.message);
+        stopBroadcast();
+      }
+    }
+
+    // Produce audio
+    async function produceAudio() {
+      try {
+        if (!pubTransport || !pubAudioStream) {
+          throw new Error('Transport or audio stream not ready');
+        }
+
+        const track = pubAudioStream.getAudioTracks()[0];
+        pubProducer = await pubTransport.produce({ track });
+
+        console.log('Producer created');
+      } catch (error) {
+        console.error('Error producing audio:', error);
+        showError('Error producing audio: ' + error.message);
+        stopBroadcast();
+      }
     }
 
     // Start broadcasting
     async function startBroadcast() {
+      const audioSourceId = document.getElementById('audioSource').value;
+      if (!audioSourceId) {
+        showError('Please select an audio source');
+        return;
+      }
+
       try {
         setStatus('Requesting microphone access...', 'connecting');
 
         // Get microphone access
-        audioStream = await navigator.mediaDevices.getUserMedia({
+        pubAudioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
+            deviceId: audioSourceId,
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true
@@ -331,75 +585,106 @@
 
         console.log('Microphone access granted');
 
-        // For the current implementation, we use the existing WebRTC setup
-        // In a full multi-tenant setup, you would:
-        // 1. Create a new WebSocket connection to roomConfig.sfuUrl
-        // 2. Use roomConfig.iceServers for the RTCPeerConnection
-        // 3. Implement the full WebRTC signaling protocol
+        // Create audio context and meter
+        pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = pubAudioContext.createMediaStreamSource(pubAudioStream);
+        pubAudioMeter = createAudioMeter(pubAudioContext);
+        source.connect(pubAudioMeter);
 
-        // For now, show that we're "broadcasting" with the config
-        setStatus('🔴 Broadcasting (using room config)', 'broadcasting');
+        // Start meter updates
+        pubMeterUpdateInterval = setInterval(() => {
+          updateAudioMeter(pubAudioMeter, document.getElementById('audioMeterBar'));
+        }, 100);
+
+        // Create mediasoup device
+        pubDevice = new mediasoupClient.Device();
+        await pubDevice.load({ routerRtpCapabilities: rtpCapabilities });
+
+        // Request transport from SFU
+        setStatus('Creating transport...', 'connecting');
+        sfuWs.send(JSON.stringify({
+          action: 'create-publisher-transport',
+          data: { channelId: `${roomSlug}:${roomConfig.channelName}` }
+        }));
+
+        // Update UI
         document.getElementById('startBtn').style.display = 'none';
         document.getElementById('stopBtn').style.display = 'block';
         document.getElementById('audioMeter').style.display = 'block';
 
-        // Start audio level monitoring
-        startAudioMeter(audioStream);
-
-        showError(`Note: Full WebRTC implementation would connect to ${roomConfig.sfuUrl}`);
-
       } catch (error) {
         console.error('Error starting broadcast:', error);
-        showError('Failed to access microphone: ' + error.message);
+        showError('Failed to start broadcast: ' + error.message);
         setStatus('Ready to broadcast', 'connected');
+        stopBroadcast();
       }
     }
 
     // Stop broadcasting
     function stopBroadcast() {
-      if (audioStream) {
-        audioStream.getTracks().forEach(track => track.stop());
-        audioStream = null;
+      // Notify SFU about stopping
+      if (sfuWs && sfuWs.readyState === WebSocket.OPEN && roomConfig) {
+        sfuWs.send(JSON.stringify({
+          action: 'stop-broadcasting',
+          data: { channelId: `${roomSlug}:${roomConfig.channelName}` }
+        }));
       }
 
-      setStatus('Ready to broadcast', 'connected');
+      // Stop producer
+      if (pubProducer) {
+        pubProducer.close();
+        pubProducer = null;
+      }
+
+      // Close transport
+      if (pubTransport) {
+        pubTransport.close();
+        pubTransport = null;
+      }
+
+      // Stop audio stream
+      if (pubAudioStream) {
+        pubAudioStream.getTracks().forEach(track => track.stop());
+        pubAudioStream = null;
+      }
+
+      // Close audio context
+      if (pubAudioContext) {
+        if (pubAudioMeter) {
+          pubAudioMeter.shutdown();
+          pubAudioMeter = null;
+        }
+        if (pubAudioContext.state !== 'closed') {
+          pubAudioContext.close();
+        }
+        pubAudioContext = null;
+      }
+
+      // Clear meter update interval
+      if (pubMeterUpdateInterval) {
+        clearInterval(pubMeterUpdateInterval);
+        pubMeterUpdateInterval = null;
+      }
+
+      // Reset UI
+      document.getElementById('audioMeterBar').style.width = '0%';
       document.getElementById('startBtn').style.display = 'block';
       document.getElementById('stopBtn').style.display = 'none';
       document.getElementById('audioMeter').style.display = 'none';
-    }
 
-    // Audio level meter
-    function startAudioMeter(stream) {
-      const audioContext = new AudioContext();
-      const analyser = audioContext.createAnalyser();
-      const microphone = audioContext.createMediaStreamSource(stream);
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      analyser.smoothingTimeConstant = 0.8;
-      analyser.fftSize = 1024;
-
-      microphone.connect(analyser);
-
-      function updateMeter() {
-        if (!audioStream) {
-          audioContext.close();
-          return;
-        }
-
-        analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-        const percentage = (average / 255) * 100;
-
-        document.getElementById('audioMeterBar').style.width = percentage + '%';
-
-        requestAnimationFrame(updateMeter);
+      if (sfuWs && sfuWs.readyState === WebSocket.OPEN) {
+        setStatus('Ready to broadcast', 'connected');
       }
-
-      updateMeter();
     }
+
+    // Handle page unload
+    window.addEventListener('beforeunload', () => {
+      stopBroadcast();
+    });
 
     // Initialize
     connectToRoom();
   </script>
 </body>
+
 </html>

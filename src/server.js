@@ -10,7 +10,7 @@ import { initDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
 import { registerSfuRoutes } from './routes/sfu-api.js';
 import { getRoomBySlug } from './db/models/room.js';
-import { verifyInterpreterToken } from './db/models/interpreter.js';
+import { verifyPublisherToken, getChannelsByRoom } from './db/models/publisher.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -449,12 +449,22 @@ fastify.register(async function (fastify) {
             break;
 
           case 'create-publisher-transport':
-            if (!data.channelId || !channels.has(data.channelId)) {
+            if (!data.channelId) {
               connection.send(JSON.stringify({
                 action: 'error',
-                data: { message: 'Channel does not exist' }
+                data: { message: 'Channel ID required' }
               }));
               break;
+            }
+
+            // Auto-create channel if it doesn't exist
+            if (!channels.has(data.channelId)) {
+              channels.set(data.channelId, {
+                producers: new Map(),
+                consumers: new Map()
+              });
+              fastify.log.info(`Auto-created channel: ${data.channelId}`);
+              broadcastChannelList();
             }
 
             const publisherChannel = channels.get(data.channelId);
@@ -614,14 +624,23 @@ fastify.register(async function (fastify) {
 
           case 'create-listener-transport':
             fastify.log.info(`Client ${clientId} requesting listener transport for channel ${data.channelId}`);
-            
-            if (!data.channelId || !channels.has(data.channelId)) {
-              fastify.log.warn(`Client ${clientId} requested non-existent channel ${data.channelId}`);
+
+            if (!data.channelId) {
               connection.send(JSON.stringify({
                 action: 'error',
-                data: { message: 'Channel does not exist' }
+                data: { message: 'Channel ID required' }
               }));
               break;
+            }
+
+            // Auto-create channel if it doesn't exist (listener will wait for publisher)
+            if (!channels.has(data.channelId)) {
+              channels.set(data.channelId, {
+                producers: new Map(),
+                consumers: new Map()
+              });
+              fastify.log.info(`Auto-created channel for listener: ${data.channelId}`);
+              broadcastChannelList();
             }
 
             const listenerChannel = channels.get(data.channelId);
@@ -960,18 +979,23 @@ fastify.register(async function (fastify) {
       return;
     }
 
-    // Send configuration message
+    // Get available channels for this room
+    const channels = getChannelsByRoom(room.id);
+
+    // Send configuration message with channels
     const config = {
       type: 'config',
       data: {
         sfuUrl: room.sfu_url,
         iceServers: iceServers,
-        isLocalOnly: room.is_local_only
+        isLocalOnly: room.is_local_only,
+        channels: channels,
+        roomSlug: slug
       }
     };
 
     connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}`);
+    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, channels: ${channels.join(', ')}`);
 
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
@@ -993,17 +1017,17 @@ fastify.register(async function (fastify) {
     });
   });
 
-  // Interpreter endpoint: /ws/room/:slug/interpret?token=xxx
-  fastify.get('/ws/room/:slug/interpret', { websocket: true }, (connection, req) => {
+  // Publisher endpoint: /ws/room/:slug/publish?token=xxx
+  fastify.get('/ws/room/:slug/publish', { websocket: true }, (connection, req) => {
     const { slug } = req.params;
     const token = req.query.token;
     const clientId = uuidv4();
 
-    fastify.log.info(`New interpreter connection for room: ${slug}, client: ${clientId}`);
+    fastify.log.info(`New publisher connection for room: ${slug}, client: ${clientId}`);
 
     // Verify token is provided
     if (!token) {
-      fastify.log.warn(`Missing token for interpreter connection to room ${slug}`);
+      fastify.log.warn(`Missing token for publisher connection to room ${slug}`);
       connection.send(JSON.stringify({
         type: 'error',
         data: { message: 'Missing token' }
@@ -1012,11 +1036,11 @@ fastify.register(async function (fastify) {
       return;
     }
 
-    // Verify interpreter token
-    const interpreter = verifyInterpreterToken(token);
+    // Verify publisher token
+    const publisher = verifyPublisherToken(token);
 
-    if (!interpreter) {
-      fastify.log.warn(`Invalid token for interpreter connection to room ${slug}`);
+    if (!publisher) {
+      fastify.log.warn(`Invalid token for publisher connection to room ${slug}`);
       connection.send(JSON.stringify({
         type: 'error',
         data: { message: 'Invalid token' }
@@ -1025,7 +1049,7 @@ fastify.register(async function (fastify) {
       return;
     }
 
-    // Verify room exists and matches interpreter's room
+    // Verify room exists and matches publisher's room
     const room = getRoomBySlug(slug);
 
     if (!room) {
@@ -1038,8 +1062,8 @@ fastify.register(async function (fastify) {
       return;
     }
 
-    if (room.id !== interpreter.room_id) {
-      fastify.log.warn(`Interpreter ${interpreter.id} attempted to join wrong room ${slug}`);
+    if (room.id !== publisher.room_id) {
+      fastify.log.warn(`Publisher ${publisher.id} attempted to join wrong room ${slug}`);
       connection.send(JSON.stringify({
         type: 'error',
         data: { message: 'Token not valid for this room' }
@@ -1062,19 +1086,19 @@ fastify.register(async function (fastify) {
       return;
     }
 
-    // Send configuration message with target language
+    // Send configuration message with channel name
     const config = {
       type: 'config',
       data: {
         sfuUrl: room.sfu_url,
         iceServers: iceServers,
         isLocalOnly: room.is_local_only,
-        targetLanguage: interpreter.target_language
+        channelName: publisher.channel_name
       }
     };
 
     connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to interpreter ${clientId} (${interpreter.name}) for room ${slug}`);
+    fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
 
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
@@ -1084,15 +1108,15 @@ fastify.register(async function (fastify) {
         if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
-          fastify.log.info(`WebRTC signal from interpreter ${clientId}: ${payload.data.payload.type}`);
+          fastify.log.info(`WebRTC signal from publisher ${clientId}: ${payload.data.payload.type}`);
         }
       } catch (e) {
-        fastify.log.error(`Invalid message from interpreter ${clientId}: ${e.message}`);
+        fastify.log.error(`Invalid message from publisher ${clientId}: ${e.message}`);
       }
     });
 
     connection.on('close', () => {
-      fastify.log.info(`Interpreter ${clientId} (${interpreter.name}) disconnected from room ${slug}`);
+      fastify.log.info(`Publisher ${clientId} (${publisher.name}) disconnected from room ${slug}`);
     });
   });
 });

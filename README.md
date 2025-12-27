@@ -7,9 +7,10 @@ A real-time audio broadcasting platform built with Node.js, mediasoup (SFU), and
 - **Real-time Audio Broadcasting**: Stream audio to multiple listeners with minimal latency
 - **Channel Management**: Create and manage multiple broadcasting channels
 - **Role-Based Access**: Three distinct roles with different capabilities:
-  - **Admin**: Manage channels and monitor subscribers
-  - **Publisher**: Broadcast audio to specific channels
-  - **Listener**: Discover channels and listen to broadcasts
+   - **Admin**: Manage channels and monitor subscribers
+   - **Publisher**: Broadcast audio to specific channels
+   - **Listener**: Discover channels and listen to broadcasts
+
 - **WebRTC Integration**: Utilizes mediasoup for efficient WebRTC handling
 - **Simple Interface**: Clean, responsive UI built with vanilla HTML/CSS/JavaScript
 
@@ -28,29 +29,33 @@ Soundcast uses a split architecture:
 ## Installation
 
 1. Clone the repository:
-   ```bash
-   git clone https://github.com/jontey/soundcast.git
-   cd soundcast
-   ```
+
+```bash
+git clone https://github.com/jontey/soundcast.git
+cd soundcast
+```
 
 2. Install dependencies:
-   ```bash
-   npm install
-   ```
+
+```bash
+npm install
+```
 
 3. Build the mediasoup client bundle:
-   ```bash
-   # This creates a bundled version of mediasoup-client for the browser
-   npm run build:mediasoup
-   ```
+
+```bash
+# This creates a bundled version of mediasoup-client for the browser
+npm run bundle:mediasoup
+```
 
 4. Configure environment variables (optional):
-   ```bash
-   # Create a .env file in the root directory
-   LISTEN_IP=0.0.0.0  # IP to listen on
-   ANNOUNCED_IP=127.0.0.1  # IP to announce to clients
-   PORT=3000  # Port to run the server on
-   ```
+
+```bash
+# Create a .env file in the root directory
+LISTEN_IP=0.0.0.0  # IP to listen on
+ANNOUNCED_IP=127.0.0.1  # IP to announce to clients
+PORT=3000  # Port to run the server on
+```
 
 ## Running the Application
 
@@ -61,13 +66,14 @@ Soundcast uses a split architecture:
 npm start
 
 # Build the mediasoup client bundle
-npm run build:mediasoup
+npm run bundle:mediasoup
 
 # Run in development mode with auto-restart
 npm run dev
 ```
 
 The application will be available at:
+
 - http://localhost:3000 - Main page (listener interface)
 - http://localhost:3000/publisher.html - Publisher interface
 - http://localhost:3000/admin.html - Admin interface

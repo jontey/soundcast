@@ -91,11 +91,26 @@ export function deleteTenant(id) {
   return result.changes > 0;
 }
 
+/**
+ * Update tenant API key
+ * @param {number} id - Tenant ID
+ * @param {string} newApiKey - New plain text API key
+ * @returns {boolean} True if updated, false otherwise
+ */
+export function updateTenantApiKey(id, newApiKey) {
+  const db = getDatabase();
+  const apiKeyHash = bcrypt.hashSync(newApiKey, SALT_ROUNDS);
+  const stmt = db.prepare('UPDATE tenants SET api_key_hash = ? WHERE id = ?');
+  const result = stmt.run(apiKeyHash, id);
+  return result.changes > 0;
+}
+
 export default {
   createTenant,
   getTenantById,
   getTenantByName,
   verifyTenantApiKey,
   listTenants,
-  deleteTenant
+  deleteTenant,
+  updateTenantApiKey
 };

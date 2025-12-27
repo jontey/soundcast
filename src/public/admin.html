@@ -9,9 +9,20 @@
 <body>
   <div class="container">
     <h1>SoundCast Admin Panel</h1>
-    
+
+    <!-- Multi-tenant redirect banner -->
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+      <h2 style="margin-top: 0;">Multi-Tenant Admin Available</h2>
+      <p style="margin-bottom: 15px;">For multi-tenant room and publisher management with API key authentication:</p>
+      <a href="/tenant-admin" style="background: white; color: #667eea; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Go to Tenant Admin</a>
+    </div>
+
+    <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">
+
+    <h2 style="color: #718096;">Legacy Admin (Global)</h2>
+
     <div id="status" class="status info">Connecting to server...</div>
-    
+
     <div class="flex-container">
       <a href="/publisher.html" target="_blank">Open Publisher Page</a>
       <a href="/" target="_blank">Open Subscriber Page</a>

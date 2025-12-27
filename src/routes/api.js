@@ -1,6 +1,6 @@
 import { authenticateTenant } from '../middleware/auth.js';
-import { createRoom, getRoomBySlug, updateRoom, listRoomsByTenant } from '../db/models/room.js';
-import { createInterpreter, listInterpretersByRoom } from '../db/models/interpreter.js';
+import { createRoom, getRoomBySlug, updateRoom, listRoomsByTenant, deleteRoom } from '../db/models/room.js';
+import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherById } from '../db/models/publisher.js';
 
 /**
  * Register REST API routes
@@ -135,63 +135,6 @@ export async function registerApiRoutes(fastify) {
     }
   });
 
-  // POST /api/rooms/:room_slug/interpreters - Add interpreter to room
-  fastify.post('/api/rooms/:room_slug/interpreters', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      const { room_slug } = request.params;
-      const { name, target_language } = request.body;
-
-      // Validate required fields
-      if (!name || !target_language) {
-        return reply.code(400).send({
-          error: 'Bad Request',
-          message: 'Missing required fields: name, target_language'
-        });
-      }
-
-      try {
-        // Check if room exists and belongs to tenant
-        const room = getRoomBySlug(room_slug);
-
-        if (!room) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: 'Room not found'
-          });
-        }
-
-        if (room.tenant_id !== request.tenant.id) {
-          return reply.code(403).send({
-            error: 'Forbidden',
-            message: 'You do not have permission to add interpreters to this room'
-          });
-        }
-
-        // Create interpreter
-        const interpreter = createInterpreter({
-          room_id: room.id,
-          name,
-          target_language
-        });
-
-        return reply.code(201).send({
-          id: interpreter.id,
-          room_slug: room.slug,
-          name: interpreter.name,
-          target_language: interpreter.target_language,
-          join_token: interpreter.join_token // Only returned here, never again
-        });
-      } catch (error) {
-        console.error('Error creating interpreter:', error);
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: 'Failed to create interpreter'
-        });
-      }
-    }
-  });
-
   // GET /api/rooms - List all rooms for tenant
   fastify.get('/api/rooms', {
     preHandler: authenticateTenant,
@@ -260,8 +203,65 @@ export async function registerApiRoutes(fastify) {
     }
   });
 
-  // GET /api/rooms/:room_slug/interpreters - List interpreters for room
-  fastify.get('/api/rooms/:room_slug/interpreters', {
+  // POST /api/rooms/:room_slug/publishers - Add publisher to room
+  fastify.post('/api/rooms/:room_slug/publishers', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+      const { name, channel_name } = request.body;
+
+      // Validate required fields
+      if (!name || !channel_name) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'Missing required fields: name, channel_name'
+        });
+      }
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to add publishers to this room'
+          });
+        }
+
+        // Create publisher
+        const publisher = createPublisher({
+          room_id: room.id,
+          name,
+          channel_name
+        });
+
+        return reply.code(201).send({
+          id: publisher.id,
+          room_slug: room.slug,
+          name: publisher.name,
+          channel_name: publisher.channel_name,
+          join_token: publisher.join_token
+        });
+      } catch (error) {
+        console.error('Error creating publisher:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to create publisher'
+        });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/publishers - List publishers for room
+  fastify.get('/api/rooms/:room_slug/publishers', {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug } = request.params;
@@ -283,21 +283,124 @@ export async function registerApiRoutes(fastify) {
           });
         }
 
-        const interpreters = listInterpretersByRoom(room.id);
+        const publishers = listPublishersByRoom(room.id);
 
         return reply.code(200).send({
-          interpreters: interpreters.map(interpreter => ({
-            id: interpreter.id,
-            name: interpreter.name,
-            target_language: interpreter.target_language,
-            created_at: interpreter.created_at
+          publishers: publishers.map(publisher => ({
+            id: publisher.id,
+            name: publisher.name,
+            channel_name: publisher.channel_name,
+            join_token: publisher.join_token,
+            created_at: publisher.created_at
           }))
         });
       } catch (error) {
-        console.error('Error listing interpreters:', error);
+        console.error('Error listing publishers:', error);
         return reply.code(500).send({
           error: 'Internal Server Error',
-          message: 'Failed to list interpreters'
+          message: 'Failed to list publishers'
+        });
+      }
+    }
+  });
+
+  // DELETE /api/rooms/:room_slug/publishers/:id - Delete a publisher
+  fastify.delete('/api/rooms/:room_slug/publishers/:id', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, id } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to manage publishers in this room'
+          });
+        }
+
+        // Check if publisher exists and belongs to this room
+        const publisher = getPublisherById(parseInt(id));
+
+        if (!publisher) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Publisher not found'
+          });
+        }
+
+        if (publisher.room_id !== room.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'Publisher does not belong to this room'
+          });
+        }
+
+        deletePublisher(parseInt(id));
+
+        return reply.code(200).send({
+          message: 'Publisher deleted successfully'
+        });
+      } catch (error) {
+        console.error('Error deleting publisher:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to delete publisher'
+        });
+      }
+    }
+  });
+
+  // DELETE /api/rooms/:room_slug - Delete a room
+  fastify.delete('/api/rooms/:room_slug', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to delete this room'
+          });
+        }
+
+        const deleted = deleteRoom(room_slug);
+
+        if (!deleted) {
+          return reply.code(500).send({
+            error: 'Internal Server Error',
+            message: 'Failed to delete room'
+          });
+        }
+
+        return reply.code(200).send({
+          message: 'Room deleted successfully'
+        });
+      } catch (error) {
+        console.error('Error deleting room:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to delete room'
         });
       }
     }
