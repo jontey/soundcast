@@ -16,7 +16,7 @@
  */
 
 import mediasoup from 'mediasoup';
-import { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
 import fetch from 'node-fetch';
 import os from 'os';
 
@@ -154,6 +154,90 @@ function startWebSocketServer() {
 // Channels for this SFU (channelId -> { producers, consumers })
 const channels = new Map();
 
+// Stats WebSocket connection to main server
+let statsWs = null;
+let statsWsReconnectTimer = null;
+
+// Connect to main server for real-time stats pushing
+function connectToMainServerStats() {
+  if (!config.masterUrl || !config.secretKey) {
+    console.log('⚠️  No master URL or secret key, skipping stats WebSocket');
+    return;
+  }
+
+  // Convert http(s) URL to ws(s) URL
+  const wsUrl = config.masterUrl.replace(/^http/, 'ws');
+  const statsUrl = `${wsUrl}/ws/sfu-stats?secretKey=${encodeURIComponent(config.secretKey)}`;
+
+  console.log(`📊 Connecting to stats WebSocket: ${wsUrl}/ws/sfu-stats`);
+
+  try {
+    statsWs = new WebSocket(statsUrl);
+
+    statsWs.on('open', () => {
+      console.log('✅ Connected to main server for stats');
+      if (statsWsReconnectTimer) {
+        clearTimeout(statsWsReconnectTimer);
+        statsWsReconnectTimer = null;
+      }
+      // Send initial stats
+      pushStatsUpdate();
+    });
+
+    statsWs.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'connected') {
+          console.log(`📊 Stats connection confirmed (SFU ID: ${msg.sfuId})`);
+        }
+      } catch (e) {
+        console.error('Error parsing stats message:', e);
+      }
+    });
+
+    statsWs.on('close', () => {
+      console.log('⚠️  Stats WebSocket disconnected, reconnecting in 5s...');
+      statsWs = null;
+      if (!statsWsReconnectTimer) {
+        statsWsReconnectTimer = setTimeout(connectToMainServerStats, 5000);
+      }
+    });
+
+    statsWs.on('error', (error) => {
+      console.error('📊 Stats WebSocket error:', error.message);
+    });
+  } catch (error) {
+    console.error('📊 Failed to connect stats WebSocket:', error.message);
+    if (!statsWsReconnectTimer) {
+      statsWsReconnectTimer = setTimeout(connectToMainServerStats, 5000);
+    }
+  }
+}
+
+// Push current channel stats to main server
+function pushStatsUpdate() {
+  if (!statsWs || statsWs.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  const stats = {};
+  for (const [channelId, channel] of channels.entries()) {
+    stats[channelId] = {
+      publishers: channel.producers ? channel.producers.size : 0,
+      subscribers: channel.consumers ? channel.consumers.size : 0
+    };
+  }
+
+  try {
+    statsWs.send(JSON.stringify({
+      type: 'stats-update',
+      channels: stats
+    }));
+  } catch (error) {
+    console.error('📊 Failed to push stats:', error.message);
+  }
+}
+
 // Handle WebSocket messages
 async function handleMessage(ws, clientId, payload) {
   const { action, data } = payload;
@@ -257,6 +341,9 @@ async function handleMessage(ws, clientId, payload) {
       }));
 
       console.log(`🎤 Producer created: ${producerId}`);
+
+      // Push stats update to main server
+      pushStatsUpdate();
 
       // Create consumers for existing listeners
       for (const [otherId, otherClient] of clients) {
@@ -398,6 +485,11 @@ async function handleMessage(ws, clientId, payload) {
           data: consumersData
         }));
         console.log(`🎧 Created ${consumersData.length} consumers for listener ${clientId}`);
+
+        // Push stats update to main server
+        if (consumersData.length > 0) {
+          pushStatsUpdate();
+        }
       } catch (error) {
         console.error('Error creating consumer:', error);
         ws.send(JSON.stringify({
@@ -425,6 +517,9 @@ async function handleMessage(ws, clientId, payload) {
         action: 'broadcast-stopped',
         data: {}
       }));
+
+      // Push stats update to main server
+      pushStatsUpdate();
       break;
     }
 
@@ -432,6 +527,10 @@ async function handleMessage(ws, clientId, payload) {
       // Close all consumers for this client
       for (const consumerInfo of clientInfo.consumers) {
         consumerInfo.consumer.close();
+        const channel = channels.get(clientInfo.channelId);
+        if (channel) {
+          channel.consumers.delete(consumerInfo.id);
+        }
       }
       clientInfo.consumers = [];
 
@@ -439,6 +538,9 @@ async function handleMessage(ws, clientId, payload) {
         clientInfo.transport.close();
         clientInfo.transport = null;
       }
+
+      // Push stats update to main server
+      pushStatsUpdate();
 
       ws.send(JSON.stringify({
         action: 'left-channel',
@@ -531,6 +633,9 @@ function cleanup(clientId) {
 
   // Remove client
   clients.delete(clientId);
+
+  // Push stats update to main server
+  pushStatsUpdate();
 }
 
 // Register with master Soundcast instance
@@ -618,6 +723,9 @@ async function main() {
     // Start heartbeat if registered
     if (registeredSfuId) {
       setInterval(() => sendHeartbeat(registeredSfuId), 30000); // Every 30 seconds
+
+      // Connect to stats WebSocket for real-time updates
+      connectToMainServerStats();
     }
 
     console.log('\n✅ SFU Server is ready!');
@@ -633,6 +741,14 @@ async function main() {
 // Handle shutdown gracefully
 async function shutdown() {
   console.log('\n🛑 Shutting down SFU server...');
+
+  // Close stats WebSocket connection
+  if (statsWsReconnectTimer) {
+    clearTimeout(statsWsReconnectTimer);
+  }
+  if (statsWs) {
+    statsWs.close();
+  }
 
   // Notify master of disconnect
   if (registeredSfuId) {

@@ -367,6 +367,7 @@
     <div id="roomsSection" class="section" style="display: none;">
       <div class="section-title">
         Your Rooms
+        <span id="wsStatusIndicator" style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px; vertical-align: middle;" title="Connecting..."></span>
         <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
         <button onclick="loadRooms()" class="btn btn-secondary"
           style="float: right; margin-right: 10px;">Refresh</button>
@@ -500,6 +501,103 @@
   <script>
     const API_BASE = window.location.origin + '/api';
     let currentApiKey = '';
+    let adminWs = null;
+    let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
+
+    // Connect to admin WebSocket for real-time stats
+    function connectAdminWebSocket() {
+      if (!currentApiKey) return;
+
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${location.host}/ws/admin?apiKey=${encodeURIComponent(currentApiKey)}`;
+
+      console.log('Connecting to admin WebSocket...');
+      adminWs = new WebSocket(wsUrl);
+
+      adminWs.onopen = () => {
+        console.log('Admin WebSocket connected');
+        updateConnectionStatus(true);
+      };
+
+      adminWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'channel-stats') {
+            channelStats = msg.stats;
+            updateAllChannelStatsUI();
+          } else if (msg.type === 'channel-update') {
+            if (!channelStats[msg.roomSlug]) {
+              channelStats[msg.roomSlug] = {};
+            }
+            channelStats[msg.roomSlug][msg.channelName] = {
+              publishers: msg.publishers,
+              subscribers: msg.subscribers
+            };
+            updateChannelStatsForRoom(msg.roomSlug);
+          } else if (msg.type === 'error') {
+            console.error('Admin WebSocket error:', msg.data.message);
+          }
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e);
+        }
+      };
+
+      adminWs.onclose = () => {
+        console.log('Admin WebSocket disconnected, reconnecting in 3s...');
+        updateConnectionStatus(false);
+        setTimeout(connectAdminWebSocket, 3000);
+      };
+
+      adminWs.onerror = (error) => {
+        console.error('Admin WebSocket error:', error);
+      };
+    }
+
+    function updateConnectionStatus(connected) {
+      const indicator = document.getElementById('wsStatusIndicator');
+      if (indicator) {
+        indicator.style.background = connected ? '#48bb78' : '#f56565';
+        indicator.title = connected ? 'Real-time updates connected' : 'Reconnecting...';
+      }
+    }
+
+    function updateAllChannelStatsUI() {
+      for (const roomSlug in channelStats) {
+        updateChannelStatsForRoom(roomSlug);
+      }
+    }
+
+    function updateChannelStatsForRoom(roomSlug) {
+      const container = document.getElementById(`live-stats-${roomSlug}`);
+      if (!container) return;
+
+      const stats = channelStats[roomSlug] || {};
+      const channelNames = Object.keys(stats);
+
+      if (channelNames.length === 0) {
+        container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px;">No active channels</div>';
+        return;
+      }
+
+      let html = '<table style="width: 100%; font-size: 13px;">';
+      html += '<tr><th style="text-align: left; padding: 5px;">Channel</th><th style="text-align: center; padding: 5px;">Publishers</th><th style="text-align: center; padding: 5px;">Subscribers</th></tr>';
+
+      for (const channelName of channelNames) {
+        const stat = stats[channelName];
+        const pubColor = stat.publishers > 0 ? '#48bb78' : '#718096';
+        const subColor = stat.subscribers > 0 ? '#4299e1' : '#718096';
+        html += `
+          <tr>
+            <td style="padding: 5px;">${escapeHtml(channelName)}</td>
+            <td style="text-align: center; padding: 5px; color: ${pubColor}; font-weight: bold;">${stat.publishers}</td>
+            <td style="text-align: center; padding: 5px; color: ${subColor}; font-weight: bold;">${stat.subscribers}</td>
+          </tr>
+        `;
+      }
+
+      html += '</table>';
+      container.innerHTML = html;
+    }
 
     function getApiKey() {
       const key = document.getElementById('apiKeyInput').value;
@@ -529,6 +627,9 @@
       document.getElementById('apiKeySection').style.display = 'none';
       document.getElementById('roomsSection').style.display = 'block';
       document.getElementById('sfuSection').style.display = 'block';
+
+      // Connect WebSocket for real-time stats
+      connectAdminWebSocket();
     }
 
     async function loadRooms(event) {
@@ -601,6 +702,14 @@
               </div>
             </div>
           </div>
+          <div style="margin-top: 15px; background: #f7fafc; padding: 12px; border-radius: 6px; border-left: 3px solid #667eea;">
+            <div style="font-weight: bold; color: #2d3748; margin-bottom: 8px; font-size: 14px;">
+              📊 Live Stats
+            </div>
+            <div id="live-stats-${room.slug}">
+              <div style="padding: 10px; color: #718096; font-size: 13px;">Loading...</div>
+            </div>
+          </div>
           <div style="margin-top: 15px;">
             <button onclick="showPublishers('${room.slug}')" class="btn btn-secondary">Manage Publishers</button>
             <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-primary">+ Add Publisher</button>
@@ -610,6 +719,9 @@
           <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
         </div>
       `).join('');
+
+      // Update live stats for all rooms
+      updateAllChannelStatsUI();
     }
 
     function escapeHtml(text) {
