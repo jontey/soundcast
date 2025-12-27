@@ -1,0 +1,46 @@
+{
+  "name": "soundcast-sfu",
+  "version": "1.0.0",
+  "description": "Soundcast Standalone SFU Server - Packaged executable for local deployments",
+  "main": "sfu-server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node sfu-server.js",
+    "bundle": "esbuild sfu-server.js --bundle --platform=node --format=cjs --outfile=dist/sfu-server.cjs --external:mediasoup",
+    "download-workers": "node scripts/download-workers.js",
+    "dist": "node scripts/build-dist.js",
+    "dist:macos-arm64": "node scripts/build-dist.js macos-arm64",
+    "dist:linux": "node scripts/build-dist.js linux",
+    "dist:linux-arm64": "node scripts/build-dist.js linux-arm64",
+    "dist:windows": "node scripts/build-dist.js windows"
+  },
+  "bin": {
+    "soundcast-sfu": "./sfu-server.js"
+  },
+  "pkg": {
+    "targets": [
+      "node18-macos-arm64",
+      "node18-linux-x64",
+      "node18-linux-arm64",
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "keywords": [
+    "soundcast",
+    "sfu",
+    "webrtc",
+    "mediasoup"
+  ],
+  "author": "Soundcast Team",
+  "license": "MIT",
+  "dependencies": {
+    "mediasoup": "3.19.14",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.2",
+    "pkg": "^5.8.1"
+  }
+}

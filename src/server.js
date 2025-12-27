@@ -6,6 +6,13 @@ import mediasoup from 'mediasoup';
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
+import { initDatabase, getDatabase } from './db/database.js';
+import { registerApiRoutes } from './routes/api.js';
+import { registerSfuRoutes } from './routes/sfu-api.js';
+import { getRoomBySlug, listRoomsByTenant } from './db/models/room.js';
+import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
+import { verifyTenantApiKey } from './db/models/tenant.js';
+import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -16,17 +23,58 @@ const fastify = Fastify({
   logger: true
 });
 
+// Initialize database
+const dbPath = process.env.DB_PATH || './soundcast.db';
+initDatabase(dbPath);
+console.log('Database initialized');
+
 // Fastify setup
 fastify.register(fastifyStatic, {
   root: path.join(__dirname, 'public'),
-  prefix: '/' // optional: default '/'  
+  prefix: '/' // optional: default '/'
 });
 
 // Register WebSocket plugin
 fastify.register(fastifyWebsocket, {
-  options: { 
+  options: {
     maxPayload: 1048576 // 1MB max payload
   }
+});
+
+// Register REST API routes
+fastify.register(registerApiRoutes);
+
+// Register SFU management routes
+fastify.register(registerSfuRoutes);
+
+// Room-specific HTML routes
+fastify.get('/room/:slug/publish', async (request, reply) => {
+  const { slug } = request.params;
+
+  // Verify room exists
+  const room = getRoomBySlug(slug);
+  if (!room) {
+    return reply.code(404).send('Room not found');
+  }
+
+  return reply.sendFile('room-publish.html');
+});
+
+fastify.get('/room/:slug/listen', async (request, reply) => {
+  const { slug } = request.params;
+
+  // Verify room exists
+  const room = getRoomBySlug(slug);
+  if (!room) {
+    return reply.code(404).send('Room not found');
+  }
+
+  return reply.sendFile('room-listen.html');
+});
+
+// Tenant admin route
+fastify.get('/tenant-admin', async (request, reply) => {
+  return reply.sendFile('tenant-admin.html');
 });
 
 // mediasoup Worker
@@ -56,16 +104,219 @@ const channels = new Map();
 
 // Store active connections
 const clients = new Map();
-  
+
+// Tenant admin WebSocket connections: tenantId -> Set<socket>
+const tenantAdminClients = new Map();
+
+// SFU stats WebSocket connections: sfuId -> socket
+const sfuStatsClients = new Map();
+
+// Local SFU stats: sfuId -> { channels: { channelName: { publishers, subscribers } } }
+const localSfuStats = new Map();
+
 // Broadcast updated channel list to all clients
 function broadcastChannelList() {
   const list = Array.from(channels.keys());
   for (const [clientId, client] of clients.entries()) {
     // In newer versions of fastify-websocket, the connection is the socket
-    client.socket.send(JSON.stringify({ 
-      action: 'channel-list', 
-      data: list 
+    client.socket.send(JSON.stringify({
+      action: 'channel-list',
+      data: list
     }));
+  }
+}
+
+// Get SFU ID for a room by matching sfu_url
+function getSfuIdForRoom(room) {
+  if (!room.sfu_url) return null;
+  const sfus = listSfus();
+  for (const sfu of sfus) {
+    if (sfu.url === room.sfu_url) {
+      return sfu.id;
+    }
+  }
+  return null;
+}
+
+// Get channel stats for a specific tenant (combines main SFU and local SFU data)
+function getChannelStatsForTenant(tenantId) {
+  const stats = {};
+  const rooms = listRoomsByTenant(tenantId);
+
+  for (const room of rooms) {
+    stats[room.slug] = {};
+    const publishers = listPublishersByRoom(room.id);
+    const channelNames = [...new Set(publishers.map(p => p.channel_name))];
+
+    for (const channelName of channelNames) {
+      // Full channel ID format used by SFU: "roomSlug:channelName"
+      const fullChannelId = `${room.slug}:${channelName}`;
+
+      // Check main SFU's channels Map (try both formats)
+      if (channels.has(fullChannelId)) {
+        const ch = channels.get(fullChannelId);
+        stats[room.slug][channelName] = {
+          publishers: ch.producers ? ch.producers.size : 0,
+          subscribers: ch.consumers ? ch.consumers.size : 0
+        };
+      } else if (channels.has(channelName)) {
+        // Fallback to legacy format
+        const ch = channels.get(channelName);
+        stats[room.slug][channelName] = {
+          publishers: ch.producers ? ch.producers.size : 0,
+          subscribers: ch.consumers ? ch.consumers.size : 0
+        };
+      }
+      // Check local SFU stats (if room uses local SFU)
+      else if (room.is_local_only) {
+        const sfuId = getSfuIdForRoom(room);
+        const sfuStats = sfuId ? localSfuStats.get(sfuId) : null;
+        // Local SFU uses full channel ID format
+        if (sfuStats?.channels?.[fullChannelId]) {
+          stats[room.slug][channelName] = sfuStats.channels[fullChannelId];
+        } else if (sfuStats?.channels?.[channelName]) {
+          // Fallback to legacy format
+          stats[room.slug][channelName] = sfuStats.channels[channelName];
+        } else {
+          stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
+        }
+      } else {
+        stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
+      }
+    }
+  }
+  return stats;
+}
+
+// Find room and tenant for a channel name
+// channelId format can be "roomSlug:channelName" (e.g., "sjh2:English") or just "channelName"
+function findRoomForChannel(channelId) {
+  const db = getDatabase();
+
+  // Check if channelId has the "roomSlug:channelName" format
+  const colonIndex = channelId.indexOf(':');
+  if (colonIndex !== -1) {
+    // Parse roomSlug and channelName
+    const roomSlug = channelId.substring(0, colonIndex);
+    const channelName = channelId.substring(colonIndex + 1);
+
+    // Look up by room slug and channel name
+    const stmt = db.prepare(`
+      SELECT r.id as room_id, r.slug, r.tenant_id
+      FROM rooms r
+      JOIN publishers p ON p.room_id = r.id
+      WHERE r.slug = ? AND p.channel_name = ?
+      LIMIT 1
+    `);
+    return stmt.get(roomSlug, channelName);
+  }
+
+  // Fallback: query by channel_name directly (legacy format)
+  const stmt = db.prepare(`
+    SELECT r.id as room_id, r.slug, r.tenant_id
+    FROM rooms r
+    JOIN publishers p ON p.room_id = r.id
+    WHERE p.channel_name = ?
+    LIMIT 1
+  `);
+  return stmt.get(channelId);
+}
+
+// Extract short channel name from full channel ID
+// "roomSlug:channelName" -> "channelName", or returns original if no colon
+function getShortChannelName(channelId) {
+  const colonIndex = channelId.indexOf(':');
+  return colonIndex !== -1 ? channelId.substring(colonIndex + 1) : channelId;
+}
+
+// Notify tenant admins about channel updates
+function notifyTenantAdmins(channelId, source = 'main') {
+  const roomInfo = findRoomForChannel(channelId);
+  if (!roomInfo) return;
+
+  const tenantId = roomInfo.tenant_id;
+  const adminSockets = tenantAdminClients.get(tenantId);
+  if (!adminSockets || adminSockets.size === 0) return;
+
+  // Get current stats for this channel
+  let channelStats;
+  if (source === 'main' && channels.has(channelId)) {
+    const ch = channels.get(channelId);
+    channelStats = {
+      publishers: ch.producers ? ch.producers.size : 0,
+      subscribers: ch.consumers ? ch.consumers.size : 0
+    };
+  } else {
+    channelStats = { publishers: 0, subscribers: 0 };
+  }
+
+  // Use short channel name for the update (frontend expects "English", not "sjh2:English")
+  const shortChannelName = getShortChannelName(channelId);
+
+  const update = {
+    type: 'channel-update',
+    roomSlug: roomInfo.slug,
+    channelName: shortChannelName,
+    publishers: channelStats.publishers,
+    subscribers: channelStats.subscribers
+  };
+
+  for (const socket of adminSockets) {
+    try {
+      socket.send(JSON.stringify(update));
+    } catch (e) {
+      fastify.log.error(`Failed to send update to tenant admin: ${e.message}`);
+    }
+  }
+}
+
+// Notify tenant admins with stats from local SFU
+function notifyTenantAdminsFromSfu(sfuId, channelId, stats) {
+  // Find which rooms use this SFU
+  const allSfus = listSfus();
+  const sfu = allSfus.find(s => s.id === sfuId);
+  if (!sfu) {
+    fastify.log.warn(`notifyTenantAdminsFromSfu: SFU ${sfuId} not found`);
+    return;
+  }
+
+  const tenantId = sfu.tenant_id;
+  const adminSockets = tenantAdminClients.get(tenantId);
+  if (!adminSockets || adminSockets.size === 0) {
+    fastify.log.info(`notifyTenantAdminsFromSfu: No admin sockets for tenant ${tenantId}`);
+    return;
+  }
+
+  // Find the room for this channel
+  const roomInfo = findRoomForChannel(channelId);
+  if (!roomInfo) {
+    fastify.log.warn(`notifyTenantAdminsFromSfu: Room not found for channel "${channelId}"`);
+    return;
+  }
+  if (roomInfo.tenant_id !== tenantId) {
+    fastify.log.warn(`notifyTenantAdminsFromSfu: Channel "${channelId}" belongs to tenant ${roomInfo.tenant_id}, not ${tenantId}`);
+    return;
+  }
+
+  // Use short channel name for the update (frontend expects "English", not "sjh2:English")
+  const shortChannelName = getShortChannelName(channelId);
+
+  const update = {
+    type: 'channel-update',
+    roomSlug: roomInfo.slug,
+    channelName: shortChannelName,
+    publishers: stats.publishers,
+    subscribers: stats.subscribers
+  };
+
+  fastify.log.info(`Sending channel update to ${adminSockets.size} admin(s): ${JSON.stringify(update)}`);
+
+  for (const socket of adminSockets) {
+    try {
+      socket.send(JSON.stringify(update));
+    } catch (e) {
+      fastify.log.error(`Failed to send SFU update to tenant admin: ${e.message}`);
+    }
   }
 }
 
@@ -403,12 +654,22 @@ fastify.register(async function (fastify) {
             break;
 
           case 'create-publisher-transport':
-            if (!data.channelId || !channels.has(data.channelId)) {
+            if (!data.channelId) {
               connection.send(JSON.stringify({
                 action: 'error',
-                data: { message: 'Channel does not exist' }
+                data: { message: 'Channel ID required' }
               }));
               break;
+            }
+
+            // Auto-create channel if it doesn't exist
+            if (!channels.has(data.channelId)) {
+              channels.set(data.channelId, {
+                producers: new Map(),
+                consumers: new Map()
+              });
+              fastify.log.info(`Auto-created channel: ${data.channelId}`);
+              broadcastChannelList();
             }
 
             const publisherChannel = channels.get(data.channelId);
@@ -505,6 +766,9 @@ fastify.register(async function (fastify) {
               // Notify all clients that the channel list has changed
               broadcastChannelList();
 
+              // Notify tenant admins about the new publisher
+              notifyTenantAdmins(clientInfo.channelId);
+
               // Create consumers for existing listeners in the same channel
               for (const [otherId, otherClient] of clients) {
                 if (
@@ -568,14 +832,23 @@ fastify.register(async function (fastify) {
 
           case 'create-listener-transport':
             fastify.log.info(`Client ${clientId} requesting listener transport for channel ${data.channelId}`);
-            
-            if (!data.channelId || !channels.has(data.channelId)) {
-              fastify.log.warn(`Client ${clientId} requested non-existent channel ${data.channelId}`);
+
+            if (!data.channelId) {
               connection.send(JSON.stringify({
                 action: 'error',
-                data: { message: 'Channel does not exist' }
+                data: { message: 'Channel ID required' }
               }));
               break;
+            }
+
+            // Auto-create channel if it doesn't exist (listener will wait for publisher)
+            if (!channels.has(data.channelId)) {
+              channels.set(data.channelId, {
+                producers: new Map(),
+                consumers: new Map()
+              });
+              fastify.log.info(`Auto-created channel for listener: ${data.channelId}`);
+              broadcastChannelList();
             }
 
             const listenerChannel = channels.get(data.channelId);
@@ -709,6 +982,11 @@ fastify.register(async function (fastify) {
                 data: consumersData
               }));
               fastify.log.info(`Created ${consumersData.length} consumers for listener ${clientId}`);
+
+              // Notify tenant admins about the new subscriber
+              if (consumersData.length > 0) {
+                notifyTenantAdmins(clientInfo.channelId);
+              }
             } catch (error) {
               fastify.log.error(`Error creating consumer for client ${clientId}: ${error.message}`);
               connection.send(JSON.stringify({
@@ -769,13 +1047,16 @@ fastify.register(async function (fastify) {
               
               // Notify all clients that the channel list has changed
               broadcastChannelList();
-              
+
+              // Notify tenant admins about the publisher leaving
+              notifyTenantAdmins(data.channelId);
+
               // Send confirmation to the client
               connection.send(JSON.stringify({
                 action: 'broadcasting-stopped',
                 data: { channelId: data.channelId }
               }));
-              
+
               fastify.log.info(`Publisher resources cleaned up for channel ${data.channelId}`);
             } catch (error) {
               fastify.log.error(`Error cleaning up publisher resources: ${error.message}`);
@@ -808,7 +1089,10 @@ fastify.register(async function (fastify) {
               }
 
               clientInfo.consumers = [];
-              
+
+              // Notify tenant admins about the subscriber leaving
+              notifyTenantAdmins(clientInfo.channelId);
+
               // Reset client info
               clientInfo.isListener = false;
               clientInfo.channelId = null;
@@ -816,7 +1100,7 @@ fastify.register(async function (fastify) {
               clientInfo.consumers = [];
             }
             break;
-            
+
           default:
             fastify.log.warn('Unknown action', action);
         }
@@ -855,6 +1139,9 @@ fastify.register(async function (fastify) {
               }
             }
           }
+
+          // Notify tenant admins about the publisher disconnect
+          notifyTenantAdmins(clientInfo.channelId);
         }
 
         if (clientInfo.isListener && clientInfo.channelId && channels.has(clientInfo.channelId)) {
@@ -870,13 +1157,359 @@ fastify.register(async function (fastify) {
             }
           }
           clientInfo.consumers = [];
+
+          // Notify tenant admins about the listener disconnect
+          notifyTenantAdmins(clientInfo.channelId);
         }
-        
+
         // Remove client from clients map
         clients.delete(clientId);
       });
     });
   });
+
+// Room-based WebSocket endpoints for multi-tenant support
+fastify.register(async function (fastify) {
+  // Listener endpoint: /ws/room/:slug/listen
+  fastify.get('/ws/room/:slug/listen', { websocket: true }, (connection, req) => {
+    const { slug } = req.params;
+    const clientId = uuidv4();
+
+    fastify.log.info(`New listener connection for room: ${slug}, client: ${clientId}`);
+
+    // Verify room exists
+    const room = getRoomBySlug(slug);
+
+    if (!room) {
+      fastify.log.warn(`Room not found: ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Room not found' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Parse ICE servers from JSON
+    let iceServers;
+    try {
+      iceServers = JSON.parse(room.coturn_config_json);
+    } catch (e) {
+      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid room configuration' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Get available channels for this room
+    const channels = getChannelsByRoom(room.id);
+
+    // Send configuration message with channels
+    const config = {
+      type: 'config',
+      data: {
+        sfuUrl: room.sfu_url,
+        iceServers: iceServers,
+        isLocalOnly: room.is_local_only,
+        channels: channels,
+        roomSlug: slug
+      }
+    };
+
+    connection.send(JSON.stringify(config));
+    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, channels: ${channels.join(', ')}`);
+
+    // Handle messages (WebRTC signaling relay)
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'webrtc_signal') {
+          // In a full implementation, this would relay to the SFU
+          // For now, we just log it
+          fastify.log.info(`WebRTC signal from listener ${clientId}: ${payload.data.payload.type}`);
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from listener ${clientId}: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`Listener ${clientId} disconnected from room ${slug}`);
+    });
+  });
+
+  // Publisher endpoint: /ws/room/:slug/publish?token=xxx
+  fastify.get('/ws/room/:slug/publish', { websocket: true }, (connection, req) => {
+    const { slug } = req.params;
+    const token = req.query.token;
+    const clientId = uuidv4();
+
+    fastify.log.info(`New publisher connection for room: ${slug}, client: ${clientId}`);
+
+    // Verify token is provided
+    if (!token) {
+      fastify.log.warn(`Missing token for publisher connection to room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Missing token' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Verify publisher token
+    const publisher = verifyPublisherToken(token);
+
+    if (!publisher) {
+      fastify.log.warn(`Invalid token for publisher connection to room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid token' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Verify room exists and matches publisher's room
+    const room = getRoomBySlug(slug);
+
+    if (!room) {
+      fastify.log.warn(`Room not found: ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Room not found' }
+      }));
+      connection.close();
+      return;
+    }
+
+    if (room.id !== publisher.room_id) {
+      fastify.log.warn(`Publisher ${publisher.id} attempted to join wrong room ${slug}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Token not valid for this room' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Parse ICE servers from JSON
+    let iceServers;
+    try {
+      iceServers = JSON.parse(room.coturn_config_json);
+    } catch (e) {
+      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid room configuration' }
+      }));
+      connection.close();
+      return;
+    }
+
+    // Send configuration message with channel name
+    const config = {
+      type: 'config',
+      data: {
+        sfuUrl: room.sfu_url,
+        iceServers: iceServers,
+        isLocalOnly: room.is_local_only,
+        channelName: publisher.channel_name
+      }
+    };
+
+    connection.send(JSON.stringify(config));
+    fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
+
+    // Handle messages (WebRTC signaling relay)
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'webrtc_signal') {
+          // In a full implementation, this would relay to the SFU
+          // For now, we just log it
+          fastify.log.info(`WebRTC signal from publisher ${clientId}: ${payload.data.payload.type}`);
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from publisher ${clientId}: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`Publisher ${clientId} (${publisher.name}) disconnected from room ${slug}`);
+    });
+  });
+});
+
+// Tenant Admin WebSocket endpoint
+fastify.register(async function (fastify) {
+  // Admin endpoint: /ws/admin?apiKey=xxx
+  fastify.get('/ws/admin', { websocket: true }, (connection, req) => {
+    const apiKey = req.query.apiKey;
+
+    // Verify API key
+    if (!apiKey) {
+      fastify.log.warn('Missing API key for admin WebSocket connection');
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Missing API key' }
+      }));
+      connection.close();
+      return;
+    }
+
+    const tenant = verifyTenantApiKey(apiKey);
+    if (!tenant) {
+      fastify.log.warn('Invalid API key for admin WebSocket connection');
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid API key' }
+      }));
+      connection.close();
+      return;
+    }
+
+    fastify.log.info(`Tenant admin connected: ${tenant.name} (ID: ${tenant.id})`);
+
+    // Add to tenantAdminClients Map
+    if (!tenantAdminClients.has(tenant.id)) {
+      tenantAdminClients.set(tenant.id, new Set());
+    }
+    tenantAdminClients.get(tenant.id).add(connection);
+
+    // Send initial channel stats
+    const stats = getChannelStatsForTenant(tenant.id);
+    connection.send(JSON.stringify({
+      type: 'channel-stats',
+      stats
+    }));
+
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'refresh') {
+          // Send updated stats
+          const stats = getChannelStatsForTenant(tenant.id);
+          connection.send(JSON.stringify({
+            type: 'channel-stats',
+            stats
+          }));
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from tenant admin: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`Tenant admin disconnected: ${tenant.name}`);
+      const sockets = tenantAdminClients.get(tenant.id);
+      if (sockets) {
+        sockets.delete(connection);
+        if (sockets.size === 0) {
+          tenantAdminClients.delete(tenant.id);
+        }
+      }
+    });
+  });
+
+  // SFU Stats endpoint: /ws/sfu-stats?secretKey=xxx
+  fastify.get('/ws/sfu-stats', { websocket: true }, (connection, req) => {
+    const secretKey = req.query.secretKey;
+
+    // Verify secret key
+    if (!secretKey) {
+      fastify.log.warn('Missing secret key for SFU stats WebSocket connection');
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Missing secret key' }
+      }));
+      connection.close();
+      return;
+    }
+
+    const sfu = verifySfuSecretKey(secretKey);
+    if (!sfu) {
+      fastify.log.warn('Invalid secret key for SFU stats WebSocket connection');
+      connection.send(JSON.stringify({
+        type: 'error',
+        data: { message: 'Invalid secret key' }
+      }));
+      connection.close();
+      return;
+    }
+
+    fastify.log.info(`SFU stats connected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
+
+    // Store connection
+    sfuStatsClients.set(sfu.id, connection);
+
+    // Initialize empty stats for this SFU
+    localSfuStats.set(sfu.id, { channels: {} });
+
+    // Send acknowledgment
+    connection.send(JSON.stringify({
+      type: 'connected',
+      sfuId: sfu.id
+    }));
+
+    connection.on('message', async (message) => {
+      try {
+        const payload = JSON.parse(message.toString());
+
+        if (payload.type === 'stats-update') {
+          fastify.log.info(`Received stats-update from SFU ${sfu.id}: ${JSON.stringify(payload.channels)}`);
+
+          // Update local SFU stats
+          const previousStats = localSfuStats.get(sfu.id) || { channels: {} };
+          localSfuStats.set(sfu.id, { channels: payload.channels || {} });
+
+          // Notify tenant admins for each channel that changed
+          for (const channelName in payload.channels) {
+            const newStats = payload.channels[channelName];
+            const oldStats = previousStats.channels?.[channelName];
+
+            // Only notify if stats changed
+            if (!oldStats ||
+                oldStats.publishers !== newStats.publishers ||
+                oldStats.subscribers !== newStats.subscribers) {
+              fastify.log.info(`Stats changed for channel ${channelName}, notifying tenant admins...`);
+              notifyTenantAdminsFromSfu(sfu.id, channelName, newStats);
+            }
+          }
+
+          // Check for removed channels
+          for (const channelName in previousStats.channels) {
+            if (!(channelName in (payload.channels || {}))) {
+              notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
+            }
+          }
+        }
+      } catch (e) {
+        fastify.log.error(`Invalid message from SFU ${sfu.id}: ${e.message}`);
+      }
+    });
+
+    connection.on('close', () => {
+      fastify.log.info(`SFU stats disconnected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
+      sfuStatsClients.delete(sfu.id);
+
+      // Clear stats and notify admins about offline channels
+      const oldStats = localSfuStats.get(sfu.id);
+      if (oldStats?.channels) {
+        for (const channelName in oldStats.channels) {
+          notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
+        }
+      }
+      localSfuStats.delete(sfu.id);
+    });
+  });
+});
 
   const PORT = process.env.PORT || 3000;
   const HOST = process.env.HOST || '0.0.0.0';

@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Soundcast - Tenant Admin</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 10px;
+      border-radius: 10px;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: bold;
+      color: white;
+      margin: 0px;
+    }
+
+    .api-key-section {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      border-left: 4px solid #667eea;
+    }
+
+    .api-key-input {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e2e8f0;
+      border-radius: 5px;
+      font-size: 14px;
+      font-family: monospace;
+      margin-top: 10px;
+    }
+
+    .section {
+      background: white;
+      padding: 25px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      margin-bottom: 25px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      color: #2d3748;
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 10px;
+    }
+
+    .room-card {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+      border-left: 4px solid #48bb78;
+    }
+
+    .room-card.local {
+      border-left-color: #4299e1;
+    }
+
+    .room-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .room-name {
+      font-size: 18px;
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .room-slug {
+      font-family: monospace;
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .badge.local {
+      background: #bee3f8;
+      color: #2c5282;
+    }
+
+    .badge.public {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+
+    .badge.pending {
+      background: #fefcbf;
+      color: #744210;
+    }
+
+    .badge.offline {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+
+    .room-urls {
+      background: white;
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 15px;
+    }
+
+    .url-group {
+      margin-bottom: 10px;
+    }
+
+    .url-label {
+      font-size: 12px;
+      font-weight: bold;
+      color: #718096;
+      margin-bottom: 5px;
+    }
+
+    .url-value {
+      font-family: monospace;
+      font-size: 13px;
+      background: #edf2f7;
+      padding: 8px;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .copy-btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 5px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .copy-btn:hover {
+      background: #5568d3;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+      transition: all 0.3s;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+
+    .btn-danger {
+      background: #e53e3e;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c53030;
+    }
+
+    .btn-secondary {
+      background: #48bb78;
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: #38a169;
+    }
+
+    .btn-danger {
+      background: #f56565;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #e53e3e;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #2d3748;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e2e8f0;
+      border-radius: 5px;
+      font-size: 14px;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .form-checkbox {
+      margin-right: 8px;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: white;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 30px;
+      border-radius: 10px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .modal-header {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      color: #2d3748;
+    }
+
+    .close-modal {
+      float: right;
+      font-size: 28px;
+      cursor: pointer;
+      color: #a0aec0;
+    }
+
+    .close-modal:hover {
+      color: #2d3748;
+    }
+
+    .error {
+      background: #fff5f5;
+      border-left: 4px solid #f56565;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      color: #742a2a;
+    }
+
+    .success {
+      background: #f0fff4;
+      border-left: 4px solid #48bb78;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      color: #22543d;
+    }
+
+    .interpreters-list {
+      margin-top: 10px;
+    }
+
+    .interpreter-item {
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .interpreter-info {
+      flex: 1;
+    }
+
+    .interpreter-name {
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .interpreter-lang {
+      font-size: 12px;
+      color: #718096;
+      text-transform: uppercase;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #718096;
+    }
+
+    .sfu-key {
+      font-family: monospace;
+      font-size: 14px;
+      background: #edf2f7;
+      padding: 8px 12px;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+
+    .sfu-details {
+      font-size: 13px;
+      color: #718096;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Soundcast Admin</h1>
+    </div>
+
+    <div id="apiKeySection" class="api-key-section">
+      <h3>Tenant Key Configuration</h3>
+      <form id="apiKeyForm" onsubmit="loadRooms(event)">
+        <input type="text" id="apiKeyInput" class="api-key-input" placeholder="Enter your Tenant key">
+        <button type="submit" class="btn btn-primary" style="margin-top: 10px;">Load Rooms</button>
+      </form>
+    </div>
+
+    <div id="errorMessage" class="error" style="display: none;"></div>
+    <div id="successMessage" class="success" style="display: none;"></div>
+
+    <div id="roomsSection" class="section" style="display: none;">
+      <div class="section-title">
+        Your Rooms
+        <span id="wsStatusIndicator"
+          style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px; vertical-align: middle;"
+          title="Connecting..."></span>
+        <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
+        <button onclick="loadRooms()" class="btn btn-secondary"
+          style="float: right; margin-right: 10px;">Refresh</button>
+      </div>
+      <div id="roomsList">
+        <div class="loading">Loading rooms...</div>
+      </div>
+    </div>
+
+    <div id="sfuSection" class="section" style="display: none;">
+      <div class="section-title">
+        SFU Servers
+        <button onclick="generateSfuKey()" class="btn btn-primary" style="float: right;">+ Generate SFU Key</button>
+        <button onclick="loadSfuList()" class="btn btn-secondary"
+          style="float: right; margin-right: 10px;">Refresh</button>
+      </div>
+      <div id="sfusList">
+        <div class="loading">Loading SFU keys...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Room Modal -->
+  <div id="createRoomModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('createRoomModal')">&times;</span>
+      <div class="modal-header">Create New Room</div>
+      <form id="createRoomForm" onsubmit="createRoom(event)">
+        <div class="form-group">
+          <label class="form-label">Room Name</label>
+          <input type="text" id="roomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            <input type="checkbox" id="isLocalOnly" class="form-checkbox" onchange="toggleSfuMode()">
+            Use Local SFU Only
+          </label>
+        </div>
+        <div class="form-group" id="sfuSelectGroup" style="display: none;">
+          <label class="form-label">Select Local SFU</label>
+          <select id="sfuSelect" class="form-input" onchange="updateSfuUrl()">
+            <option value="">-- Select an SFU --</option>
+          </select>
+          <div id="sfuLoadStatus" style="font-size: 12px; margin-top: 5px; color: #718096;"></div>
+        </div>
+        <input type="hidden" id="sfuUrl">
+        <div class="form-group">
+          <label class="form-label">TURN/STUN Configuration (JSON)</label>
+          <textarea id="coturnConfig" class="form-input" rows="5"
+            required>[{"urls": "stun:stun.l.google.com:19302"}]</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Create Room</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Publisher Modal -->
+  <div id="addPublisherModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('addPublisherModal')">&times;</span>
+      <div class="modal-header">Add Publisher</div>
+      <form id="addPublisherForm" onsubmit="addPublisher(event)">
+        <input type="hidden" id="publisherRoomSlug">
+        <div class="form-group">
+          <label class="form-label">Publisher Name</label>
+          <input type="text" id="publisherName" class="form-input" required placeholder="e.g., Main Speaker">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel Name</label>
+          <input type="text" id="publisherChannelName" class="form-input" required
+            placeholder="e.g., main, spanish, french">
+        </div>
+        <button type="submit" class="btn btn-secondary">Add Publisher</button>
+      </form>
+      <div id="newPublisherTokenDisplay" style="display: none; margin-top: 20px;">
+        <div class="success">
+          <strong>Publisher Added!</strong><br>
+          <strong>Join Token (save this!):</strong><br>
+          <code id="newPublisherToken" style="font-size: 16px; user-select: all;"></code><br>
+          <strong style="margin-top: 10px; display: block;">Publisher URL:</strong>
+          <code id="publisherJoinUrl" style="font-size: 12px; user-select: all; word-break: break-all;"></code><br>
+          <button onclick="copyPublisherToken()" class="btn btn-primary" style="margin-top: 10px;">Copy Token</button>
+          <button onclick="copyPublisherUrl()" class="btn btn-secondary" style="margin-top: 10px;">Copy URL</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Room Modal -->
+  <div id="editRoomModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('editRoomModal')">&times;</span>
+      <div class="modal-header">Edit Room</div>
+      <form id="editRoomForm" onsubmit="editRoom(event)">
+        <input type="hidden" id="editRoomOriginalSlug">
+        <div class="form-group">
+          <label class="form-label">Room Name</label>
+          <input type="text" id="editRoomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Room Slug (URL-friendly identifier)</label>
+          <input type="text" id="editRoomSlug" class="form-input" required placeholder="e.g., annual-conference-2025"
+            pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens allowed">
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            <input type="checkbox" id="editIsLocalOnly" class="form-checkbox" onchange="toggleEditSfuMode()">
+            Use Local SFU Only
+          </label>
+        </div>
+        <div class="form-group" id="editSfuSelectGroup" style="display: none;">
+          <label class="form-label">Select Local SFU</label>
+          <select id="editSfuSelect" class="form-input" onchange="updateEditSfuUrl()">
+            <option value="">-- Select an SFU --</option>
+          </select>
+          <div id="editSfuLoadStatus" style="font-size: 12px; margin-top: 5px; color: #718096;"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">SFU URL</label>
+          <input type="text" id="editSfuUrl" class="form-input" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">TURN/STUN Configuration (JSON)</label>
+          <textarea id="editCoturnConfig" class="form-input" rows="5" required></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin + '/api';
+    let currentApiKey = '';
+    let adminWs = null;
+    let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
+
+    // Connect to admin WebSocket for real-time stats
+    function connectAdminWebSocket() {
+      if (!currentApiKey) return;
+
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${location.host}/ws/admin?apiKey=${encodeURIComponent(currentApiKey)}`;
+
+      console.log('Connecting to admin WebSocket...');
+      adminWs = new WebSocket(wsUrl);
+
+      adminWs.onopen = () => {
+        console.log('Admin WebSocket connected');
+        updateConnectionStatus(true);
+      };
+
+      adminWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'channel-stats') {
+            channelStats = msg.stats;
+            updateAllChannelStatsUI();
+          } else if (msg.type === 'channel-update') {
+            if (!channelStats[msg.roomSlug]) {
+              channelStats[msg.roomSlug] = {};
+            }
+            channelStats[msg.roomSlug][msg.channelName] = {
+              publishers: msg.publishers,
+              subscribers: msg.subscribers
+            };
+            updateChannelStatsForRoom(msg.roomSlug);
+          } else if (msg.type === 'error') {
+            console.error('Admin WebSocket error:', msg.data.message);
+          }
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e);
+        }
+      };
+
+      adminWs.onclose = () => {
+        console.log('Admin WebSocket disconnected, reconnecting in 3s...');
+        updateConnectionStatus(false);
+        setTimeout(connectAdminWebSocket, 3000);
+      };
+
+      adminWs.onerror = (error) => {
+        console.error('Admin WebSocket error:', error);
+      };
+    }
+
+    function updateConnectionStatus(connected) {
+      const indicator = document.getElementById('wsStatusIndicator');
+      if (indicator) {
+        indicator.style.background = connected ? '#48bb78' : '#f56565';
+        indicator.title = connected ? 'Real-time updates connected' : 'Reconnecting...';
+      }
+    }
+
+    function updateAllChannelStatsUI() {
+      for (const roomSlug in channelStats) {
+        updateChannelStatsForRoom(roomSlug);
+      }
+    }
+
+    function updateChannelStatsForRoom(roomSlug) {
+      const container = document.getElementById(`live-stats-${roomSlug}`);
+      if (!container) return;
+
+      const stats = channelStats[roomSlug] || {};
+      const channelNames = Object.keys(stats);
+
+      if (channelNames.length === 0) {
+        container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px;">No active channels</div>';
+        return;
+      }
+
+      let html = '<table style="width: 100%; font-size: 13px;">';
+      html += '<tr><th style="text-align: left; padding: 5px;">Channel</th><th style="text-align: center; padding: 5px;">Publishers</th><th style="text-align: center; padding: 5px;">Subscribers</th></tr>';
+
+      for (const channelName of channelNames) {
+        const stat = stats[channelName];
+        const pubColor = stat.publishers > 0 ? '#48bb78' : '#718096';
+        const subColor = stat.subscribers > 0 ? '#4299e1' : '#718096';
+        html += `
+          <tr>
+            <td style="padding: 5px;">${escapeHtml(channelName)}</td>
+            <td style="text-align: center; padding: 5px; color: ${pubColor}; font-weight: bold;">${stat.publishers}</td>
+            <td style="text-align: center; padding: 5px; color: ${subColor}; font-weight: bold;">${stat.subscribers}</td>
+          </tr>
+        `;
+      }
+
+      html += '</table>';
+      container.innerHTML = html;
+    }
+
+    function getApiKey() {
+      const key = document.getElementById('apiKeyInput').value;
+      if (!key) {
+        showError('Please enter your API key');
+        return null;
+      }
+      currentApiKey = key;
+      return key;
+    }
+
+    function showError(message) {
+      const el = document.getElementById('errorMessage');
+      el.textContent = message;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function showSuccess(message) {
+      const el = document.getElementById('successMessage');
+      el.textContent = message;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function showAuthenticatedView() {
+      document.getElementById('apiKeySection').style.display = 'none';
+      document.getElementById('roomsSection').style.display = 'block';
+      document.getElementById('sfuSection').style.display = 'block';
+
+      // Connect WebSocket for real-time stats
+      connectAdminWebSocket();
+    }
+
+    async function loadRooms(event) {
+      if (event) event.preventDefault();
+      const apiKey = currentApiKey || getApiKey();
+      if (!apiKey) return;
+
+      document.getElementById('roomsList').innerHTML = '<div class="loading">Loading rooms...</div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms`, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to load rooms');
+        }
+
+        const data = await response.json();
+
+        // Success - show authenticated view
+        showAuthenticatedView();
+        displayRooms(data.rooms);
+        loadSfuList(); // Also load SFU list
+      } catch (error) {
+        showError(error.message);
+        document.getElementById('roomsList').innerHTML = '<div class="loading">Failed to load rooms</div>';
+      }
+    }
+
+    function displayRooms(rooms) {
+      const container = document.getElementById('roomsList');
+
+      // Cache rooms data for editing
+      roomsData = rooms;
+
+      if (rooms.length === 0) {
+        container.innerHTML = '<div class="loading">No rooms yet. Create one to get started!</div>';
+        return;
+      }
+
+      const baseUrl = window.location.origin;
+      container.innerHTML = rooms.map(room => `
+        <div class="room-card ${room.is_local_only ? 'local' : ''}">
+          <div class="room-header">
+            <div>
+              <div class="room-name">${escapeHtml(room.name)}</div>
+              <div class="room-slug">${escapeHtml(room.slug)}</div>
+            </div>
+            <span class="badge ${room.is_local_only ? 'local' : 'public'}">
+              ${room.is_local_only ? 'Local SFU' : 'Public SFU'}
+            </span>
+          </div>
+          <div class="room-urls">
+            <div class="url-group">
+              <div class="url-label">Listener URL (public)</div>
+              <div class="url-value">
+                <span>${baseUrl}/room/${room.slug}/listen</span>
+                <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')">Copy</button>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top: 15px; background: #f7fafc; padding: 12px; border-radius: 6px; border-left: 3px solid #667eea;">
+            <div style="font-weight: bold; color: #2d3748; margin-bottom: 8px; font-size: 14px;">
+              📊 Live Stats
+            </div>
+            <div id="live-stats-${room.slug}">
+              <div style="padding: 10px; color: #718096; font-size: 13px;">Loading...</div>
+            </div>
+          </div>
+          <div style="margin-top: 15px;">
+            <button onclick="showPublishers('${room.slug}')" class="btn btn-secondary">Manage Publishers</button>
+            <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-primary">+ Add Publisher</button>
+            <button onclick="showEditRoomModal('${room.slug}')" class="btn btn-primary" style="margin-left: 10px;">Edit Room</button>
+            <button onclick="deleteRoom('${room.slug}')" class="btn btn-danger" style="margin-left: 10px;">Delete Room</button>
+          </div>
+          <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
+        </div>
+      `).join('');
+
+      // Update live stats for all rooms
+      updateAllChannelStatsUI();
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        showSuccess('Copied to clipboard!');
+      });
+    }
+
+    function copyPublisherToken() {
+      const token = document.getElementById('newPublisherToken').textContent;
+      navigator.clipboard.writeText(token).then(() => {
+        showSuccess('Publisher token copied to clipboard!');
+      });
+    }
+
+    function copyPublisherUrl() {
+      const url = document.getElementById('publisherJoinUrl').textContent;
+      navigator.clipboard.writeText(url).then(() => {
+        showSuccess('Publisher URL copied to clipboard!');
+      });
+    }
+
+    function showAddPublisherModal(slug) {
+      document.getElementById('publisherRoomSlug').value = slug;
+      document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      document.getElementById('addPublisherModal').style.display = 'block';
+    }
+
+    async function addPublisher(event) {
+      event.preventDefault();
+
+      const slug = document.getElementById('publisherRoomSlug').value;
+      const name = document.getElementById('publisherName').value;
+      const channel_name = document.getElementById('publisherChannelName').value;
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name, channel_name })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to add publisher');
+        }
+
+        const data = await response.json();
+        const baseUrl = window.location.origin;
+        document.getElementById('newPublisherToken').textContent = data.join_token;
+        document.getElementById('publisherJoinUrl').textContent = `${baseUrl}/room/${slug}/publish?token=${data.join_token}`;
+        document.getElementById('newPublisherTokenDisplay').style.display = 'block';
+        document.getElementById('addPublisherForm').reset();
+        showSuccess('Publisher added successfully!');
+
+        // Refresh publisher list if it's visible
+        const publisherContainer = document.getElementById(`publishers-${slug}`);
+        if (publisherContainer && publisherContainer.style.display === 'block') {
+          showPublishers(slug);
+        }
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function showPublishers(slug) {
+      const container = document.getElementById(`publishers-${slug}`);
+
+      if (container.style.display === 'block') {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.innerHTML = '<div style="padding: 10px;">Loading...</div>';
+      container.style.display = 'block';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          container.innerHTML = '<div style="padding: 10px; color: #718096;">No publishers added yet</div>';
+          return;
+        }
+
+        const baseUrl = window.location.origin;
+        container.innerHTML = data.publishers.map(pub => `
+          <div class="interpreter-item" style="flex-direction: column; align-items: stretch;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <div class="interpreter-info">
+                <div class="interpreter-name">${escapeHtml(pub.name)}</div>
+                <div class="interpreter-lang">Channel: ${escapeHtml(pub.channel_name)}</div>
+              </div>
+              <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+            </div>
+            <div class="url-value" style="font-size: 11px;">
+              <span style="word-break: break-all;">${baseUrl}/room/${slug}/publish?token=${pub.join_token}</span>
+              <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${slug}/publish?token=${pub.join_token}')">Copy</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        container.innerHTML = '<div style="padding: 10px; color: #f56565;">Failed to load publishers</div>';
+      }
+    }
+
+    async function deletePublisher(slug, publisherId) {
+      if (!confirm('Are you sure you want to delete this publisher?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete publisher');
+        }
+
+        showSuccess('Publisher deleted successfully!');
+        showPublishers(slug); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function deleteRoom(slug) {
+      if (!confirm(`Are you sure you want to delete this room? This will also delete all publishers in this room.`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete room');
+        }
+
+        showSuccess('Room deleted successfully!');
+        loadRooms(); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function loadAvailableSfus() {
+      try {
+        document.getElementById('sfuLoadStatus').textContent = 'Loading SFUs...';
+
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+        if (!response.ok) {
+          throw new Error('Failed to load SFUs');
+        }
+
+        const data = await response.json();
+        const select = document.getElementById('sfuSelect');
+
+        // Clear existing options (except first one)
+        select.innerHTML = '<option value="">-- Select an SFU --</option>';
+
+        // Only show online SFUs
+        const onlineSfus = data.sfus.filter(sfu => sfu.status === 'online' && sfu.url);
+
+        if (onlineSfus.length > 0) {
+          onlineSfus.forEach(sfu => {
+            const option = document.createElement('option');
+            option.value = sfu.url;
+            option.textContent = `${sfu.name || 'Unnamed'} (${sfu.url})`;
+            option.dataset.sfuId = sfu.id;
+            select.appendChild(option);
+          });
+
+          document.getElementById('sfuLoadStatus').textContent = `${onlineSfus.length} online SFU(s) available`;
+          document.getElementById('sfuLoadStatus').style.color = '#48bb78';
+        } else {
+          document.getElementById('sfuLoadStatus').textContent = 'No online SFUs available';
+          document.getElementById('sfuLoadStatus').style.color = '#f56565';
+        }
+      } catch (error) {
+        console.error('Error loading SFUs:', error);
+        document.getElementById('sfuLoadStatus').textContent = 'Failed to load SFUs';
+        document.getElementById('sfuLoadStatus').style.color = '#f56565';
+      }
+    }
+
+    function getDefaultSfuUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}/ws`;
+    }
+
+    function toggleSfuMode() {
+      const isLocal = document.getElementById('isLocalOnly').checked;
+      const sfuSelectGroup = document.getElementById('sfuSelectGroup');
+
+      if (isLocal) {
+        sfuSelectGroup.style.display = 'block';
+        loadAvailableSfus();
+      } else {
+        sfuSelectGroup.style.display = 'none';
+        document.getElementById('sfuSelect').value = '';
+        document.getElementById('sfuUrl').value = getDefaultSfuUrl();
+      }
+    }
+
+    function updateSfuUrl() {
+      const select = document.getElementById('sfuSelect');
+      const selectedUrl = select.value;
+
+      if (selectedUrl) {
+        document.getElementById('sfuUrl').value = selectedUrl;
+      }
+    }
+
+    function showCreateRoomModal() {
+      // Set default SFU URL
+      document.getElementById('sfuUrl').value = getDefaultSfuUrl();
+      document.getElementById('createRoomModal').style.display = 'block';
+      // Pre-load SFUs if local mode is enabled
+      if (document.getElementById('isLocalOnly').checked) {
+        loadAvailableSfus();
+      }
+    }
+
+    function closeModal(modalId) {
+      document.getElementById(modalId).style.display = 'none';
+      if (modalId === 'createRoomModal') {
+        document.getElementById('createRoomForm').reset();
+      }
+      if (modalId === 'addPublisherModal') {
+        document.getElementById('addPublisherForm').reset();
+        document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      }
+      if (modalId === 'editRoomModal') {
+        document.getElementById('editRoomForm').reset();
+      }
+    }
+
+    // Store rooms data for editing
+    let roomsData = [];
+
+    async function showEditRoomModal(slug) {
+      // Find the room in our cached data or fetch it
+      let room = roomsData.find(r => r.slug === slug);
+
+      if (!room) {
+        // Fetch room data
+        try {
+          const response = await fetch(`${API_BASE}/rooms`, {
+            headers: { 'Authorization': `Bearer ${currentApiKey}` }
+          });
+          const data = await response.json();
+          room = data.rooms.find(r => r.slug === slug);
+        } catch (error) {
+          showError('Failed to load room data');
+          return;
+        }
+      }
+
+      if (!room) {
+        showError('Room not found');
+        return;
+      }
+
+      // Populate form
+      document.getElementById('editRoomOriginalSlug').value = room.slug;
+      document.getElementById('editRoomName').value = room.name;
+      document.getElementById('editRoomSlug').value = room.slug;
+      document.getElementById('editIsLocalOnly').checked = room.is_local_only;
+      document.getElementById('editSfuUrl').value = room.sfu_url || getDefaultSfuUrl();
+      document.getElementById('editCoturnConfig').value = room.coturn_config_json || '[{"urls": "stun:stun.l.google.com:19302"}]';
+
+      // Show/hide SFU select based on local mode
+      if (room.is_local_only) {
+        document.getElementById('editSfuSelectGroup').style.display = 'block';
+        loadEditAvailableSfus();
+      } else {
+        document.getElementById('editSfuSelectGroup').style.display = 'none';
+      }
+
+      document.getElementById('editRoomModal').style.display = 'block';
+    }
+
+    async function editRoom(event) {
+      event.preventDefault();
+
+      const originalSlug = document.getElementById('editRoomOriginalSlug').value;
+      const name = document.getElementById('editRoomName').value;
+      const slug = document.getElementById('editRoomSlug').value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const isLocalOnly = document.getElementById('editIsLocalOnly').checked;
+      const sfuUrl = document.getElementById('editSfuUrl').value;
+      const coturnConfig = document.getElementById('editCoturnConfig').value;
+
+      try {
+        JSON.parse(coturnConfig); // Validate JSON
+      } catch (error) {
+        showError('Invalid TURN/STUN configuration JSON');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name,
+            slug,
+            is_local_only: isLocalOnly,
+            sfu_url: sfuUrl,
+            coturn_config_json: coturnConfig
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to update room');
+        }
+
+        showSuccess('Room updated successfully!');
+        closeModal('editRoomModal');
+        loadRooms();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function toggleEditSfuMode() {
+      const isLocal = document.getElementById('editIsLocalOnly').checked;
+      const sfuSelectGroup = document.getElementById('editSfuSelectGroup');
+
+      if (isLocal) {
+        sfuSelectGroup.style.display = 'block';
+        loadEditAvailableSfus();
+      } else {
+        sfuSelectGroup.style.display = 'none';
+        document.getElementById('editSfuSelect').value = '';
+        document.getElementById('editSfuUrl').value = getDefaultSfuUrl();
+      }
+    }
+
+    function updateEditSfuUrl() {
+      const select = document.getElementById('editSfuSelect');
+      const selectedUrl = select.value;
+
+      if (selectedUrl) {
+        document.getElementById('editSfuUrl').value = selectedUrl;
+      }
+    }
+
+    async function loadEditAvailableSfus() {
+      try {
+        document.getElementById('editSfuLoadStatus').textContent = 'Loading SFUs...';
+
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+        if (!response.ok) throw new Error('Failed to load SFUs');
+
+        const data = await response.json();
+        const select = document.getElementById('editSfuSelect');
+        const currentSfuUrl = document.getElementById('editSfuUrl').value;
+
+        select.innerHTML = '<option value="">-- Select an SFU --</option>';
+
+        const onlineSfus = data.sfus.filter(sfu => sfu.status === 'online' && sfu.url);
+
+        if (onlineSfus.length > 0) {
+          onlineSfus.forEach(sfu => {
+            const option = document.createElement('option');
+            option.value = sfu.url;
+            option.textContent = `${sfu.name || 'Unnamed'} (${sfu.url})`;
+            if (sfu.url === currentSfuUrl) option.selected = true;
+            select.appendChild(option);
+          });
+
+          document.getElementById('editSfuLoadStatus').textContent = `${onlineSfus.length} online SFU(s) available`;
+          document.getElementById('editSfuLoadStatus').style.color = '#48bb78';
+        } else {
+          document.getElementById('editSfuLoadStatus').textContent = 'No online SFUs available';
+          document.getElementById('editSfuLoadStatus').style.color = '#f56565';
+        }
+      } catch (error) {
+        document.getElementById('editSfuLoadStatus').textContent = 'Failed to load SFUs';
+        document.getElementById('editSfuLoadStatus').style.color = '#f56565';
+      }
+    }
+
+    async function generateSfuKey() {
+      try {
+        const response = await fetch(`${API_BASE}/sfu/keys`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to generate SFU key');
+        }
+
+        const data = await response.json();
+        showSuccess(`SFU key generated! Key: ${data.secret_key}`);
+
+        // Copy to clipboard
+        navigator.clipboard.writeText(data.secret_key);
+
+        // Refresh the list
+        loadSfuList();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function loadSfuList() {
+      const container = document.getElementById('sfusList');
+      container.innerHTML = '<div class="loading">Loading SFU keys...</div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load SFU keys');
+        }
+
+        const data = await response.json();
+
+        if (!data.sfus || data.sfus.length === 0) {
+          container.innerHTML = '<div class="loading">No SFU keys yet. Click "+ Generate SFU Key" to create one.</div>';
+          return;
+        }
+
+        container.innerHTML = data.sfus.map(sfu => {
+          const statusClass = sfu.status === 'online' ? 'public' : (sfu.status === 'pending' ? 'pending' : 'offline');
+          const statusColor = sfu.status === 'online' ? '#48bb78' : (sfu.status === 'pending' ? '#ecc94b' : '#f56565');
+
+          return `
+          <div class="room-card" style="border-left-color: ${statusColor};">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+              <div class="sfu-key">${escapeHtml(sfu.secret_key)}</div>
+              <div>
+                <button class="copy-btn" onclick="copyToClipboard('${sfu.secret_key}')">Copy Key</button>
+                <button class="copy-btn" style="background: #e53e3e; margin-left: 5px;" onclick="deleteSfuKey(${sfu.id})">Delete</button>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div class="sfu-details">
+                ${sfu.name ? `<strong>${escapeHtml(sfu.name)}</strong> - ` : '<em>Not registered</em> - '}
+                ${sfu.url ? escapeHtml(sfu.url) : 'Waiting for SFU to connect...'}
+              </div>
+              <span class="badge ${statusClass}">${sfu.status}</span>
+            </div>
+            ${sfu.last_heartbeat ? `<div style="font-size: 11px; color: #a0aec0; margin-top: 5px;">Last heartbeat: ${new Date(sfu.last_heartbeat).toLocaleString()}</div>` : ''}
+          </div>
+        `}).join('');
+      } catch (error) {
+        container.innerHTML = '<div class="loading" style="color: #f56565;">Failed to load SFU keys</div>';
+      }
+    }
+
+    async function deleteSfuKey(id) {
+      if (!confirm('Are you sure you want to delete this SFU key? Any connected SFU using this key will be disconnected.')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/sfu/keys/${id}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete SFU key');
+        }
+
+        showSuccess('SFU key deleted successfully!');
+        loadSfuList(); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function createRoom(event) {
+      event.preventDefault();
+
+      const name = document.getElementById('roomName').value;
+      const isLocalOnly = document.getElementById('isLocalOnly').checked;
+      const sfuUrl = document.getElementById('sfuUrl').value;
+      const coturnConfig = document.getElementById('coturnConfig').value;
+
+      try {
+        JSON.parse(coturnConfig); // Validate JSON
+      } catch (error) {
+        showError('Invalid TURN/STUN configuration JSON');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name,
+            is_local_only: isLocalOnly,
+            sfu_url: sfuUrl,
+            coturn_config_json: coturnConfig
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to create room');
+        }
+
+        showSuccess('Room created successfully!');
+        closeModal('createRoomModal');
+        loadRooms();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    // Close modals on outside click
+    window.onclick = function (event) {
+      if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+      }
+    };
+  </script>
+</body>
+
+</html>

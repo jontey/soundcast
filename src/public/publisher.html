@@ -9,11 +9,26 @@
 <body>
   <div class="container">
     <h1>SoundCast Publisher</h1>
-    
+
+    <!-- Multi-tenant room auth section -->
+    <div id="roomAuthSection" style="background: #f0fff4; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #48bb78;">
+      <h2 style="margin-top: 0;">Publish to Room (Multi-Tenant)</h2>
+      <p style="color: #718096; margin-bottom: 15px;">Enter your room slug and publisher token:</p>
+      <div style="margin-bottom: 10px;">
+        <input type="text" id="roomSlugInput" placeholder="Room Slug (e.g., my-meeting-1)" style="width: 100%; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px;">
+      </div>
+      <div style="margin-bottom: 15px;">
+        <input type="text" id="publisherTokenInput" placeholder="Publisher Token" style="width: 100%; padding: 10px; border: 1px solid #e2e8f0; border-radius: 4px; font-family: monospace;">
+      </div>
+      <button onclick="goToRoomPublish()" style="width: 100%;">Connect to Room</button>
+    </div>
+
+    <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">
+
     <div id="status" class="status info">Connecting to server...</div>
-    
+
     <div>
-      <h2>Available Channels</h2>
+      <h2>Available Channels (Legacy)</h2>
       <div id="channelsList">
         <p>Loading channels...</p>
       </div>
@@ -456,6 +471,30 @@
     // Handle page unload
     window.addEventListener('beforeunload', () => {
       stopBroadcasting();
+    });
+
+    // Multi-tenant room navigation
+    function goToRoomPublish() {
+      const slug = document.getElementById('roomSlugInput').value.trim();
+      const token = document.getElementById('publisherTokenInput').value.trim();
+
+      if (!slug) {
+        alert('Please enter a room slug');
+        return;
+      }
+      if (!token) {
+        alert('Please enter your publisher token');
+        return;
+      }
+
+      window.location.href = `/room/${slug}/publish?token=${encodeURIComponent(token)}`;
+    }
+
+    // Allow Enter key to submit
+    document.getElementById('publisherTokenInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        goToRoomPublish();
+      }
     });
   </script>
 </body>

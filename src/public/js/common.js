@@ -130,7 +130,7 @@ async function createDevice() {
   }
 }
 
-// Get ICE servers configuration for WebRTC connections
+// Get ICE servers configuration for WebRTC connections (legacy - hardcoded)
 function getIceServers() {
   return [
     { urls: ['stun:stun.l.google.com:19302'] },
@@ -138,6 +138,15 @@ function getIceServers() {
     // Add your TURN server here if needed for production
     // { urls: ['turn:turn.example.com:443'], username: 'username', credential: 'credential' }
   ];
+}
+
+// Get ICE servers from room config (dynamic - multi-tenant)
+function getIceServersFromConfig(roomConfig) {
+  if (roomConfig && roomConfig.iceServers && Array.isArray(roomConfig.iceServers) && roomConfig.iceServers.length > 0) {
+    return roomConfig.iceServers;
+  }
+  // Fallback to default STUN servers
+  return getIceServers();
 }
 
 // Helper function to get URL parameters
