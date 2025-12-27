@@ -584,6 +584,25 @@ async function sendHeartbeat(sfuId) {
   }
 }
 
+// Send disconnect signal to master
+async function sendDisconnect(sfuId) {
+  try {
+    console.log('📡 Notifying master of disconnect...');
+    await fetch(`${config.masterUrl}/api/sfu/${sfuId}/disconnect`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.secretKey}`
+      }
+    });
+    console.log('✅ Master notified of disconnect');
+  } catch (error) {
+    console.error('⚠️  Failed to notify master:', error.message);
+  }
+}
+
+// Store SFU ID globally for shutdown handler
+let registeredSfuId = null;
+
 // Main initialization
 async function main() {
   try {
@@ -594,16 +613,16 @@ async function main() {
     startWebSocketServer();
 
     // Register with master (optional, will continue even if it fails)
-    const sfuId = await registerWithMaster();
+    registeredSfuId = await registerWithMaster();
 
     // Start heartbeat if registered
-    if (sfuId) {
-      setInterval(() => sendHeartbeat(sfuId), 30000); // Every 30 seconds
+    if (registeredSfuId) {
+      setInterval(() => sendHeartbeat(registeredSfuId), 30000); // Every 30 seconds
     }
 
     console.log('\n✅ SFU Server is ready!');
     console.log(`   Access URL: ws://${config.announcedIp}:${config.port}`);
-    console.log(`   Status: ${sfuId ? 'Registered' : 'Standalone'}\n`);
+    console.log(`   Status: ${registeredSfuId ? 'Registered' : 'Standalone'}\n`);
 
   } catch (error) {
     console.error('❌ Failed to start SFU server:', error);
@@ -612,12 +631,21 @@ async function main() {
 }
 
 // Handle shutdown gracefully
-process.on('SIGINT', () => {
+async function shutdown() {
   console.log('\n🛑 Shutting down SFU server...');
+
+  // Notify master of disconnect
+  if (registeredSfuId) {
+    await sendDisconnect(registeredSfuId);
+  }
+
   if (worker) worker.close();
   if (wss) wss.close();
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 // Start the server
 main();

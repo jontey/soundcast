@@ -1,4 +1,5 @@
 import { getDatabase } from '../database.js';
+import { deletePublishersByRoom } from './publisher.js';
 
 /**
  * Generate a URL-friendly slug from room name and ID
@@ -112,7 +113,7 @@ export function updateRoom(slug, updates) {
     return null;
   }
 
-  const allowedFields = ['name', 'is_local_only', 'sfu_url', 'coturn_config_json'];
+  const allowedFields = ['name', 'slug', 'is_local_only', 'sfu_url', 'coturn_config_json'];
   const updateFields = [];
   const values = [];
 
@@ -126,8 +127,23 @@ export function updateRoom(slug, updates) {
           throw new Error('coturn_config_json must be valid JSON');
         }
       }
-      updateFields.push(`${field} = ?`);
-      values.push(field === 'is_local_only' ? (updates[field] ? 1 : 0) : updates[field]);
+      if (field === 'slug') {
+        // Validate slug format
+        const slugValue = updates[field].toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
+        if (!slugValue) {
+          throw new Error('Invalid slug format');
+        }
+        // Check if slug already exists (for a different room)
+        const existingRoom = getRoomBySlug(slugValue);
+        if (existingRoom && existingRoom.id !== room.id) {
+          throw new Error('Slug already in use');
+        }
+        updateFields.push(`${field} = ?`);
+        values.push(slugValue);
+      } else {
+        updateFields.push(`${field} = ?`);
+        values.push(field === 'is_local_only' ? (updates[field] ? 1 : 0) : updates[field]);
+      }
     }
   }
 
@@ -135,22 +151,14 @@ export function updateRoom(slug, updates) {
     return room;
   }
 
-  values.push(slug);
+  values.push(room.id);
 
   const stmt = db.prepare(
-    `UPDATE rooms SET ${updateFields.join(', ')} WHERE slug = ?`
+    `UPDATE rooms SET ${updateFields.join(', ')} WHERE id = ?`
   );
   stmt.run(...values);
 
-  // If name changed, update slug
-  if (updates.name) {
-    const newSlug = generateSlug(updates.name, room.id);
-    const updateSlugStmt = db.prepare('UPDATE rooms SET slug = ? WHERE id = ?');
-    updateSlugStmt.run(newSlug, room.id);
-    return getRoomById(room.id);
-  }
-
-  return getRoomBySlug(slug);
+  return getRoomById(room.id);
 }
 
 /**
@@ -177,6 +185,17 @@ export function listRoomsByTenant(tenant_id) {
  */
 export function deleteRoom(slug) {
   const db = getDatabase();
+
+  // Get room first to get its ID
+  const room = getRoomBySlug(slug);
+  if (!room) {
+    return false;
+  }
+
+  // Delete related publishers first
+  deletePublishersByRoom(room.id);
+
+  // Now delete the room
   const stmt = db.prepare('DELETE FROM rooms WHERE slug = ?');
   const result = stmt.run(slug);
   return result.changes > 0;

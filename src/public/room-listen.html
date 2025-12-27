@@ -354,6 +354,14 @@
     let isMuted = false;
     let selectedChannel = null;
 
+    // Reconnection state
+    let roomReconnectAttempts = 0;
+    let sfuReconnectAttempts = 0;
+    let roomReconnectTimer = null;
+    let sfuReconnectTimer = null;
+    const listenMaxReconnectAttempts = 50;
+    const listenBaseReconnectInterval = 1000;
+
     // Status management
     function setStatus(message, className) {
       const statusEl = document.getElementById('status');
@@ -368,6 +376,55 @@
       setTimeout(() => el.style.display = 'none', 5000);
     }
 
+    // Attempt to reconnect to room WebSocket
+    function attemptRoomReconnect() {
+      if (roomReconnectTimer) {
+        clearTimeout(roomReconnectTimer);
+        roomReconnectTimer = null;
+      }
+
+      if (roomReconnectAttempts >= listenMaxReconnectAttempts) {
+        setStatus('Failed to reconnect to room', 'disconnected');
+        return;
+      }
+
+      roomReconnectAttempts++;
+      const delay = Math.min(listenBaseReconnectInterval * Math.pow(1.5, roomReconnectAttempts - 1), 30000);
+
+      setStatus(`Reconnecting to room in ${Math.round(delay / 1000)}s... (${roomReconnectAttempts}/${listenMaxReconnectAttempts})`, 'connecting');
+
+      roomReconnectTimer = setTimeout(() => {
+        connectToRoom();
+      }, delay);
+    }
+
+    // Attempt to reconnect to SFU WebSocket
+    function attemptSfuReconnect() {
+      if (sfuReconnectTimer) {
+        clearTimeout(sfuReconnectTimer);
+        sfuReconnectTimer = null;
+      }
+
+      if (sfuReconnectAttempts >= listenMaxReconnectAttempts) {
+        setStatus('Failed to reconnect to SFU', 'disconnected');
+        return;
+      }
+
+      if (!roomConfig || !roomConfig.sfuUrl) {
+        console.log('No SFU URL available for reconnect');
+        return;
+      }
+
+      sfuReconnectAttempts++;
+      const delay = Math.min(listenBaseReconnectInterval * Math.pow(1.5, sfuReconnectAttempts - 1), 30000);
+
+      setStatus(`Reconnecting to SFU in ${Math.round(delay / 1000)}s... (${sfuReconnectAttempts}/${listenMaxReconnectAttempts})`, 'connecting');
+
+      sfuReconnectTimer = setTimeout(() => {
+        connectToSfu(roomConfig.sfuUrl);
+      }, delay);
+    }
+
     // Connect to room WebSocket
     function connectToRoom() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -380,6 +437,7 @@
 
       ws.onopen = () => {
         console.log('Room WebSocket connected');
+        roomReconnectAttempts = 0; // Reset on successful connection
         setStatus('Connected, waiting for configuration...', 'connected');
       };
 
@@ -408,8 +466,8 @@
 
       ws.onclose = () => {
         console.log('Room WebSocket closed');
-        setStatus('Disconnected from room', 'disconnected');
         document.getElementById('playerStatus').textContent = 'Disconnected';
+        attemptRoomReconnect();
       };
     }
 
@@ -467,6 +525,7 @@
 
       sfuWs.onopen = () => {
         console.log('SFU WebSocket connected');
+        sfuReconnectAttempts = 0; // Reset on successful connection
         // Request RTP capabilities
         sfuWs.send(JSON.stringify({ action: 'get-rtpCapabilities' }));
       };
@@ -484,6 +543,7 @@
         if (recvTransport) {
           leaveChannel();
         }
+        attemptSfuReconnect();
       };
     }
 

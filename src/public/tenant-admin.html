@@ -368,6 +368,8 @@
       <div class="section-title">
         Your Rooms
         <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
+        <button onclick="loadRooms()" class="btn btn-secondary"
+          style="float: right; margin-right: 10px;">Refresh</button>
       </div>
       <div id="roomsList">
         <div class="loading">Loading rooms...</div>
@@ -378,6 +380,8 @@
       <div class="section-title">
         SFU Servers
         <button onclick="generateSfuKey()" class="btn btn-primary" style="float: right;">+ Generate SFU Key</button>
+        <button onclick="loadSfuList()" class="btn btn-secondary"
+          style="float: right; margin-right: 10px;">Refresh</button>
       </div>
       <div id="sfusList">
         <div class="loading">Loading SFU keys...</div>
@@ -451,6 +455,48 @@
     </div>
   </div>
 
+  <!-- Edit Room Modal -->
+  <div id="editRoomModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('editRoomModal')">&times;</span>
+      <div class="modal-header">Edit Room</div>
+      <form id="editRoomForm" onsubmit="editRoom(event)">
+        <input type="hidden" id="editRoomOriginalSlug">
+        <div class="form-group">
+          <label class="form-label">Room Name</label>
+          <input type="text" id="editRoomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Room Slug (URL-friendly identifier)</label>
+          <input type="text" id="editRoomSlug" class="form-input" required placeholder="e.g., annual-conference-2025"
+            pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens allowed">
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            <input type="checkbox" id="editIsLocalOnly" class="form-checkbox" onchange="toggleEditSfuMode()">
+            Use Local SFU Only
+          </label>
+        </div>
+        <div class="form-group" id="editSfuSelectGroup" style="display: none;">
+          <label class="form-label">Select Local SFU</label>
+          <select id="editSfuSelect" class="form-input" onchange="updateEditSfuUrl()">
+            <option value="">-- Select an SFU --</option>
+          </select>
+          <div id="editSfuLoadStatus" style="font-size: 12px; margin-top: 5px; color: #718096;"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">SFU URL</label>
+          <input type="text" id="editSfuUrl" class="form-input" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">TURN/STUN Configuration (JSON)</label>
+          <textarea id="editCoturnConfig" class="form-input" rows="5" required></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </form>
+    </div>
+  </div>
+
   <script>
     const API_BASE = window.location.origin + '/api';
     let currentApiKey = '';
@@ -486,8 +532,8 @@
     }
 
     async function loadRooms(event) {
-      event.preventDefault();
-      const apiKey = getApiKey();
+      if (event) event.preventDefault();
+      const apiKey = currentApiKey || getApiKey();
       if (!apiKey) return;
 
       document.getElementById('roomsList').innerHTML = '<div class="loading">Loading rooms...</div>';
@@ -518,6 +564,9 @@
 
     function displayRooms(rooms) {
       const container = document.getElementById('roomsList');
+
+      // Cache rooms data for editing
+      roomsData = rooms;
 
       if (rooms.length === 0) {
         container.innerHTML = '<div class="loading">No rooms yet. Create one to get started!</div>';
@@ -555,6 +604,7 @@
           <div style="margin-top: 15px;">
             <button onclick="showPublishers('${room.slug}')" class="btn btn-secondary">Manage Publishers</button>
             <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-primary">+ Add Publisher</button>
+            <button onclick="showEditRoomModal('${room.slug}')" class="btn btn-primary" style="margin-left: 10px;">Edit Room</button>
             <button onclick="deleteRoom('${room.slug}')" class="btn btn-danger" style="margin-left: 10px;">Delete Room</button>
           </div>
           <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
@@ -624,6 +674,12 @@
         document.getElementById('newPublisherTokenDisplay').style.display = 'block';
         document.getElementById('addPublisherForm').reset();
         showSuccess('Publisher added successfully!');
+
+        // Refresh publisher list if it's visible
+        const publisherContainer = document.getElementById(`publishers-${slug}`);
+        if (publisherContainer && publisherContainer.style.display === 'block') {
+          showPublishers(slug);
+        }
       } catch (error) {
         showError(error.message);
       }
@@ -819,6 +875,161 @@
       if (modalId === 'addPublisherModal') {
         document.getElementById('addPublisherForm').reset();
         document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      }
+      if (modalId === 'editRoomModal') {
+        document.getElementById('editRoomForm').reset();
+      }
+    }
+
+    // Store rooms data for editing
+    let roomsData = [];
+
+    async function showEditRoomModal(slug) {
+      // Find the room in our cached data or fetch it
+      let room = roomsData.find(r => r.slug === slug);
+
+      if (!room) {
+        // Fetch room data
+        try {
+          const response = await fetch(`${API_BASE}/rooms`, {
+            headers: { 'Authorization': `Bearer ${currentApiKey}` }
+          });
+          const data = await response.json();
+          room = data.rooms.find(r => r.slug === slug);
+        } catch (error) {
+          showError('Failed to load room data');
+          return;
+        }
+      }
+
+      if (!room) {
+        showError('Room not found');
+        return;
+      }
+
+      // Populate form
+      document.getElementById('editRoomOriginalSlug').value = room.slug;
+      document.getElementById('editRoomName').value = room.name;
+      document.getElementById('editRoomSlug').value = room.slug;
+      document.getElementById('editIsLocalOnly').checked = room.is_local_only;
+      document.getElementById('editSfuUrl').value = room.sfu_url || getDefaultSfuUrl();
+      document.getElementById('editCoturnConfig').value = room.coturn_config_json || '[{"urls": "stun:stun.l.google.com:19302"}]';
+
+      // Show/hide SFU select based on local mode
+      if (room.is_local_only) {
+        document.getElementById('editSfuSelectGroup').style.display = 'block';
+        loadEditAvailableSfus();
+      } else {
+        document.getElementById('editSfuSelectGroup').style.display = 'none';
+      }
+
+      document.getElementById('editRoomModal').style.display = 'block';
+    }
+
+    async function editRoom(event) {
+      event.preventDefault();
+
+      const originalSlug = document.getElementById('editRoomOriginalSlug').value;
+      const name = document.getElementById('editRoomName').value;
+      const slug = document.getElementById('editRoomSlug').value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const isLocalOnly = document.getElementById('editIsLocalOnly').checked;
+      const sfuUrl = document.getElementById('editSfuUrl').value;
+      const coturnConfig = document.getElementById('editCoturnConfig').value;
+
+      try {
+        JSON.parse(coturnConfig); // Validate JSON
+      } catch (error) {
+        showError('Invalid TURN/STUN configuration JSON');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name,
+            slug,
+            is_local_only: isLocalOnly,
+            sfu_url: sfuUrl,
+            coturn_config_json: coturnConfig
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to update room');
+        }
+
+        showSuccess('Room updated successfully!');
+        closeModal('editRoomModal');
+        loadRooms();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function toggleEditSfuMode() {
+      const isLocal = document.getElementById('editIsLocalOnly').checked;
+      const sfuSelectGroup = document.getElementById('editSfuSelectGroup');
+
+      if (isLocal) {
+        sfuSelectGroup.style.display = 'block';
+        loadEditAvailableSfus();
+      } else {
+        sfuSelectGroup.style.display = 'none';
+        document.getElementById('editSfuSelect').value = '';
+        document.getElementById('editSfuUrl').value = getDefaultSfuUrl();
+      }
+    }
+
+    function updateEditSfuUrl() {
+      const select = document.getElementById('editSfuSelect');
+      const selectedUrl = select.value;
+
+      if (selectedUrl) {
+        document.getElementById('editSfuUrl').value = selectedUrl;
+      }
+    }
+
+    async function loadEditAvailableSfus() {
+      try {
+        document.getElementById('editSfuLoadStatus').textContent = 'Loading SFUs...';
+
+        const response = await fetch(`${API_BASE}/sfu/list`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+        if (!response.ok) throw new Error('Failed to load SFUs');
+
+        const data = await response.json();
+        const select = document.getElementById('editSfuSelect');
+        const currentSfuUrl = document.getElementById('editSfuUrl').value;
+
+        select.innerHTML = '<option value="">-- Select an SFU --</option>';
+
+        const onlineSfus = data.sfus.filter(sfu => sfu.status === 'online' && sfu.url);
+
+        if (onlineSfus.length > 0) {
+          onlineSfus.forEach(sfu => {
+            const option = document.createElement('option');
+            option.value = sfu.url;
+            option.textContent = `${sfu.name || 'Unnamed'} (${sfu.url})`;
+            if (sfu.url === currentSfuUrl) option.selected = true;
+            select.appendChild(option);
+          });
+
+          document.getElementById('editSfuLoadStatus').textContent = `${onlineSfus.length} online SFU(s) available`;
+          document.getElementById('editSfuLoadStatus').style.color = '#48bb78';
+        } else {
+          document.getElementById('editSfuLoadStatus').textContent = 'No online SFUs available';
+          document.getElementById('editSfuLoadStatus').style.color = '#f56565';
+        }
+      } catch (error) {
+        document.getElementById('editSfuLoadStatus').textContent = 'Failed to load SFUs';
+        document.getElementById('editSfuLoadStatus').style.color = '#f56565';
       }
     }
 

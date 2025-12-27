@@ -1,5 +1,5 @@
 import { authenticateTenant } from '../middleware/auth.js';
-import { createSfuKey, registerSfu, listSfuKeysByTenant, verifySfuSecretKey, updateSfuHeartbeat, getSfuById, deleteSfu } from '../db/models/sfu.js';
+import { createSfuKey, registerSfu, listSfuKeysByTenant, verifySfuSecretKey, updateSfuHeartbeat, updateSfuStatus, getSfuById, deleteSfu } from '../db/models/sfu.js';
 
 /**
  * Register SFU API routes
@@ -155,6 +155,52 @@ export async function registerSfuRoutes(fastify) {
       return reply.code(500).send({
         error: 'Internal Server Error',
         message: 'Failed to update heartbeat'
+      });
+    }
+  });
+
+  // POST /api/sfu/:id/disconnect - Mark SFU as offline
+  fastify.post('/api/sfu/:id/disconnect', async (request, reply) => {
+    const { id } = request.params;
+    const authHeader = request.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Missing or invalid Authorization header'
+      });
+    }
+
+    const secretKey = authHeader.substring(7);
+    const sfu = verifySfuSecretKey(secretKey);
+
+    if (!sfu || sfu.id !== parseInt(id)) {
+      return reply.code(403).send({
+        error: 'Forbidden',
+        message: 'Invalid secret key or SFU ID mismatch'
+      });
+    }
+
+    try {
+      const updated = updateSfuStatus(parseInt(id), 'offline');
+
+      if (!updated) {
+        return reply.code(404).send({
+          error: 'Not Found',
+          message: 'SFU not found'
+        });
+      }
+
+      fastify.log.info(`SFU ${id} disconnected`);
+      return reply.code(200).send({
+        success: true,
+        message: 'SFU marked as offline'
+      });
+    } catch (error) {
+      fastify.log.error(`Error disconnecting SFU: ${error.message}`);
+      return reply.code(500).send({
+        error: 'Internal Server Error',
+        message: 'Failed to disconnect SFU'
       });
     }
   });
