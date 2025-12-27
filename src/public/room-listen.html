@@ -311,6 +311,16 @@
         <input type="range" min="0" max="100" value="100" class="volume-slider" id="volumeSlider">
       </div>
 
+      <div class="volume-control" id="speakerControl" style="display: none;">
+        <div class="volume-label">
+          <span>Speaker</span>
+        </div>
+        <select id="speakerSelect"
+          style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; background: white;">
+          <option value="">Default</option>
+        </select>
+      </div>
+
       <div id="audioControls" style="display: none; margin-top: 15px;">
         <button id="muteBtn" class="btn btn-primary" onclick="toggleMute()">Mute</button>
         <button id="leaveBtn" class="btn btn-danger" onclick="leaveChannel()">Leave Channel</button>
@@ -752,6 +762,9 @@
         document.getElementById('audioMeter').style.display = 'block';
         document.getElementById('audioControls').style.display = 'block';
         document.getElementById('muteBtn').style.display = ''; // Show mute button when audio playing
+
+        // Update speaker list (requires user gesture context)
+        updateSpeakerList();
       } catch (error) {
         console.error('Error handling consumer:', error);
         showError('Error handling consumer: ' + error.message);
@@ -865,6 +878,7 @@
       setStatus('Select a channel and click Start', 'connected');
       document.getElementById('playerStatus').textContent = 'Select a channel to listen';
       document.getElementById('volumeControl').style.display = 'none';
+      document.getElementById('speakerControl').style.display = 'none';
       document.getElementById('audioMeter').style.display = 'none';
       document.getElementById('audioControls').style.display = 'none';
       document.getElementById('audioMeterBar').style.width = '0%';
@@ -885,6 +899,61 @@
       audioElement.volume = volume / 100;
       volumeValue.textContent = volume + '%';
     });
+
+    // Speaker selection
+    const speakerSelect = document.getElementById('speakerSelect');
+    const speakerControl = document.getElementById('speakerControl');
+
+    // Check if setSinkId is supported
+    const canSelectSpeaker = typeof audioElement.setSinkId === 'function';
+
+    // Enumerate and populate audio output devices
+    async function updateSpeakerList() {
+      if (!canSelectSpeaker) {
+        console.log('Speaker selection not supported in this browser');
+        return;
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        // Filter out the 'default' device since we add our own Default option
+        const audioOutputs = devices.filter(d => d.kind === 'audiooutput' && d.deviceId !== 'default');
+
+        // Clear existing options except default
+        speakerSelect.innerHTML = '<option value="">System Default</option>';
+
+        audioOutputs.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.textContent = device.label || `Speaker ${speakerSelect.options.length}`;
+          speakerSelect.appendChild(option);
+        });
+
+        // Show control only if there are multiple options (Default + at least one other)
+        if (audioOutputs.length >= 1) {
+          speakerControl.style.display = 'block';
+        }
+      } catch (err) {
+        console.error('Error enumerating audio devices:', err);
+      }
+    }
+
+    // Handle speaker selection change
+    speakerSelect.addEventListener('change', async (e) => {
+      const deviceId = e.target.value;
+      try {
+        await audioElement.setSinkId(deviceId);
+        console.log('Audio output changed to:', deviceId || 'default');
+      } catch (err) {
+        console.error('Error setting audio output:', err);
+        showError('Failed to change speaker: ' + err.message);
+      }
+    });
+
+    // Listen for device changes (e.g., headphones plugged in)
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', updateSpeakerList);
+    }
 
     // Handle page unload
     window.addEventListener('beforeunload', () => {
