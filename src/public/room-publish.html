@@ -456,6 +456,28 @@
       console.log('Room config received:', config);
       roomConfig = config;
 
+      // Check for local-only room accessed via HTTPS
+      if (config.isLocalOnly && window.location.protocol === 'https:') {
+        // Extract local IP from SFU URL to suggest correct access URL
+        let localAccessUrl = '';
+        try {
+          const sfuUrlObj = new URL(config.sfuUrl);
+          const localIp = sfuUrlObj.hostname;
+          // Suggest accessing via the local server (assuming same network)
+          localAccessUrl = `http://${localIp}:3000${window.location.pathname}${window.location.search}`;
+        } catch (e) {
+          console.error('Could not parse SFU URL:', e);
+        }
+
+        const message = localAccessUrl
+          ? `This room uses a local SFU and must be accessed from the local network.\n\nPlease access via:\n${localAccessUrl}`
+          : 'This room uses a local SFU and cannot be accessed over HTTPS. Please access via the local network.';
+
+        showError(message);
+        setStatus('Local network access required', 'disconnected');
+        return;
+      }
+
       // Display channel name
       if (config.channelName) {
         const channelEl = document.getElementById('channelName');
@@ -546,6 +568,16 @@
           setStatus('Error: ' + payload.message, 'disconnected');
           break;
 
+        case 'channel-list':
+          // Informational: list of active channels on the SFU
+          console.log('Active channels:', payload);
+          break;
+
+        case 'broadcasting-stopped':
+          // Another publisher stopped broadcasting on this channel
+          console.log('Broadcasting stopped on channel:', payload.channelId);
+          break;
+
         default:
           console.log('Unknown SFU action:', action);
       }
@@ -556,7 +588,14 @@
       try {
         // Create send transport with dynamic ICE servers from room config
         const iceServers = getIceServersFromConfig(roomConfig);
+        console.log('ICE servers being used:', JSON.stringify(iceServers, null, 2));
+
+        // Pass iceServers both directly and via additionalSettings for compatibility
         transportParams.iceServers = iceServers;
+        transportParams.additionalSettings = {
+          ...transportParams.additionalSettings,
+          iceServers: iceServers
+        };
 
         pubTransport = pubDevice.createSendTransport(transportParams);
 

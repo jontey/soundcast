@@ -6,6 +6,14 @@ import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherByI
  * Register REST API routes
  */
 export async function registerApiRoutes(fastify) {
+  // GET /api/config - Get public configuration (for single-tenant mode detection)
+  fastify.get('/api/config', async (request, reply) => {
+    return {
+      singleTenant: process.env.SINGLE_TENANT === 'true',
+      defaultApiKey: process.env.SINGLE_TENANT === 'true' ? (process.env.ADMIN_KEY || 'admin') : null
+    };
+  });
+
   // POST /api/rooms - Create a new room
   fastify.post('/api/rooms', {
     preHandler: authenticateTenant,
@@ -149,6 +157,8 @@ export async function registerApiRoutes(fastify) {
             name: room.name,
             slug: room.slug,
             is_local_only: room.is_local_only,
+            sfu_url: room.sfu_url,
+            coturn_config_json: room.coturn_config_json,
             created_at: room.created_at
           }))
         });

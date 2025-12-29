@@ -25,7 +25,7 @@ function generateSlug(name, id) {
  * @param {string} roomData.coturn_config_json - COTURN config JSON string
  * @returns {object} Created room
  */
-export function createRoom({ tenant_id, name, is_local_only, sfu_url, coturn_config_json }) {
+export function createRoom({ tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json }) {
   const db = getDatabase();
 
   // Validate coturn_config_json is valid JSON
@@ -55,7 +55,7 @@ export function createRoom({ tenant_id, name, is_local_only, sfu_url, coturn_con
   const roomId = result.lastInsertRowid;
 
   // Generate final slug with ID
-  const finalSlug = generateSlug(name, roomId);
+  const finalSlug = slug || generateSlug(name, roomId);
 
   // Update with final slug
   const updateStmt = db.prepare('UPDATE rooms SET slug = ? WHERE id = ?');

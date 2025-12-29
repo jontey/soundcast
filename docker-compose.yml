@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  soundcast:
+    build: .
+    ports:
+      - "3000:3000"
+      - "40000-40100:40000-40100/tcp"
+      - "40000-40100:40000-40100/udp"
+    environment:
+      - NODE_ENV=production
+      - SINGLE_TENANT=true
+      - ADMIN_KEY=admin
+      # IMPORTANT: Set this to your server's LAN IP address
+      - ANNOUNCED_IP=${HOST_IP:-127.0.0.1}
+      - DB_PATH=/app/data/soundcast.db
+      - RTC_MIN_PORT=40000
+      - RTC_MAX_PORT=40100
+    volumes:
+      - soundcast-data:/app/data
+    restart: unless-stopped
+    # For air-gapped deployments, network_mode: host may work better
+    # network_mode: host
+
+volumes:
+  soundcast-data:

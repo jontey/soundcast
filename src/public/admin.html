@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SoundCast Admin</title>
   <link rel="stylesheet" href="/css/styles.css">
+  <script>
+    // Redirect to tenant-admin in single-tenant mode
+    fetch('/api/config').then(r => r.json()).then(config => {
+      if (config.singleTenant) {
+        window.location.href = '/tenant-admin';
+      }
+    }).catch(() => {});
+  </script>
 </head>
 <body>
   <div class="container">
