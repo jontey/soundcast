@@ -2,11 +2,12 @@ version: '3.8'
 
 services:
   soundcast:
-    build: .
-    ports:
-      - "3000:3000"
-      - "40000-40100:40000-40100/tcp"
-      - "40000-40100:40000-40100/udp"
+    image: jtey1/soundcast:latest
+    platform: linux/amd64
+    # ports:
+    #   - "3000:3000"
+    #   - "40000-40100:40000-40100/tcp"
+    #   - "40000-40100:40000-40100/udp"
     environment:
       - NODE_ENV=production
       - SINGLE_TENANT=true
@@ -16,11 +17,15 @@ services:
       - DB_PATH=/app/data/soundcast.db
       - RTC_MIN_PORT=40000
       - RTC_MAX_PORT=40100
+      # TLS settings (certificates are auto-generated in the container)
+      - HTTPS_PORT=3001
+      - TLS_KEY_PATH=/app/certs/server.key
+      - TLS_CERT_PATH=/app/certs/server.crt
     volumes:
       - soundcast-data:/app/data
     restart: unless-stopped
     # For air-gapped deployments, network_mode: host may work better
-    # network_mode: host
+    network_mode: host
 
 volumes:
   soundcast-data:

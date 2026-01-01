@@ -2,6 +2,7 @@ import 'dotenv/config';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
+import https from 'https';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import mediasoup from 'mediasoup';
@@ -79,6 +80,41 @@ if (singleTenantMode) {
     });
     console.log('Single-tenant mode: Created default "main" room');
   }
+}
+
+/**
+ * Rewrite SFU URL protocol and port based on connection security
+ * If client connected via wss://, rewrite ws:// to wss:// and update port
+ * @param {string} sfuUrl - The original SFU URL
+ * @param {object} req - The request object to check connection security
+ * @returns {string} The potentially rewritten URL
+ */
+function getSecureSfuUrl(sfuUrl, req) {
+  if (!sfuUrl) return sfuUrl;
+
+  // Check if the incoming connection is secure
+  // req.headers['x-forwarded-proto'] for reverse proxy scenarios
+  // req.socket.encrypted for direct TLS connections
+  const isSecure = req.socket?.encrypted ||
+    req.headers?.['x-forwarded-proto'] === 'https' ||
+    req.protocol === 'https';
+
+  if (isSecure && sfuUrl.startsWith('ws://')) {
+    const httpPort = process.env.PORT || '3000';
+    const httpsPort = process.env.HTTPS_PORT || '3001';
+
+    // Replace protocol
+    let secureUrl = sfuUrl.replace(/^ws:\/\//, 'wss://');
+
+    // Replace port if it matches the HTTP port
+    // Matches :3000/ or :3000 at end of string
+    const portRegex = new RegExp(`:${httpPort}(\\/|$)`);
+    secureUrl = secureUrl.replace(portRegex, `:${httpsPort}$1`);
+
+    return secureUrl;
+  }
+
+  return sfuUrl;
 }
 
 /**
@@ -465,8 +501,8 @@ async function createWebRtcTransport() {
   };
 }
 
-// WebSocket route handler
-fastify.register(async function (fastify) {
+// WebSocket route handler - extracted as a plugin for reuse
+async function registerMainWsRoutes(fastify) {
   fastify.get('/ws', { websocket: true }, (connection, req) => {
     const clientId = uuidv4();
     fastify.log.info(`New connection: ${clientId}`);
@@ -1266,10 +1302,10 @@ fastify.register(async function (fastify) {
       clients.delete(clientId);
     });
   });
-});
+}
 
 // Room-based WebSocket endpoints for multi-tenant support
-fastify.register(async function (fastify) {
+async function registerRoomWsRoutes(fastify) {
   // Listener endpoint: /ws/room/:slug/listen
   fastify.get('/ws/room/:slug/listen', { websocket: true }, (connection, req) => {
     const { slug } = req.params;
@@ -1308,11 +1344,14 @@ fastify.register(async function (fastify) {
     // Get available channels for this room
     const channels = getChannelsByRoom(room.id);
 
+    // Rewrite SFU URL to wss:// if client connected securely
+    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
+
     // Send configuration message with channels
     const config = {
       type: 'config',
       data: {
-        sfuUrl: room.sfu_url,
+        sfuUrl: sfuUrl,
         iceServers: iceServers,
         isLocalOnly: room.is_local_only,
         channels: channels,
@@ -1321,7 +1360,7 @@ fastify.register(async function (fastify) {
     };
 
     connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, channels: ${channels.join(', ')}`);
+    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, sfuUrl: ${sfuUrl}, channels: ${channels.join(', ')}`);
 
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
@@ -1413,11 +1452,14 @@ fastify.register(async function (fastify) {
       return;
     }
 
+    // Rewrite SFU URL to wss:// if client connected securely
+    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
+
     // Send configuration message with channel name
     const config = {
       type: 'config',
       data: {
-        sfuUrl: room.sfu_url,
+        sfuUrl: sfuUrl,
         iceServers: iceServers,
         isLocalOnly: room.is_local_only,
         channelName: publisher.channel_name
@@ -1425,7 +1467,7 @@ fastify.register(async function (fastify) {
     };
 
     connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
+    fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, sfuUrl: ${sfuUrl}, channel: ${publisher.channel_name}`);
 
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
@@ -1446,10 +1488,10 @@ fastify.register(async function (fastify) {
       fastify.log.info(`Publisher ${clientId} (${publisher.name}) disconnected from room ${slug}`);
     });
   });
-});
+}
 
 // Tenant Admin WebSocket endpoint
-fastify.register(async function (fastify) {
+async function registerAdminWsRoutes(fastify) {
   // Admin endpoint: /ws/admin?apiKey=xxx
   fastify.get('/ws/admin', { websocket: true }, (connection, req) => {
     const apiKey = req.query.apiKey;
@@ -1611,10 +1653,90 @@ fastify.register(async function (fastify) {
       localSfuStats.delete(sfu.id);
     });
   });
-});
+}
+
+// Register all WebSocket routes on a Fastify instance
+function registerAllWsRoutes(fastifyInstance) {
+  fastifyInstance.register(registerMainWsRoutes);
+  fastifyInstance.register(registerRoomWsRoutes);
+  fastifyInstance.register(registerAdminWsRoutes);
+}
+
+// Register WebSocket routes on HTTP server
+registerAllWsRoutes(fastify);
 
 const PORT = process.env.PORT || 3000;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3001;
 const HOST = process.env.HOST || '0.0.0.0';
+
+// TLS certificate paths
+const TLS_KEY_PATH = process.env.TLS_KEY_PATH || './certs/server.key';
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH || './certs/server.crt';
+
+// Create HTTPS Fastify instance if certificates exist
+let fastifyHttps = null;
+
+function createHttpsServer() {
+  if (!fs.existsSync(TLS_KEY_PATH) || !fs.existsSync(TLS_CERT_PATH)) {
+    console.log('TLS certificates not found, HTTPS server will not start');
+    console.log(`  Key path: ${TLS_KEY_PATH}`);
+    console.log(`  Cert path: ${TLS_CERT_PATH}`);
+    return null;
+  }
+
+  const httpsOptions = {
+    key: fs.readFileSync(TLS_KEY_PATH),
+    cert: fs.readFileSync(TLS_CERT_PATH)
+  };
+
+  fastifyHttps = Fastify({
+    logger: true,
+    https: httpsOptions
+  });
+
+  // Register same plugins and routes for HTTPS server
+  fastifyHttps.register(fastifyStatic, {
+    root: publicDir,
+    prefix: '/'
+  });
+
+  fastifyHttps.register(fastifyWebsocket, {
+    options: {
+      maxPayload: 1048576
+    }
+  });
+
+  fastifyHttps.register(registerApiRoutes);
+  fastifyHttps.register(registerSfuRoutes);
+
+  // Register WebSocket routes on HTTPS server
+  registerAllWsRoutes(fastifyHttps);
+
+  // Room-specific HTML routes
+  fastifyHttps.get('/room/:slug/publish', async (request, reply) => {
+    const { slug } = request.params;
+    const room = getRoomBySlug(slug);
+    if (!room) {
+      return reply.code(404).send('Room not found');
+    }
+    return reply.sendFile('room-publish.html');
+  });
+
+  fastifyHttps.get('/room/:slug/listen', async (request, reply) => {
+    const { slug } = request.params;
+    const room = getRoomBySlug(slug);
+    if (!room) {
+      return reply.code(404).send('Room not found');
+    }
+    return reply.sendFile('room-listen.html');
+  });
+
+  fastifyHttps.get('/tenant-admin', async (request, reply) => {
+    return reply.sendFile('tenant-admin.html');
+  });
+
+  return fastifyHttps;
+}
 
 // Main async entry point
 async function main() {
@@ -1633,13 +1755,24 @@ async function main() {
   // Create Router
   router = await worker.createRouter({ mediaCodecs });
 
-  // Start server
+  // Start HTTP server
   try {
     await fastify.listen({ port: PORT, host: HOST });
-    fastify.log.info(`Server listening on ${HOST}:${PORT}`);
+    fastify.log.info(`HTTP server listening on ${HOST}:${PORT}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);
+  }
+
+  // Start HTTPS server if certificates are available
+  const httpsServer = createHttpsServer();
+  if (httpsServer) {
+    try {
+      await httpsServer.listen({ port: HTTPS_PORT, host: HOST });
+      console.log(`HTTPS server listening on ${HOST}:${HTTPS_PORT}`);
+    } catch (err) {
+      console.error('Failed to start HTTPS server:', err);
+    }
   }
 }
 
