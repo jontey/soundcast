@@ -296,6 +296,7 @@
     let roomConfig = null;
     let pubAudioContext = null;
     let pubAudioMeter = null;
+    let pubAudioSource = null;
     let pubMeterUpdateInterval = null;
 
     // Reconnection state
@@ -399,9 +400,86 @@
         }
 
         document.getElementById('audioSourceContainer').style.display = 'block';
+
+        // Add change listener for switching microphone during broadcast
+        audioSourceSelect.addEventListener('change', handleAudioSourceChange);
       } catch (error) {
         console.error('Error loading audio devices:', error);
         showError('Error loading audio devices: ' + error.message);
+      }
+    }
+
+    // Handle audio source change during broadcast
+    async function handleAudioSourceChange(e) {
+      const newDeviceId = e.target.value;
+
+      // If not broadcasting, just note the selection
+      if (!pubProducer || !newDeviceId) {
+        return;
+      }
+
+      console.log('Switching microphone to:', newDeviceId);
+      setStatus('Switching microphone...', 'connecting');
+
+      try {
+        // Close the existing producer first
+        if (pubProducer) {
+          pubProducer.close();
+          pubProducer = null;
+        }
+
+        // Disconnect old audio source from meter
+        if (pubAudioSource) {
+          try {
+            pubAudioSource.disconnect();
+          } catch (e) {
+            console.warn('Error disconnecting old audio source:', e);
+          }
+          pubAudioSource = null;
+        }
+
+        // Stop old audio tracks BEFORE getting new stream
+        // This ensures the old microphone is fully released
+        if (pubAudioStream) {
+          pubAudioStream.getTracks().forEach(track => {
+            track.stop();
+            console.log('Stopped old track:', track.label);
+          });
+          pubAudioStream = null;
+        }
+
+        // Small delay to allow OS to release the microphone
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Get new stream from selected device
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: { exact: newDeviceId },
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        const newTrack = newStream.getAudioTracks()[0];
+        console.log('New track obtained:', newTrack.label);
+
+        pubAudioStream = newStream;
+
+        // Update audio meter with new source
+        if (pubAudioContext && pubAudioMeter) {
+          pubAudioSource = pubAudioContext.createMediaStreamSource(newStream);
+          pubAudioSource.connect(pubAudioMeter);
+        }
+
+        // Create new producer with new track
+        pubProducer = await pubTransport.produce({ track: newTrack });
+
+        console.log('Microphone switched successfully - new producer created');
+        setStatus('Broadcasting', 'broadcasting');
+      } catch (error) {
+        console.error('Error switching microphone:', error);
+        showError('Failed to switch microphone: ' + error.message);
+        setStatus('Broadcasting', 'broadcasting');
       }
     }
 
@@ -686,9 +764,9 @@
 
         // Create audio context and meter
         pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const source = pubAudioContext.createMediaStreamSource(pubAudioStream);
+        pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
         pubAudioMeter = createAudioMeter(pubAudioContext);
-        source.connect(pubAudioMeter);
+        pubAudioSource.connect(pubAudioMeter);
 
         // Start meter updates
         pubMeterUpdateInterval = setInterval(() => {
@@ -747,7 +825,16 @@
         pubAudioStream = null;
       }
 
-      // Close audio context
+      // Disconnect audio source and close audio context
+      if (pubAudioSource) {
+        try {
+          pubAudioSource.disconnect();
+        } catch (e) {
+          console.warn('Error disconnecting audio source:', e);
+        }
+        pubAudioSource = null;
+      }
+
       if (pubAudioContext) {
         if (pubAudioMeter) {
           pubAudioMeter.shutdown();
