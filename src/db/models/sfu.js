@@ -1,5 +1,5 @@
 import { getDatabase } from '../database.js';
-import bcrypt from 'bcrypt';
+import bcryptjs from 'bcryptjs';
 
 const SALT_ROUNDS = 10;
 
@@ -11,7 +11,7 @@ const SALT_ROUNDS = 10;
  */
 export function createSfuKey(tenant_id, secret_key) {
   const db = getDatabase();
-  const secretKeyHash = bcrypt.hashSync(secret_key, SALT_ROUNDS);
+  const secretKeyHash = bcryptjs.hashSync(secret_key, SALT_ROUNDS);
   const now = new Date().toISOString();
 
   const stmt = db.prepare(
@@ -44,7 +44,7 @@ export function registerSfu({ name, url, announced_ip, port, secret_key }) {
   let matchingSfu = null;
 
   for (const sfu of sfus) {
-    if (bcrypt.compareSync(secret_key, sfu.secret_key_hash)) {
+    if (bcryptjs.compareSync(secret_key, sfu.secret_key_hash)) {
       matchingSfu = sfu;
       break;
     }
@@ -99,7 +99,7 @@ export function verifySfuSecretKey(secretKey) {
   const sfus = stmt.all();
 
   for (const sfu of sfus) {
-    if (bcrypt.compareSync(secretKey, sfu.secret_key_hash)) {
+    if (bcryptjs.compareSync(secretKey, sfu.secret_key_hash)) {
       const { secret_key_hash, ...sfuWithoutHash } = sfu;
       return sfuWithoutHash;
     }

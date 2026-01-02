@@ -1,5 +1,5 @@
 import { getDatabase } from '../database.js';
-import bcrypt from 'bcrypt';
+import bcryptjs from 'bcryptjs';
 
 const SALT_ROUNDS = 10;
 
@@ -11,7 +11,7 @@ const SALT_ROUNDS = 10;
  */
 export function createTenant(name, apiKey) {
   const db = getDatabase();
-  const apiKeyHash = bcrypt.hashSync(apiKey, SALT_ROUNDS);
+  const apiKeyHash = bcryptjs.hashSync(apiKey, SALT_ROUNDS);
 
   const stmt = db.prepare(
     'INSERT INTO tenants (name, api_key_hash) VALUES (?, ?)'
@@ -59,7 +59,7 @@ export function verifyTenantApiKey(apiKey) {
   const tenants = stmt.all();
 
   for (const tenant of tenants) {
-    if (bcrypt.compareSync(apiKey, tenant.api_key_hash)) {
+    if (bcryptjs.compareSync(apiKey, tenant.api_key_hash)) {
       // Return tenant without hash
       const { api_key_hash, ...tenantWithoutHash } = tenant;
       return tenantWithoutHash;
@@ -99,7 +99,7 @@ export function deleteTenant(id) {
  */
 export function updateTenantApiKey(id, newApiKey) {
   const db = getDatabase();
-  const apiKeyHash = bcrypt.hashSync(newApiKey, SALT_ROUNDS);
+  const apiKeyHash = bcryptjs.hashSync(newApiKey, SALT_ROUNDS);
   const stmt = db.prepare('UPDATE tenants SET api_key_hash = ? WHERE id = ?');
   const result = stmt.run(apiKeyHash, id);
   return result.changes > 0;

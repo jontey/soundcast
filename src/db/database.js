@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,14 +16,32 @@ export function initDatabase(dbPath = './soundcast.db') {
     return db;
   }
 
-  // Create database connection
-  db = new Database(dbPath);
+  // Create database connection with optional custom native binding
+  // (used when running as a packaged executable)
+  const dbOptions = {};
+  if (process.env.BETTER_SQLITE3_BINDING && existsSync(process.env.BETTER_SQLITE3_BINDING)) {
+    dbOptions.nativeBinding = process.env.BETTER_SQLITE3_BINDING;
+    console.log('Using custom SQLite binding:', process.env.BETTER_SQLITE3_BINDING);
+  }
+
+  db = new Database(dbPath, dbOptions);
 
   // Enable foreign keys
   db.pragma('foreign_keys = ON');
 
   // Read and execute schema
-  const schemaPath = join(__dirname, 'schema.sql');
+  // Try multiple locations for schema file (for packaged executable support)
+  let schemaPath = join(__dirname, 'schema.sql');
+  if (!existsSync(schemaPath)) {
+    // When packaged, schema might be next to executable
+    const exeDir = dirname(process.execPath);
+    schemaPath = join(exeDir, 'schema.sql');
+  }
+  if (!existsSync(schemaPath)) {
+    // Also try current working directory
+    schemaPath = join(process.cwd(), 'schema.sql');
+  }
+
   const schema = readFileSync(schemaPath, 'utf8');
 
   // Execute schema (split by semicolons and execute each statement)

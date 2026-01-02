@@ -608,6 +608,11 @@
           setStatus('Error: ' + payload.message, 'disconnected');
           break;
 
+        case 'channel-list':
+          // Informational: list of active channels on the SFU
+          console.log('Active channels:', payload);
+          break;
+
         default:
           console.log('Unknown SFU action:', action);
       }
@@ -654,8 +659,16 @@
 
         // Create receive transport with dynamic ICE servers from room config
         const iceServers = getIceServersFromConfig(roomConfig);
-        console.log('Using ICE servers:', iceServers);
+        console.log('ICE servers from config:', JSON.stringify(iceServers, null, 2));
+        console.log('ICE servers have credentials:', iceServers[0]?.username, iceServers[0]?.credential);
+
+        // Pass iceServers both directly and via additionalSettings for compatibility
         transportParams.iceServers = iceServers;
+        transportParams.additionalSettings = {
+          ...transportParams.additionalSettings,
+          iceServers: iceServers
+        };
+        console.log('Transport params with iceServers:', JSON.stringify(transportParams.iceServers, null, 2));
 
         recvTransport = listenDevice.createRecvTransport(transportParams);
         console.log('Receive transport created:', recvTransport.id);

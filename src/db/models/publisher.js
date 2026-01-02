@@ -1,5 +1,5 @@
 import { getDatabase } from '../database.js';
-import bcrypt from 'bcrypt';
+import bcryptjs from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
 const SALT_ROUNDS = 10;
@@ -26,7 +26,7 @@ export function createPublisher({ room_id, name, channel_name }) {
 
   // Generate unique join token
   const joinToken = generateToken(16); // 32 character hex string
-  const joinTokenHash = bcrypt.hashSync(joinToken, SALT_ROUNDS);
+  const joinTokenHash = bcryptjs.hashSync(joinToken, SALT_ROUNDS);
 
   const stmt = db.prepare(
     'INSERT INTO publishers (room_id, name, channel_name, join_token, join_token_hash) VALUES (?, ?, ?, ?, ?)'
@@ -70,7 +70,7 @@ export function verifyPublisherToken(joinToken) {
   const publishers = stmt.all();
 
   for (const publisher of publishers) {
-    if (bcrypt.compareSync(joinToken, publisher.join_token_hash)) {
+    if (bcryptjs.compareSync(joinToken, publisher.join_token_hash)) {
       // Return publisher without hash
       const { join_token_hash, ...publisherWithoutHash } = publisher;
       return publisherWithoutHash;

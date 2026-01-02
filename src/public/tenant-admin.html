@@ -1293,6 +1293,36 @@
         event.target.style.display = 'none';
       }
     };
+
+    // Check for single-tenant mode and auto-login
+    async function checkSingleTenantMode() {
+      try {
+        const response = await fetch('/api/config');
+        const config = await response.json();
+
+        if (config.singleTenant && config.defaultApiKey) {
+          // Auto-login with default API key
+          currentApiKey = config.defaultApiKey;
+          document.getElementById('apiKeyInput').value = config.defaultApiKey;
+
+          // Show a message indicating single-tenant mode
+          const apiKeySection = document.getElementById('apiKeySection');
+          const singleTenantNotice = document.createElement('div');
+          singleTenantNotice.className = 'single-tenant-notice';
+          singleTenantNotice.innerHTML = '<strong>Single-Tenant Mode</strong> - Auto-logged in with default API key';
+          singleTenantNotice.style.cssText = 'background: #ebf8ff; border: 1px solid #90cdf4; border-radius: 8px; padding: 12px; margin-bottom: 16px; color: #2b6cb0;';
+          apiKeySection.insertBefore(singleTenantNotice, apiKeySection.firstChild);
+
+          // Auto-load rooms
+          loadRooms();
+        }
+      } catch (e) {
+        console.log('Could not check single-tenant mode:', e);
+      }
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', checkSingleTenantMode);
   </script>
 </body>
 
