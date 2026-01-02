@@ -399,9 +399,60 @@
         }
 
         document.getElementById('audioSourceContainer').style.display = 'block';
+
+        // Add change listener for switching microphone during broadcast
+        audioSourceSelect.addEventListener('change', handleAudioSourceChange);
       } catch (error) {
         console.error('Error loading audio devices:', error);
         showError('Error loading audio devices: ' + error.message);
+      }
+    }
+
+    // Handle audio source change during broadcast
+    async function handleAudioSourceChange(e) {
+      const newDeviceId = e.target.value;
+
+      // If not broadcasting, just note the selection
+      if (!pubProducer || !newDeviceId) {
+        return;
+      }
+
+      console.log('Switching microphone to:', newDeviceId);
+      setStatus('Switching microphone...', 'connecting');
+
+      try {
+        // Get new stream from selected device
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: newDeviceId,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        const newTrack = newStream.getAudioTracks()[0];
+
+        // Replace track in active producer
+        await pubProducer.replaceTrack({ track: newTrack });
+
+        // Stop old audio tracks
+        if (pubAudioStream) {
+          pubAudioStream.getTracks().forEach(track => track.stop());
+        }
+        pubAudioStream = newStream;
+
+        // Update audio meter with new source
+        if (pubAudioContext && pubAudioMeter) {
+          const newSource = pubAudioContext.createMediaStreamSource(newStream);
+          newSource.connect(pubAudioMeter);
+        }
+
+        console.log('Microphone switched successfully');
+        setStatus('Broadcasting', 'broadcasting');
+      } catch (error) {
+        console.error('Error switching microphone:', error);
+        showError('Failed to switch microphone: ' + error.message);
+        setStatus('Broadcasting', 'broadcasting');
       }
     }
 
