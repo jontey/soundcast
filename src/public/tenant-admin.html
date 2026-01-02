@@ -726,24 +726,47 @@
       return div.innerHTML;
     }
 
+    function escapeAttr(text) {
+      if (!text) return '';
+      return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
     function copyToClipboard(text) {
-      navigator.clipboard.writeText(text).then(() => {
-        showSuccess('Copied to clipboard!');
-      });
+      // Fallback function using execCommand
+      function fallbackCopy() {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showSuccess('Copied to clipboard!');
+        } catch (e) {
+          showError('Failed to copy to clipboard');
+        }
+        document.body.removeChild(textArea);
+      }
+
+      // Check if clipboard API is available (requires secure context)
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showSuccess('Copied to clipboard!');
+        }).catch(fallbackCopy);
+      } else {
+        fallbackCopy();
+      }
     }
 
     function copyPublisherToken() {
       const token = document.getElementById('newPublisherToken').textContent;
-      navigator.clipboard.writeText(token).then(() => {
-        showSuccess('Publisher token copied to clipboard!');
-      });
+      copyToClipboard(token);
     }
 
     function copyPublisherUrl() {
       const url = document.getElementById('publisherJoinUrl').textContent;
-      navigator.clipboard.writeText(url).then(() => {
-        showSuccess('Publisher URL copied to clipboard!');
-      });
+      copyToClipboard(url);
     }
 
     function showAddPublisherModal(slug) {
@@ -775,9 +798,8 @@
         }
 
         const data = await response.json();
-        const baseUrl = window.location.origin;
         document.getElementById('newPublisherToken').textContent = data.join_token;
-        document.getElementById('publisherJoinUrl').textContent = `${baseUrl}/room/${slug}/publish?token=${data.join_token}`;
+        document.getElementById('publisherJoinUrl').textContent = `${getSecureBaseUrl()}/room/${slug}/publish?token=${data.join_token}`;
         document.getElementById('newPublisherTokenDisplay').style.display = 'block';
         document.getElementById('addPublisherForm').reset();
         showSuccess('Publisher added successfully!');
@@ -821,7 +843,6 @@
           return;
         }
 
-        const baseUrl = window.location.origin;
         container.innerHTML = data.publishers.map(pub => `
           <div class="interpreter-item" style="flex-direction: column; align-items: stretch;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -832,8 +853,8 @@
               <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
             </div>
             <div class="url-value" style="font-size: 11px;">
-              <span style="word-break: break-all;">${baseUrl}/room/${slug}/publish?token=${pub.join_token}</span>
-              <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${slug}/publish?token=${pub.join_token}')">Copy</button>
+              <span style="word-break: break-all;">${getSecureBaseUrl()}/room/${slug}/publish?token=${escapeHtml(pub.join_token)}</span>
+              <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(getSecureBaseUrl() + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy</button>
             </div>
           </div>
         `).join('');
@@ -939,6 +960,29 @@
     function getDefaultSfuUrl() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       return `${protocol}//${window.location.host}/ws`;
+    }
+
+    function getSecureBaseUrl() {
+      // Always return HTTPS URL for publisher links (required for microphone access)
+      const hostname = window.location.hostname;
+      const currentPort = window.location.port;
+
+      // If already on HTTPS, use current host
+      if (window.location.protocol === 'https:') {
+        return window.location.origin;
+      }
+
+      // Port mapping: HTTP -> HTTPS
+      const portMap = {
+        '3000': '3001',
+        '80': '443',
+        '': '443'
+      };
+
+      const securePort = portMap[currentPort] || '443';
+      const portSuffix = securePort === '443' ? '' : `:${securePort}`;
+
+      return `https://${hostname}${portSuffix}`;
     }
 
     function toggleSfuMode() {
@@ -1200,7 +1244,7 @@
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
               <div class="sfu-key">${escapeHtml(sfu.secret_key)}</div>
               <div>
-                <button class="copy-btn" onclick="copyToClipboard('${sfu.secret_key}')">Copy Key</button>
+                <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(sfu.secret_key)}')">Copy Key</button>
                 <button class="copy-btn" style="background: #e53e3e; margin-left: 5px;" onclick="deleteSfuKey(${sfu.id})">Delete</button>
               </div>
             </div>
