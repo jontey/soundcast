@@ -17,6 +17,7 @@ import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from '.
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
 import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
 import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import { initTranscriber, startTranscription, stopTranscription, getTranscriptionSession } from './transcription/transcriber.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -358,6 +359,25 @@ function getRecordingStatusForTenant(tenantId) {
   return recordingStats;
 }
 
+// Notify publishers in a room about recording status change
+function notifyPublishersRecordingStatus(roomSlug, isRecording) {
+  const message = JSON.stringify({
+    type: 'recording-status',
+    isRecording
+  });
+
+  // Find all publishers in this room
+  for (const [clientId, client] of clients) {
+    if (client.isPublisher && client.channelId && client.channelId.startsWith(roomSlug + ':')) {
+      try {
+        client.socket.send(message);
+      } catch (e) {
+        fastify.log.error(`Failed to send recording status to publisher: ${e.message}`);
+      }
+    }
+  }
+}
+
 // Notify tenant admins about recording status change
 function notifyRecordingStatusChange(tenantId, roomSlug, status) {
   const adminClients = tenantAdminClients.get(tenantId);
@@ -374,6 +394,49 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
       socket.send(message);
     } catch (e) {
       fastify.log.error(`Failed to send recording status to admin: ${e.message}`);
+    }
+  }
+
+  // Also notify publishers in the room
+  notifyPublishersRecordingStatus(roomSlug, status.isRecording || false);
+}
+
+// Notify tenant admins about new transcript
+function notifyTranscriptUpdate(tenantId, roomSlug, transcript) {
+  const adminClients = tenantAdminClients.get(tenantId);
+  if (!adminClients) return;
+
+  const message = JSON.stringify({
+    type: 'transcription-update',
+    roomSlug,
+    transcript
+  });
+
+  for (const socket of adminClients) {
+    try {
+      socket.send(message);
+    } catch (e) {
+      fastify.log.error(`Failed to send transcript update to admin: ${e.message}`);
+    }
+  }
+}
+
+// Notify tenant admins about transcription session status change
+function notifyTranscriptionSessionUpdate(tenantId, roomSlug, sessionUpdate) {
+  const adminClients = tenantAdminClients.get(tenantId);
+  if (!adminClients) return;
+
+  const message = JSON.stringify({
+    type: 'transcription-session-update',
+    roomSlug,
+    ...sessionUpdate
+  });
+
+  for (const socket of adminClients) {
+    try {
+      socket.send(message);
+    } catch (e) {
+      fastify.log.error(`Failed to send transcription session update to admin: ${e.message}`);
     }
   }
 }
@@ -1011,6 +1074,68 @@ async function registerMainWsRoutes(fastify) {
                   fastify.log.error(`Failed to add producer to recording: ${err.message}`);
                 }
               }
+
+              // Start transcription for this producer
+              if (room && process.env.TRANSCRIPTION_ENABLED === 'true') {
+                try {
+                  // Get publisher info to get language preference
+                  const publishers = listPublishersByRoom(room.id);
+                  const publisher = publishers.find(p => p.channel_name === channelName && p.name === clientInfo.publisherName);
+                  const language = publisher?.transcription_language || 'en';
+
+                  // Get recording context if recording is active
+                  const recordingContext = getRecordingContextForProducer(room.id, producerId);
+
+                  const session = await startTranscription(room.id, producer, {
+                    channelName,
+                    producerName: clientInfo.publisherName || `producer_${Date.now()}`,
+                    language,
+                    roomSlug,
+                    recordingContext
+                  });
+
+                  if (session) {
+                    // Listen for transcription events and broadcast to listeners
+                    session.on('transcription', (segment) => {
+                      // Broadcast to all listeners in the channel
+                      const channel = channels.get(clientInfo.channelId);
+                      if (channel) {
+                        for (const [consumerId, consumerInfo] of channel.consumers) {
+                          const listenerClient = clients.get(consumerInfo.clientId);
+                          if (listenerClient && listenerClient.socket) {
+                            try {
+                              listenerClient.socket.send(JSON.stringify({
+                                type: 'transcription',
+                                data: segment
+                              }));
+                            } catch (e) {
+                              // Socket closed
+                            }
+                          }
+                        }
+                      }
+
+                      // Also send to publisher (self-transcription)
+                      try {
+                        connection.send(JSON.stringify({
+                          type: 'transcription-self',
+                          data: {
+                            text: segment.text,
+                            timestamp: segment.timestamp,
+                            confidence: segment.confidence
+                          }
+                        }));
+                      } catch (e) {
+                        // Socket closed
+                      }
+                    });
+
+                    fastify.log.info(`Started transcription for producer ${producerId} (language: ${language})`);
+                  }
+                } catch (err) {
+                  fastify.log.error(`Failed to start transcription: ${err.message}`);
+                }
+              }
             }
 
             // Create consumers for existing listeners in the same channel
@@ -1396,6 +1521,13 @@ async function registerMainWsRoutes(fastify) {
                 fastify.log.error(`Failed to remove producer from recording on disconnect: ${err.message}`);
               });
             }
+
+            // Stop transcription for this producer
+            if (process.env.TRANSCRIPTION_ENABLED === 'true') {
+              stopTranscription(producer.id).catch(err => {
+                fastify.log.error(`Failed to stop transcription on disconnect: ${err.message}`);
+              });
+            }
           }
 
           for (const [consumerId, consumer] of channel.consumers) {
@@ -1469,7 +1601,9 @@ async function registerRoomWsRoutes(fastify) {
     // Parse ICE servers from JSON and generate dynamic TURN credentials
     let iceServers;
     try {
-      const rawIceServers = JSON.parse(room.coturn_config_json);
+      const parsed = JSON.parse(room.coturn_config_json);
+      // Handle both formats: array or object with servers property
+      const rawIceServers = Array.isArray(parsed) ? parsed : (parsed.servers || []);
       iceServers = processIceServers(rawIceServers);
     } catch (e) {
       fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
@@ -1581,7 +1715,9 @@ async function registerRoomWsRoutes(fastify) {
     // Parse ICE servers from JSON and generate dynamic TURN credentials
     let iceServers;
     try {
-      const rawIceServers = JSON.parse(room.coturn_config_json);
+      const parsed = JSON.parse(room.coturn_config_json);
+      // Handle both formats: array or object with servers property
+      const rawIceServers = Array.isArray(parsed) ? parsed : (parsed.servers || []);
       iceServers = processIceServers(rawIceServers);
     } catch (e) {
       fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
@@ -1603,7 +1739,9 @@ async function registerRoomWsRoutes(fastify) {
         sfuUrl: sfuUrl,
         iceServers: iceServers,
         isLocalOnly: room.is_local_only,
-        channelName: publisher.channel_name
+        channelName: publisher.channel_name,
+        transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
+        isRecording: isRecording(room.id)
       }
     };
 
@@ -1893,6 +2031,33 @@ function createHttpsServer() {
   return fastifyHttps;
 }
 
+/**
+ * Get recording context for a producer
+ * @param {number} roomId - Room ID
+ * @param {string} producerId - Producer ID
+ * @returns {object|null} Recording context or null
+ */
+function getRecordingContextForProducer(roomId, producerId) {
+  if (!isRecording(roomId)) return null;
+
+  const recordings = getActiveRecordings();
+  const session = recordings.get(roomId);
+  if (!session) return null;
+
+  const track = session.tracks.get(producerId);
+  if (!track) return null;
+
+  // Extract baseFilename (remove .ogg extension)
+  const baseFilename = path.basename(track.filePath, '.ogg');
+
+  return {
+    recordingId: session.recordingId,
+    folderPath: session.folderPath,
+    channelName: track.channelName,
+    baseFilename
+  };
+}
+
 // Main async entry point
 async function main() {
   // Create mediasoup Worker
@@ -1917,6 +2082,19 @@ async function main() {
     fastify,
     onStatusChange: notifyRecordingStatusChange
   });
+
+  // Initialize transcriber module
+  initTranscriber({
+    router,
+    channels,
+    fastify,
+    onTranscriptUpdate: notifyTranscriptUpdate,
+    onSessionUpdate: notifyTranscriptionSessionUpdate
+  });
+
+  // Decorate fastify with router and channels for API routes
+  fastify.decorate('mediasoupRouter', router);
+  fastify.decorate('mediasoupChannels', channels);
 
   // Start HTTP server
   try {
