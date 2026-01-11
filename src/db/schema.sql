@@ -54,6 +54,31 @@ CREATE TABLE IF NOT EXISTS sfus (
     FOREIGN KEY (tenant_id) REFERENCES tenants(id)
 );
 
+-- 2.6. Recordings Model (room-level recording sessions)
+CREATE TABLE IF NOT EXISTS recordings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL,
+    folder_name TEXT NOT NULL,                   -- Unique folder: "roomSlug_YYYYMMDD_HHMMSS"
+    status TEXT NOT NULL DEFAULT 'recording',    -- recording, stopped, error
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    stopped_at DATETIME,
+    FOREIGN KEY (room_id) REFERENCES rooms(id)
+);
+
+-- 2.7. Recording Tracks Model (individual producer recordings within a session)
+CREATE TABLE IF NOT EXISTS recording_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_id INTEGER NOT NULL,
+    channel_name TEXT NOT NULL,
+    producer_id TEXT NOT NULL,                   -- mediasoup producer ID
+    producer_name TEXT,                          -- Publisher name if available
+    file_path TEXT NOT NULL,                     -- Relative path within recording folder
+    status TEXT NOT NULL DEFAULT 'recording',    -- recording, stopped, error
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    stopped_at DATETIME,
+    FOREIGN KEY (recording_id) REFERENCES recordings(id)
+);
+
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_rooms_tenant_id ON rooms(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rooms_slug ON rooms(slug);
@@ -62,3 +87,6 @@ CREATE INDEX IF NOT EXISTS idx_publishers_join_token_hash ON publishers(join_tok
 CREATE INDEX IF NOT EXISTS idx_sfus_tenant_id ON sfus(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_sfus_status ON sfus(status);
 CREATE INDEX IF NOT EXISTS idx_sfus_last_heartbeat ON sfus(last_heartbeat);
+CREATE INDEX IF NOT EXISTS idx_recordings_room_id ON recordings(room_id);
+CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
+CREATE INDEX IF NOT EXISTS idx_recording_tracks_recording_id ON recording_tracks(recording_id);

@@ -447,8 +447,9 @@
 
       ws.onopen = () => {
         console.log('Room WebSocket connected');
-        roomReconnectAttempts = 0; // Reset on successful connection
+        roomReconnectAttempts = 0;
         setStatus('Connected, waiting for configuration...', 'connected');
+        ws.send(JSON.stringify({ type: 'get-config' }));
       };
 
       ws.onmessage = async (event) => {
@@ -1005,7 +1006,7 @@
       selectedChannel = e.target.value;
     });
 
-    // Connect to room on page load to get channels list
+    // Connect to room on page load
     connectToRoom();
   </script>
 </body>

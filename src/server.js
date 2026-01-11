@@ -16,6 +16,7 @@ import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.j
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
 import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
+import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -292,19 +293,32 @@ function getChannelStatsForTenant(tenantId) {
       // Full channel ID format used by SFU: "roomSlug:channelName"
       const fullChannelId = `${room.slug}:${channelName}`;
 
+      // Helper to count unique listeners in a channel
+      function countUniqueListeners(ch) {
+        const uniqueListeners = new Set();
+        if (ch.consumers) {
+          for (const [consumerId, consumer] of ch.consumers) {
+            if (consumer.clientId) {
+              uniqueListeners.add(consumer.clientId);
+            }
+          }
+        }
+        return uniqueListeners.size;
+      }
+
       // Check main SFU's channels Map (try both formats)
       if (channels.has(fullChannelId)) {
         const ch = channels.get(fullChannelId);
         stats[room.slug][channelName] = {
           publishers: ch.producers ? ch.producers.size : 0,
-          subscribers: ch.consumers ? ch.consumers.size : 0
+          subscribers: countUniqueListeners(ch)
         };
       } else if (channels.has(channelName)) {
         // Fallback to legacy format
         const ch = channels.get(channelName);
         stats[room.slug][channelName] = {
           publishers: ch.producers ? ch.producers.size : 0,
-          subscribers: ch.consumers ? ch.consumers.size : 0
+          subscribers: countUniqueListeners(ch)
         };
       }
       // Check local SFU stats (if room uses local SFU)
@@ -326,6 +340,42 @@ function getChannelStatsForTenant(tenantId) {
     }
   }
   return stats;
+}
+
+// Get recording status for all rooms in a tenant
+function getRecordingStatusForTenant(tenantId) {
+  const recordingStats = {};
+  const rooms = listRoomsByTenant(tenantId);
+
+  for (const room of rooms) {
+    const status = getRecordingStatus(room.id);
+    if (status) {
+      recordingStats[room.slug] = status;
+    } else {
+      recordingStats[room.slug] = { isRecording: false };
+    }
+  }
+  return recordingStats;
+}
+
+// Notify tenant admins about recording status change
+function notifyRecordingStatusChange(tenantId, roomSlug, status) {
+  const adminClients = tenantAdminClients.get(tenantId);
+  if (!adminClients) return;
+
+  const message = JSON.stringify({
+    type: 'recording-status',
+    roomSlug,
+    ...status
+  });
+
+  for (const socket of adminClients) {
+    try {
+      socket.send(message);
+    } catch (e) {
+      fastify.log.error(`Failed to send recording status to admin: ${e.message}`);
+    }
+  }
 }
 
 // Find room and tenant for a channel name
@@ -382,9 +432,18 @@ function notifyTenantAdmins(channelId, source = 'main') {
   let channelStats;
   if (source === 'main' && channels.has(channelId)) {
     const ch = channels.get(channelId);
+    // Count unique listeners (by clientId) to match what publishers see
+    const uniqueListeners = new Set();
+    if (ch.consumers) {
+      for (const [consumerId, consumer] of ch.consumers) {
+        if (consumer.clientId) {
+          uniqueListeners.add(consumer.clientId);
+        }
+      }
+    }
     channelStats = {
       publishers: ch.producers ? ch.producers.size : 0,
-      subscribers: ch.consumers ? ch.consumers.size : 0
+      subscribers: uniqueListeners.size
     };
   } else {
     channelStats = { publishers: 0, subscribers: 0 };
@@ -406,6 +465,36 @@ function notifyTenantAdmins(channelId, source = 'main') {
       socket.send(JSON.stringify(update));
     } catch (e) {
       fastify.log.error(`Failed to send update to tenant admin: ${e.message}`);
+    }
+  }
+}
+
+// Notify publishers in a channel about listener count changes
+function notifyPublishersListenerCount(channelId) {
+  const channel = channels.get(channelId);
+  if (!channel) return;
+
+  // Count unique listeners (consumers with unique clientIds)
+  const uniqueListeners = new Set();
+  for (const [consumerId, consumer] of channel.consumers) {
+    if (consumer.clientId) {
+      uniqueListeners.add(consumer.clientId);
+    }
+  }
+  const listenerCount = uniqueListeners.size;
+
+  // Notify all publishers in this channel
+  for (const [producerId, producerInfo] of channel.producers) {
+    if (producerInfo.clientId && clients.has(producerInfo.clientId)) {
+      const publisherClient = clients.get(producerInfo.clientId);
+      try {
+        publisherClient.socket.send(JSON.stringify({
+          action: 'listener-count',
+          data: { count: listenerCount, channelId }
+        }));
+      } catch (e) {
+        // Client may have disconnected
+      }
     }
   }
 }
@@ -813,10 +902,11 @@ async function registerMainWsRoutes(fastify) {
           // Create transport
           const { transport, params } = await createWebRtcTransport();
 
-          // Store transport
+          // Store transport and publisher name (for recording)
           clientInfo.transport = transport;
           clientInfo.isPublisher = true;
           clientInfo.channelId = data.channelId;
+          clientInfo.publisherName = data.publisherName || null;
 
 
 
@@ -883,15 +973,17 @@ async function registerMainWsRoutes(fastify) {
               fastify.log.debug(`Producer score update for ${producer.id}:`, score);
             });
 
-            // Store producer
+            // Store producer with name for recording
             const publishChannel = channels.get(clientInfo.channelId);
             const producerId = uuidv4();
             clientInfo.producer = { id: producerId, producer };
-            publishChannel.producers.set(producerId, {
+            const producerInfo = {
               transport: clientInfo.transport,
               producer,
-              clientId
-            });
+              clientId,
+              name: clientInfo.publisherName || `producer_${Date.now()}`
+            };
+            publishChannel.producers.set(producerId, producerInfo);
 
             fastify.log.info(`Audio producer created successfully with id ${producer.id}`);
             connection.send(JSON.stringify({
@@ -904,6 +996,22 @@ async function registerMainWsRoutes(fastify) {
 
             // Notify tenant admins about the new publisher
             notifyTenantAdmins(clientInfo.channelId);
+
+            // Check if recording is active for this room and add producer if so
+            const channelParts = clientInfo.channelId.split(':');
+            if (channelParts.length >= 2) {
+              const roomSlug = channelParts[0];
+              const channelName = channelParts.slice(1).join(':');
+              const room = getRoomBySlug(roomSlug);
+              if (room && isRecording(room.id)) {
+                try {
+                  await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  fastify.log.info(`Added producer ${producerId} to active recording for room ${roomSlug}`);
+                } catch (err) {
+                  fastify.log.error(`Failed to add producer to recording: ${err.message}`);
+                }
+              }
+            }
 
             // Create consumers for existing listeners in the same channel
             for (const [otherId, otherClient] of clients) {
@@ -957,6 +1065,9 @@ async function registerMainWsRoutes(fastify) {
                 }
               }
             }
+
+            // Send listener count after consumers are created for existing listeners
+            notifyPublishersListenerCount(clientInfo.channelId);
           } catch (error) {
             fastify.log.error(`Error creating producer: ${error.message}`);
             connection.send(JSON.stringify({
@@ -1122,6 +1233,7 @@ async function registerMainWsRoutes(fastify) {
             // Notify tenant admins about the new subscriber
             if (consumersData.length > 0) {
               notifyTenantAdmins(clientInfo.channelId);
+              notifyPublishersListenerCount(clientInfo.channelId);
             }
           } catch (error) {
             fastify.log.error(`Error creating consumer for client ${clientId}: ${error.message}`);
@@ -1162,6 +1274,18 @@ async function registerMainWsRoutes(fastify) {
               }
 
               stopBroadcastChannel.producers.delete(prodId);
+
+              // Stop recording for this producer if recording is active
+              const stopChannelParts = data.channelId.split(':');
+              if (stopChannelParts.length >= 2) {
+                const stopRoomSlug = stopChannelParts[0];
+                const stopRoom = getRoomBySlug(stopRoomSlug);
+                if (stopRoom && isRecording(stopRoom.id)) {
+                  removeProducerFromRecording(stopRoom.id, prodId).catch(err => {
+                    fastify.log.error(`Failed to remove producer from recording: ${err.message}`);
+                  });
+                }
+              }
 
               // Remove related consumers
               for (const [consumerId, consumer] of stopBroadcastChannel.consumers) {
@@ -1228,6 +1352,7 @@ async function registerMainWsRoutes(fastify) {
 
             // Notify tenant admins about the subscriber leaving
             notifyTenantAdmins(clientInfo.channelId);
+            notifyPublishersListenerCount(clientInfo.channelId);
 
             // Reset client info
             clientInfo.isListener = false;
@@ -1261,6 +1386,18 @@ async function registerMainWsRoutes(fastify) {
           }
           channel.producers.delete(prodId);
 
+          // Stop recording for this producer if recording is active
+          const closeChannelParts = clientInfo.channelId.split(':');
+          if (closeChannelParts.length >= 2) {
+            const closeRoomSlug = closeChannelParts[0];
+            const closeRoom = getRoomBySlug(closeRoomSlug);
+            if (closeRoom && isRecording(closeRoom.id)) {
+              removeProducerFromRecording(closeRoom.id, prodId).catch(err => {
+                fastify.log.error(`Failed to remove producer from recording on disconnect: ${err.message}`);
+              });
+            }
+          }
+
           for (const [consumerId, consumer] of channel.consumers) {
             if (consumer.producerId === prodId) {
               if (consumer.consumer) {
@@ -1278,6 +1415,8 @@ async function registerMainWsRoutes(fastify) {
 
         // Notify tenant admins about the publisher disconnect
         notifyTenantAdmins(clientInfo.channelId);
+        // Notify remaining publishers about updated listener count
+        notifyPublishersListenerCount(clientInfo.channelId);
       }
 
       if (clientInfo.isListener && clientInfo.channelId && channels.has(clientInfo.channelId)) {
@@ -1296,6 +1435,7 @@ async function registerMainWsRoutes(fastify) {
 
         // Notify tenant admins about the listener disconnect
         notifyTenantAdmins(clientInfo.channelId);
+        notifyPublishersListenerCount(clientInfo.channelId);
       }
 
       // Remove client from clients map
@@ -1347,7 +1487,7 @@ async function registerRoomWsRoutes(fastify) {
     // Rewrite SFU URL to wss:// if client connected securely
     const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
 
-    // Send configuration message with channels
+    // Prepare configuration message with channels
     const config = {
       type: 'config',
       data: {
@@ -1359,15 +1499,16 @@ async function registerRoomWsRoutes(fastify) {
       }
     };
 
-    connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, sfuUrl: ${sfuUrl}, channels: ${channels.join(', ')}`);
-
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
       try {
         const payload = JSON.parse(message.toString());
 
-        if (payload.type === 'webrtc_signal') {
+        if (payload.type === 'get-config') {
+          // Client requests config after handlers are ready (fixes iOS Safari timing issue)
+          connection.send(JSON.stringify(config));
+          fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, sfuUrl: ${sfuUrl}, channels: ${channels.join(', ')}`);
+        } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
           fastify.log.info(`WebRTC signal from listener ${clientId}: ${payload.data.payload.type}`);
@@ -1455,7 +1596,7 @@ async function registerRoomWsRoutes(fastify) {
     // Rewrite SFU URL to wss:// if client connected securely
     const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
 
-    // Send configuration message with channel name
+    // Prepare configuration message with channel name
     const config = {
       type: 'config',
       data: {
@@ -1466,15 +1607,16 @@ async function registerRoomWsRoutes(fastify) {
       }
     };
 
-    connection.send(JSON.stringify(config));
-    fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, sfuUrl: ${sfuUrl}, channel: ${publisher.channel_name}`);
-
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
       try {
         const payload = JSON.parse(message.toString());
 
-        if (payload.type === 'webrtc_signal') {
+        if (payload.type === 'get-config') {
+          // Client requests config after handlers are ready (fixes iOS Safari timing issue)
+          connection.send(JSON.stringify(config));
+          fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, sfuUrl: ${sfuUrl}, channel: ${publisher.channel_name}`);
+        } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
           fastify.log.info(`WebRTC signal from publisher ${clientId}: ${payload.data.payload.type}`);
@@ -1533,6 +1675,13 @@ async function registerAdminWsRoutes(fastify) {
       stats
     }));
 
+    // Send initial recording status for all rooms
+    const recordingStats = getRecordingStatusForTenant(tenant.id);
+    connection.send(JSON.stringify({
+      type: 'recording-stats',
+      stats: recordingStats
+    }));
+
     connection.on('message', async (message) => {
       try {
         const payload = JSON.parse(message.toString());
@@ -1543,6 +1692,12 @@ async function registerAdminWsRoutes(fastify) {
           connection.send(JSON.stringify({
             type: 'channel-stats',
             stats
+          }));
+          // Also send recording status
+          const recordingStats = getRecordingStatusForTenant(tenant.id);
+          connection.send(JSON.stringify({
+            type: 'recording-stats',
+            stats: recordingStats
           }));
         }
       } catch (e) {
@@ -1754,6 +1909,14 @@ async function main() {
 
   // Create Router
   router = await worker.createRouter({ mediaCodecs });
+
+  // Initialize recorder module with notification callback
+  initRecorder({
+    router,
+    channels,
+    fastify,
+    onStatusChange: notifyRecordingStatusChange
+  });
 
   // Start HTTP server
   try {

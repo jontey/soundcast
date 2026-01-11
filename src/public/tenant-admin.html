@@ -121,6 +121,25 @@
       color: #742a2a;
     }
 
+    .badge.recording {
+      background: #e53e3e;
+      color: white;
+      animation: pulse 2s infinite;
+    }
+
+    .btn.recording-active {
+      background: #38a169;
+    }
+
+    .btn.recording-active:hover {
+      background: #2f855a;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
     .room-urls {
       background: white;
       padding: 15px;
@@ -505,6 +524,8 @@
     let currentApiKey = '';
     let adminWs = null;
     let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
+    let recordingStatus = {}; // roomSlug -> { isRecording, startedAt, trackCount, ... }
+    let recordingTimers = {}; // roomSlug -> intervalId for duration updates
 
     // Connect to admin WebSocket for real-time stats
     function connectAdminWebSocket() {
@@ -536,6 +557,14 @@
               subscribers: msg.subscribers
             };
             updateChannelStatsForRoom(msg.roomSlug);
+          } else if (msg.type === 'recording-stats') {
+            // Initial recording status for all rooms
+            recordingStatus = msg.stats;
+            updateAllRecordingUI();
+          } else if (msg.type === 'recording-status') {
+            // Recording status update for a specific room
+            recordingStatus[msg.roomSlug] = msg;
+            updateRecordingUI(msg.roomSlug);
           } else if (msg.type === 'error') {
             console.error('Admin WebSocket error:', msg.data.message);
           }
@@ -703,6 +732,19 @@
             </div>
             <div id="live-stats-${room.slug}">
               <div style="padding: 10px; color: #718096; font-size: 13px;">Loading...</div>
+            </div>
+          </div>
+          <div style="margin-top: 15px; background: #fff5f5; padding: 12px; border-radius: 6px; border-left: 3px solid #e53e3e;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <span style="font-weight: bold; color: #2d3748; font-size: 14px;">Recording</span>
+                <span id="recording-indicator-${room.slug}" class="badge recording" style="display: none; margin-left: 10px;">REC</span>
+                <span id="recording-duration-${room.slug}" style="font-family: monospace; margin-left: 10px; display: none;">00:00:00</span>
+                <span id="recording-tracks-${room.slug}" style="font-size: 12px; color: #718096; margin-left: 10px; display: none;"></span>
+              </div>
+              <button id="record-btn-${room.slug}" onclick="toggleRecording('${room.slug}')" class="btn btn-danger" data-room-id="${room.id}">
+                Start Recording
+              </button>
             </div>
           </div>
           <div style="margin-top: 15px;">
@@ -1328,6 +1370,113 @@
         loadRooms();
       } catch (error) {
         showError(error.message);
+      }
+    }
+
+    // ============ Recording Functions ============
+
+    // Format duration in HH:MM:SS
+    function formatDuration(startedAt) {
+      const start = new Date(startedAt);
+      const now = new Date();
+      const diffMs = now - start;
+      const hours = Math.floor(diffMs / 3600000);
+      const minutes = Math.floor((diffMs % 3600000) / 60000);
+      const seconds = Math.floor((diffMs % 60000) / 1000);
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // Toggle recording for a room
+    async function toggleRecording(roomSlug) {
+      const status = recordingStatus[roomSlug];
+      const isRecording = status?.isRecording;
+      const endpoint = isRecording ? 'stop' : 'start';
+
+      const btn = document.getElementById(`record-btn-${roomSlug}`);
+      btn.disabled = true;
+      btn.textContent = isRecording ? 'Stopping...' : 'Starting...';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || `Failed to ${endpoint} recording`);
+        }
+
+        const result = await response.json();
+        showSuccess(result.message);
+
+        // Update local status (WebSocket will also send update)
+        recordingStatus[roomSlug] = {
+          isRecording: !isRecording,
+          ...result
+        };
+        updateRecordingUI(roomSlug);
+      } catch (error) {
+        showError(error.message);
+        btn.disabled = false;
+        btn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
+      }
+    }
+
+    // Update recording UI for a specific room
+    function updateRecordingUI(roomSlug) {
+      const status = recordingStatus[roomSlug];
+      const btn = document.getElementById(`record-btn-${roomSlug}`);
+      const indicator = document.getElementById(`recording-indicator-${roomSlug}`);
+      const duration = document.getElementById(`recording-duration-${roomSlug}`);
+      const tracks = document.getElementById(`recording-tracks-${roomSlug}`);
+
+      if (!btn) return;
+
+      btn.disabled = false;
+
+      if (status?.isRecording) {
+        btn.textContent = 'Stop Recording';
+        btn.classList.add('recording-active');
+        indicator.style.display = 'inline';
+        duration.style.display = 'inline';
+        tracks.style.display = 'inline';
+        tracks.textContent = `(${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''})`;
+
+        // Start duration timer
+        if (recordingTimers[roomSlug]) {
+          clearInterval(recordingTimers[roomSlug]);
+        }
+        recordingTimers[roomSlug] = setInterval(() => {
+          if (status.startedAt) {
+            duration.textContent = formatDuration(status.startedAt);
+          }
+        }, 1000);
+        // Update immediately
+        if (status.startedAt) {
+          duration.textContent = formatDuration(status.startedAt);
+        }
+      } else {
+        btn.textContent = 'Start Recording';
+        btn.classList.remove('recording-active');
+        indicator.style.display = 'none';
+        duration.style.display = 'none';
+        tracks.style.display = 'none';
+
+        // Stop duration timer
+        if (recordingTimers[roomSlug]) {
+          clearInterval(recordingTimers[roomSlug]);
+          delete recordingTimers[roomSlug];
+        }
+      }
+    }
+
+    // Update recording UI for all rooms
+    function updateAllRecordingUI() {
+      for (const roomSlug in recordingStatus) {
+        updateRecordingUI(roomSlug);
       }
     }
 

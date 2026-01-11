@@ -62,6 +62,32 @@
       display: inline-block;
     }
 
+    .listener-count {
+      padding: 12px 20px;
+      background: #f0fff4;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+
+    .listener-count-icon {
+      font-size: 20px;
+    }
+
+    .listener-count-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #22543d;
+    }
+
+    .listener-count-label {
+      font-size: 14px;
+      color: #276749;
+    }
+
     .status {
       text-align: center;
       padding: 15px;
@@ -231,6 +257,12 @@
       Connecting to room...
     </div>
 
+    <div class="listener-count" id="listenerCount" style="display: none;">
+      <span class="listener-count-icon">&#128266;</span>
+      <span class="listener-count-value" id="listenerCountValue">0</span>
+      <span class="listener-count-label" id="listenerCountLabel">listeners</span>
+    </div>
+
     <div id="errorMessage" class="error"></div>
 
     <div id="configInfo" class="info-box" style="display: none;">
@@ -319,6 +351,17 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    // Update listener count display
+    function updateListenerCount(count) {
+      const countEl = document.getElementById('listenerCount');
+      const valueEl = document.getElementById('listenerCountValue');
+      const labelEl = document.getElementById('listenerCountLabel');
+
+      valueEl.textContent = count;
+      labelEl.textContent = count === 1 ? 'listener' : 'listeners';
+      countEl.style.display = 'flex';
     }
 
     // Attempt to reconnect to room WebSocket
@@ -497,6 +540,8 @@
         console.log('Room WebSocket connected');
         roomReconnectAttempts = 0; // Reset on successful connection
         setStatus('Connected, waiting for configuration...', 'connected');
+        // Request config after handlers are ready (fixes iOS Safari timing issue)
+        ws.send(JSON.stringify({ type: 'get-config' }));
       };
 
       ws.onmessage = async (event) => {
@@ -654,6 +699,11 @@
         case 'broadcasting-stopped':
           // Another publisher stopped broadcasting on this channel
           console.log('Broadcasting stopped on channel:', payload.channelId);
+          break;
+
+        case 'listener-count':
+          // Update listener count display
+          updateListenerCount(payload.count);
           break;
 
         default:
@@ -857,6 +907,8 @@
       document.getElementById('startBtn').style.display = 'block';
       document.getElementById('stopBtn').style.display = 'none';
       document.getElementById('audioMeter').style.display = 'none';
+      document.getElementById('listenerCount').style.display = 'none';
+      document.getElementById('listenerCountValue').textContent = '0';
 
       if (sfuWs && sfuWs.readyState === WebSocket.OPEN) {
         setStatus('Ready to broadcast', 'connected');

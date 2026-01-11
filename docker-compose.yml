@@ -21,11 +21,15 @@ services:
       - HTTPS_PORT=3001
       - TLS_KEY_PATH=/app/certs/server.key
       - TLS_CERT_PATH=/app/certs/server.crt
+      # Recording settings
+      - RECORDING_DIR=/app/recordings
     volumes:
       - soundcast-data:/app/data
+      - soundcast-recordings:/app/recordings
     restart: unless-stopped
     # For air-gapped deployments, network_mode: host may work better
     network_mode: host
 
 volumes:
   soundcast-data:
+  soundcast-recordings:

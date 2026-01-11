@@ -1,6 +1,8 @@
 import { authenticateTenant } from '../middleware/auth.js';
 import { createRoom, getRoomBySlug, updateRoom, listRoomsByTenant, deleteRoom } from '../db/models/room.js';
 import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherById } from '../db/models/publisher.js';
+import { startRecording, stopRecording, getRecordingStatus, isRecording } from '../recording/recorder.js';
+import { listRecordingsByRoomId } from '../db/models/recording.js';
 
 /**
  * Register REST API routes
@@ -412,6 +414,192 @@ export async function registerApiRoutes(fastify) {
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: 'Failed to delete room'
+        });
+      }
+    }
+  });
+
+  // ============ Recording Endpoints ============
+
+  // POST /api/rooms/:room_slug/recordings/start - Start recording
+  fastify.post('/api/rooms/:room_slug/recordings/start', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to record this room'
+          });
+        }
+
+        // Check if already recording
+        if (isRecording(room.id)) {
+          return reply.code(409).send({
+            error: 'Conflict',
+            message: 'Recording already in progress for this room'
+          });
+        }
+
+        const result = await startRecording(room_slug, room.id, request.tenant.id);
+
+        return reply.code(200).send({
+          message: 'Recording started',
+          ...result
+        });
+      } catch (error) {
+        console.error('Error starting recording:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: error.message || 'Failed to start recording'
+        });
+      }
+    }
+  });
+
+  // POST /api/rooms/:room_slug/recordings/stop - Stop recording
+  fastify.post('/api/rooms/:room_slug/recordings/stop', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to manage recordings for this room'
+          });
+        }
+
+        // Check if recording is active
+        if (!isRecording(room.id)) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'No active recording for this room'
+          });
+        }
+
+        const result = await stopRecording(room_slug, room.id);
+
+        return reply.code(200).send({
+          message: 'Recording stopped',
+          ...result
+        });
+      } catch (error) {
+        console.error('Error stopping recording:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: error.message || 'Failed to stop recording'
+        });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/recordings/status - Get current recording status
+  fastify.get('/api/rooms/:room_slug/recordings/status', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to view this room'
+          });
+        }
+
+        const status = getRecordingStatus(room.id);
+
+        if (!status) {
+          return reply.code(200).send({
+            isRecording: false
+          });
+        }
+
+        return reply.code(200).send(status);
+      } catch (error) {
+        console.error('Error getting recording status:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to get recording status'
+        });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/recordings - List all recordings for room
+  fastify.get('/api/rooms/:room_slug/recordings', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+
+      try {
+        // Check if room exists and belongs to tenant
+        const room = getRoomBySlug(room_slug);
+
+        if (!room) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: 'Room not found'
+          });
+        }
+
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'You do not have permission to view this room'
+          });
+        }
+
+        const recordings = listRecordingsByRoomId(room.id);
+
+        return reply.code(200).send({
+          recordings: recordings.map(r => ({
+            id: r.id,
+            folderName: r.folder_name,
+            status: r.status,
+            startedAt: r.started_at,
+            stoppedAt: r.stopped_at
+          }))
+        });
+      } catch (error) {
+        console.error('Error listing recordings:', error);
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: 'Failed to list recordings'
         });
       }
     }
