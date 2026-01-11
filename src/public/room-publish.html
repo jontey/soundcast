@@ -242,6 +242,119 @@
       outline: none;
       border-color: #667eea;
     }
+
+    /* Self-Transcription Display */
+    .self-transcription {
+      background: #f7fafc;
+      border-left: 4px solid #667eea;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+      animation: fadeIn 0.3s;
+    }
+
+    .self-transcription.active {
+      display: block;
+    }
+
+    .self-transcription-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #718096;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .self-transcription-text {
+      font-size: 16px;
+      color: #2d3748;
+      line-height: 1.5;
+    }
+
+    .self-transcription-meta {
+      font-size: 12px;
+      color: #a0aec0;
+      margin-top: 8px;
+    }
+
+    /* Recording Indicator */
+    .recording-indicator {
+      display: none;
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #fff5f5;
+      border-left: 4px solid #f56565;
+      border-radius: 8px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .recording-indicator.active {
+      display: flex;
+    }
+
+    .recording-badge {
+      width: 10px;
+      height: 10px;
+      background: #f56565;
+      border-radius: 50%;
+      animation: pulse-red 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-red {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.6;
+        transform: scale(1.1);
+      }
+    }
+
+    .recording-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #c53030;
+    }
+
+    /* Self-Transcription Toggle Button */
+    .transcript-toggle {
+      display: none;
+      margin-top: 10px;
+      padding: 10px 16px;
+      background: #e2e8f0;
+      color: #2d3748;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      width: 100%;
+    }
+
+    .transcript-toggle:hover {
+      background: #cbd5e0;
+      transform: translateY(-1px);
+    }
+
+    .transcript-toggle.active {
+      display: block;
+    }
+
+    /* Self-Transcription visibility states */
+    .self-transcription {
+      transition: opacity 0.3s ease, max-height 0.3s ease;
+      max-height: 200px;
+      overflow: hidden;
+    }
+
+    .self-transcription.hidden {
+      display: none !important;
+    }
   </style>
 </head>
 
@@ -251,6 +364,10 @@
       <div class="title">Publisher</div>
       <div class="room-name" id="roomName">Loading room...</div>
       <div class="channel-name" id="channelName" style="display: none;"></div>
+      <div class="recording-indicator" id="recordingIndicator">
+        <div class="recording-badge"></div>
+        <div class="recording-text">Recording Active</div>
+      </div>
     </div>
 
     <div id="status" class="status disconnected">
@@ -279,6 +396,18 @@
       </select>
     </div>
 
+    <!-- Self-Transcription Display -->
+    <div class="self-transcription" id="selfTranscription">
+      <div class="self-transcription-label">Your Speech</div>
+      <div class="self-transcription-text" id="selfTranscriptionText"></div>
+      <div class="self-transcription-meta" id="selfTranscriptionMeta"></div>
+    </div>
+
+    <!-- Self-Transcription Toggle Button -->
+    <button id="transcriptToggle" class="transcript-toggle" onclick="toggleSelfTranscript()">
+      Hide Self-Transcription
+    </button>
+
     <div class="audio-meter" id="audioMeter" style="display: none;">
       <div class="audio-meter-label">Audio Level</div>
       <div class="audio-meter-bar" id="audioMeterBar"></div>
@@ -287,7 +416,7 @@
     <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
       Start Broadcasting
     </button>
-    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast()" style="display: none;">
+    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
       Stop Broadcasting
     </button>
   </div>
@@ -338,6 +467,10 @@
     let sfuReconnectTimer = null;
     const pubMaxReconnectAttempts = 50;
     const pubBaseReconnectInterval = 1000;
+
+    // Auto-reconnect broadcasting state
+    let wasBroadcasting = false;
+    let lastAudioDeviceId = null;
 
     // Status management
     function setStatus(message, className) {
@@ -554,6 +687,10 @@
           } else if (message.type === 'error') {
             showError(message.data.message);
             setStatus('Error: ' + message.data.message, 'disconnected');
+          } else if (message.type === 'transcription-self') {
+            handleSelfTranscription(message.data);
+          } else if (message.type === 'recording-status') {
+            handleRecordingStatus(message.isRecording);
           }
         } catch (error) {
           console.error('Error handling message:', error);
@@ -618,8 +755,88 @@
       // Load audio devices
       await loadAudioInputDevices();
 
+      // Show recording indicator if recording is active
+      if (config.isRecording) {
+        handleRecordingStatus(true);
+      }
+
       // Connect to SFU
       connectToSfu(config.sfuUrl);
+    }
+
+    // Handle recording status updates
+    function handleRecordingStatus(isRecording) {
+      const indicator = document.getElementById('recordingIndicator');
+      if (isRecording) {
+        indicator.classList.add('active');
+      } else {
+        indicator.classList.remove('active');
+      }
+    }
+
+    // Self-transcription state
+    let selfTranscriptionTimeout = null;
+    let selfTranscriptVisible = true;
+
+    // Handle self-transcription messages
+    function handleSelfTranscription(data) {
+      console.log('Self-transcription received:', data);
+
+      const container = document.getElementById('selfTranscription');
+      const textElement = document.getElementById('selfTranscriptionText');
+      const metaElement = document.getElementById('selfTranscriptionMeta');
+      const toggleBtn = document.getElementById('transcriptToggle');
+
+      textElement.textContent = data.text;
+      metaElement.textContent = data.confidence
+        ? `Confidence: ${Math.round(data.confidence * 100)}%`
+        : '';
+
+      // Show toggle button when transcriptions start arriving
+      toggleBtn.classList.add('active');
+
+      // Only show transcription if visible preference is enabled
+      if (selfTranscriptVisible) {
+        container.classList.add('active');
+      }
+
+      // Auto-hide after 6 seconds
+      if (selfTranscriptionTimeout) {
+        clearTimeout(selfTranscriptionTimeout);
+      }
+      selfTranscriptionTimeout = setTimeout(() => {
+        container.classList.remove('active');
+      }, 6000);
+    }
+
+    // Toggle self-transcription visibility
+    function toggleSelfTranscript() {
+      selfTranscriptVisible = !selfTranscriptVisible;
+      const container = document.getElementById('selfTranscription');
+      const toggleBtn = document.getElementById('transcriptToggle');
+
+      if (selfTranscriptVisible) {
+        container.classList.remove('hidden');
+        toggleBtn.textContent = 'Hide Self-Transcription';
+        localStorage.setItem('selfTranscriptVisible', 'true');
+      } else {
+        container.classList.add('hidden');
+        container.classList.remove('active');
+        toggleBtn.textContent = 'Show Self-Transcription';
+        localStorage.setItem('selfTranscriptVisible', 'false');
+      }
+    }
+
+    // Restore self-transcription visibility preference on page load
+    function restoreSelfTranscriptPreference() {
+      const saved = localStorage.getItem('selfTranscriptVisible');
+      if (saved === 'false') {
+        selfTranscriptVisible = false;
+        const container = document.getElementById('selfTranscription');
+        const toggleBtn = document.getElementById('transcriptToggle');
+        container.classList.add('hidden');
+        toggleBtn.textContent = 'Show Self-Transcription';
+      }
     }
 
     // Connect to SFU WebSocket
@@ -671,6 +888,18 @@
           rtpCapabilities = payload;
           setStatus('Ready to broadcast', 'connected');
           document.getElementById('startBtn').disabled = false;
+
+          // Auto-resume broadcasting if we were broadcasting before disconnection
+          if (wasBroadcasting && lastAudioDeviceId) {
+            console.log('Auto-resuming broadcasting after reconnection');
+            setStatus('Resuming broadcast...', 'connecting');
+            // Small delay to ensure UI updates
+            setTimeout(() => {
+              // Ensure the audio source is selected
+              document.getElementById('audioSource').value = lastAudioDeviceId;
+              startBroadcast();
+            }, 100);
+          }
           break;
 
         case 'publisher-transport-created':
@@ -684,6 +913,7 @@
         case 'produced':
           console.log('Producer created:', payload.id);
           setStatus('Broadcasting', 'broadcasting');
+          wasBroadcasting = true; // Track that we're actively broadcasting
           break;
 
         case 'error':
@@ -767,7 +997,7 @@
       } catch (error) {
         console.error('Error handling transport:', error);
         showError('Error setting up transport: ' + error.message);
-        stopBroadcast();
+        stopBroadcast(true); // Failed during setup, clear reconnect state
       }
     }
 
@@ -785,7 +1015,7 @@
       } catch (error) {
         console.error('Error producing audio:', error);
         showError('Error producing audio: ' + error.message);
-        stopBroadcast();
+        stopBroadcast(true); // Failed during setup, clear reconnect state
       }
     }
 
@@ -799,6 +1029,9 @@
 
       try {
         setStatus('Requesting microphone access...', 'connecting');
+
+        // Save audio device ID for auto-reconnect
+        lastAudioDeviceId = audioSourceId;
 
         // Get microphone access
         pubAudioStream = await navigator.mediaDevices.getUserMedia({
@@ -843,12 +1076,20 @@
         console.error('Error starting broadcast:', error);
         showError('Failed to start broadcast: ' + error.message);
         setStatus('Ready to broadcast', 'connected');
-        stopBroadcast();
+        stopBroadcast(true); // Failed to start, clear reconnect state
       }
     }
 
     // Stop broadcasting
-    function stopBroadcast() {
+    // @param {boolean} intentional - If true, user clicked stop button. If false/undefined, it's a disconnection.
+    function stopBroadcast(intentional = false) {
+      // If intentionally stopped, clear auto-reconnect state
+      if (intentional) {
+        wasBroadcasting = false;
+        lastAudioDeviceId = null;
+      }
+      // If disconnection (not intentional), keep wasBroadcasting = true for auto-reconnect
+
       // Notify SFU about stopping
       if (sfuWs && sfuWs.readyState === WebSocket.OPEN && roomConfig) {
         sfuWs.send(JSON.stringify({
@@ -917,8 +1158,11 @@
 
     // Handle page unload
     window.addEventListener('beforeunload', () => {
-      stopBroadcast();
+      stopBroadcast(true); // Intentional stop (user leaving page)
     });
+
+    // Restore self-transcription preference on page load
+    restoreSelfTranscriptPreference();
 
     // Initialize
     connectToRoom();

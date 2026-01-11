@@ -60,6 +60,9 @@
       margin-bottom: 20px;
       color: #2d3748;
       border-bottom: 2px solid #667eea;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       padding-bottom: 10px;
     }
 
@@ -136,8 +139,15 @@
     }
 
     @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.6; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.6;
+      }
     }
 
     .room-urls {
@@ -363,6 +373,308 @@
       color: #718096;
       margin-top: 8px;
     }
+
+    .models-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+    }
+
+    .models-table th {
+      background: #f7fafc;
+      padding: 10px;
+      text-align: left;
+      font-weight: bold;
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .models-table td {
+      padding: 10px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 24px;
+      background: #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      position: relative;
+      margin-top: 10px;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+      transition: width 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .progress-info {
+      font-size: 12px;
+      color: #718096;
+      margin-top: 5px;
+    }
+
+    .transcription-panel {
+      background: #f7fafc;
+      padding: 15px;
+      border-radius: 6px;
+      margin-top: 15px;
+      border-left: 3px solid #4299e1;
+    }
+
+    .publisher-links-section {
+      background: white;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      border-left: 3px solid #667eea;
+    }
+
+    .publisher-links-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .publisher-links-title {
+      font-weight: bold;
+      color: #2d3748;
+      font-size: 14px;
+    }
+
+    .publisher-links-table {
+      width: 100%;
+      font-size: 13px;
+    }
+
+    .publisher-links-table td {
+      padding: 8px 5px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .publisher-links-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .connection-summary {
+      font-size: 13px;
+      font-weight: bold;
+      color: #48bb78;
+    }
+
+    .connection-summary.partial {
+      color: #ecc94b;
+    }
+
+    .connection-summary.offline {
+      color: #f56565;
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-indicator.online {
+      color: #48bb78;
+    }
+
+    .status-indicator.offline {
+      color: #cbd5e0;
+    }
+
+    .transcription-output {
+      max-height: 200px;
+      overflow-y: auto;
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      margin-top: 10px;
+    }
+
+    .transcript-line {
+      margin-bottom: 4px;
+      line-height: 1.4;
+    }
+
+    .transcript-line .timestamp {
+      color: #718096;
+      margin-right: 8px;
+    }
+
+    .transcript-line .text {
+      color: #2d3748;
+    }
+
+    .transcription-channel-panel {
+      background: #f7fafc;
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+
+    .transcription-channel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .transcription-channel-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .transcription-placeholder {
+      text-align: center;
+      color: #718096;
+      padding: 20px;
+      background: white;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    .recording-control {
+      background: white;
+      padding: 12px;
+      border-radius: 6px;
+      margin-top: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-left: 3px solid #e53e3e;
+    }
+
+    .recording-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .recording-info {
+      font-size: 14px;
+      color: #2d3748;
+    }
+
+    .settings-row {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .settings-row button {
+      font-size: 13px;
+      padding: 8px 16px;
+    }
+
+    .btn-link {
+      background: none;
+      border: none;
+      color: #667eea;
+      cursor: pointer;
+      padding: 8px 16px;
+      font-size: 13px;
+      text-decoration: underline;
+    }
+
+    .btn-link:hover {
+      color: #5568d3;
+    }
+
+    .transcription-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .transcription-title {
+      font-weight: bold;
+      color: #2d3748;
+      font-size: 14px;
+    }
+
+    .sessions-table {
+      width: 100%;
+      font-size: 13px;
+      margin-top: 10px;
+      background: white;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .sessions-table th {
+      background: #edf2f7;
+      padding: 8px;
+      text-align: left;
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .sessions-table td {
+      padding: 8px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .start-transcription-form {
+      background: white;
+      padding: 12px;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    .form-inline {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .form-inline .form-group {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .model-size {
+      font-family: monospace;
+      font-size: 12px;
+      color: #718096;
+    }
+
+    .collapsible-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease, margin 0.3s ease;
+      padding: 0;
+      margin-top: 0;
+      border-width: 0;
+    }
+
+    .collapsible-content.open {
+      max-height: 1000px;
+      padding: 15px;
+      margin-top: 15px;
+      border-width: 3px;
+    }
   </style>
 </head>
 
@@ -385,13 +697,17 @@
 
     <div id="roomsSection" class="section" style="display: none;">
       <div class="section-title">
-        Your Rooms
-        <span id="wsStatusIndicator"
-          style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px; vertical-align: middle;"
-          title="Connecting..."></span>
-        <button onclick="showCreateRoomModal()" class="btn btn-primary" style="float: right;">+ Create Room</button>
-        <button onclick="loadRooms()" class="btn btn-secondary"
-          style="float: right; margin-right: 10px;">Refresh</button>
+        <div style="display: flex; align-items: center;">
+          Your Rooms
+          <span id="wsStatusIndicator"
+            style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px;"
+            title="Connecting..."></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button onclick="loadRooms()" class="btn btn-secondary">Refresh</button>
+          <button onclick="showModelModal()" class="btn btn-secondary">Manage Whisper Models</button>
+          <button onclick="showCreateRoomModal()" class="btn btn-primary">+ Create Room</button>
+        </div>
       </div>
       <div id="roomsList">
         <div class="loading">Loading rooms...</div>
@@ -461,6 +777,15 @@
           <input type="text" id="publisherChannelName" class="form-input" required
             placeholder="e.g., main, spanish, french">
         </div>
+        <div class="form-group">
+          <label class="form-label">Transcription Language (optional)</label>
+          <select id="publisherLanguage" class="form-input">
+            <option value="">-- Default --</option>
+            <option value="en">English</option>
+            <option value="zh">Chinese</option>
+            <option value="ms">Malay</option>
+          </select>
+        </div>
         <button type="submit" class="btn btn-secondary">Add Publisher</button>
       </form>
       <div id="newPublisherTokenDisplay" style="display: none; margin-top: 20px;">
@@ -474,6 +799,37 @@
           <button onclick="copyPublisherUrl()" class="btn btn-secondary" style="margin-top: 10px;">Copy URL</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Edit Publisher Modal -->
+  <div id="editPublisherModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('editPublisherModal')">&times;</span>
+      <div class="modal-header">Edit Publisher</div>
+      <form id="editPublisherForm" onsubmit="editPublisher(event)">
+        <input type="hidden" id="editPublisherRoomSlug">
+        <input type="hidden" id="editPublisherId">
+        <div class="form-group">
+          <label class="form-label">Publisher Name</label>
+          <input type="text" id="editPublisherName" class="form-input" required placeholder="e.g., Main Speaker">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel Name</label>
+          <input type="text" id="editPublisherChannelName" class="form-input" required
+            placeholder="e.g., main, spanish, french">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Transcription Language</label>
+          <select id="editPublisherLanguage" class="form-input">
+            <option value="">-- Default --</option>
+            <option value="en">English</option>
+            <option value="zh">Chinese</option>
+            <option value="ms">Malay</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </form>
     </div>
   </div>
 
@@ -516,6 +872,63 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Model Management Modal -->
+  <div id="modelModal" class="modal">
+    <div class="modal-content" style="max-width: 800px;">
+      <span class="close-modal" onclick="closeModal('modelModal')">&times;</span>
+      <div class="modal-header">Whisper Model Manager</div>
+
+      <!-- Available Models Section -->
+      <div style="margin-bottom: 30px;">
+        <h3 style="font-size: 18px; margin-bottom: 15px; color: #2d3748;">Available Models</h3>
+        <table class="models-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Type</th>
+              <th>Size</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="availableModelsList">
+            <tr>
+              <td colspan="4" style="text-align: center; padding: 20px;">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Installed Models Section -->
+      <div style="margin-bottom: 30px;">
+        <h3 style="font-size: 18px; margin-bottom: 15px; color: #2d3748;">Installed Models</h3>
+        <table class="models-table">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Size</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="installedModelsList">
+            <tr>
+              <td colspan="3" style="text-align: center; padding: 20px;">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Download Progress Section -->
+      <div id="downloadProgressSection" style="display: none;">
+        <h3 style="font-size: 18px; margin-bottom: 15px; color: #2d3748;">Download Progress</h3>
+        <div id="downloadProgressModelName" style="font-weight: bold; margin-bottom: 10px;"></div>
+        <div class="progress-bar-container">
+          <div id="downloadProgressBar" class="progress-bar-fill" style="width: 0%;">0%</div>
+        </div>
+        <div id="downloadProgressInfo" class="progress-info"></div>
+      </div>
     </div>
   </div>
 
@@ -565,6 +978,12 @@
             // Recording status update for a specific room
             recordingStatus[msg.roomSlug] = msg;
             updateRecordingUI(msg.roomSlug);
+          } else if (msg.type === 'transcription-update') {
+            // New transcript received
+            handleTranscriptUpdate(msg.roomSlug, msg.transcript);
+          } else if (msg.type === 'transcription-session-update') {
+            // Transcription session started or stopped
+            handleSessionUpdate(msg.roomSlug, msg);
           } else if (msg.type === 'error') {
             console.error('Admin WebSocket error:', msg.data.message);
           }
@@ -599,35 +1018,8 @@
     }
 
     function updateChannelStatsForRoom(roomSlug) {
-      const container = document.getElementById(`live-stats-${roomSlug}`);
-      if (!container) return;
-
-      const stats = channelStats[roomSlug] || {};
-      const channelNames = Object.keys(stats);
-
-      if (channelNames.length === 0) {
-        container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px;">No active channels</div>';
-        return;
-      }
-
-      let html = '<table style="width: 100%; font-size: 13px;">';
-      html += '<tr><th style="text-align: left; padding: 5px;">Channel</th><th style="text-align: center; padding: 5px;">Publishers</th><th style="text-align: center; padding: 5px;">Subscribers</th></tr>';
-
-      for (const channelName of channelNames) {
-        const stat = stats[channelName];
-        const pubColor = stat.publishers > 0 ? '#48bb78' : '#718096';
-        const subColor = stat.subscribers > 0 ? '#4299e1' : '#718096';
-        html += `
-          <tr>
-            <td style="padding: 5px;">${escapeHtml(channelName)}</td>
-            <td style="text-align: center; padding: 5px; color: ${pubColor}; font-weight: bold;">${stat.publishers}</td>
-            <td style="text-align: center; padding: 5px; color: ${subColor}; font-weight: bold;">${stat.subscribers}</td>
-          </tr>
-        `;
-      }
-
-      html += '</table>';
-      container.innerHTML = html;
+      // Refresh the publishers and live status table
+      loadPublishersAndLiveStatus(roomSlug);
     }
 
     function getApiKey() {
@@ -708,57 +1100,209 @@
       const baseUrl = window.location.origin;
       container.innerHTML = rooms.map(room => `
         <div class="room-card ${room.is_local_only ? 'local' : ''}">
-          <div class="room-header">
+          <div class="room-header" style="flex-wrap: wrap; gap: 10px; align-items: center;">
             <div>
-              <div class="room-name">${escapeHtml(room.name)}</div>
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+                <a href="${baseUrl}/room/${room.slug}/listen" target="_blank" style="text-decoration: none;">
+                  <div class="room-name" style="color: #667eea; cursor: pointer;">${escapeHtml(room.name)}</div>
+                </a>
+                <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')" style="padding: 4px 10px; font-size: 12px;">Copy Room Link</button>
+              </div>
               <div class="room-slug">${escapeHtml(room.slug)}</div>
             </div>
-            <span class="badge ${room.is_local_only ? 'local' : 'public'}">
-              ${room.is_local_only ? 'Local SFU' : 'Public SFU'}
-            </span>
-          </div>
-          <div class="room-urls">
-            <div class="url-group">
-              <div class="url-label">Listener URL (public)</div>
-              <div class="url-value">
-                <span>${baseUrl}/room/${room.slug}/listen</span>
-                <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')">Copy</button>
+            <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
+              <span class="badge ${room.is_local_only ? 'local' : 'public'}">
+                ${room.is_local_only ? 'Local SFU' : 'Public SFU'}
+              </span>
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #fff5f5; border-radius: 6px; border: 1px solid #fed7d7;">
+                <span style="font-size: 13px; font-weight: 600; color: #742a2a;">⏺️</span>
+                <span id="recording-indicator-${room.slug}" class="badge recording" style="display: none;">REC</span>
+                <span id="recording-duration-${room.slug}" style="font-family: monospace; font-size: 13px; display: none;">00:00:00</span>
+                <span id="recording-tracks-${room.slug}" style="font-size: 11px; color: #718096; display: none;"></span>
+                <button id="record-btn-${room.slug}" onclick="toggleRecording('${room.slug}')" class="btn btn-danger btn-small" data-room-id="${room.id}" style="padding: 4px 12px; font-size: 12px;">
+                  Record
+                </button>
               </div>
             </div>
           </div>
-          <div style="margin-top: 15px; background: #f7fafc; padding: 12px; border-radius: 6px; border-left: 3px solid #667eea;">
-            <div style="font-weight: bold; color: #2d3748; margin-bottom: 8px; font-size: 14px;">
-              📊 Live Stats
-            </div>
-            <div id="live-stats-${room.slug}">
-              <div style="padding: 10px; color: #718096; font-size: 13px;">Loading...</div>
-            </div>
-          </div>
-          <div style="margin-top: 15px; background: #fff5f5; padding: 12px; border-radius: 6px; border-left: 3px solid #e53e3e;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+
+          <!-- 1. PUBLISHERS & LIVE STATUS (Combined) -->
+          <div style="background: #f7fafc; padding: 15px; border-radius: 6px; border-left: 3px solid #667eea; margin-bottom: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
               <div>
-                <span style="font-weight: bold; color: #2d3748; font-size: 14px;">Recording</span>
-                <span id="recording-indicator-${room.slug}" class="badge recording" style="display: none; margin-left: 10px;">REC</span>
-                <span id="recording-duration-${room.slug}" style="font-family: monospace; margin-left: 10px; display: none;">00:00:00</span>
-                <span id="recording-tracks-${room.slug}" style="font-size: 12px; color: #718096; margin-left: 10px; display: none;"></span>
+                <span style="font-weight: bold; color: #2d3748; font-size: 14px;">🎤 Publishers & Live Status</span>
+                <span id="connection-summary-${room.slug}" class="connection-summary" style="margin-left: 10px;">Loading...</span>
               </div>
-              <button id="record-btn-${room.slug}" onclick="toggleRecording('${room.slug}')" class="btn btn-danger" data-room-id="${room.id}">
-                Start Recording
-              </button>
+              <button class="btn btn-primary btn-small" onclick="copyAllPublisherUrls('${room.slug}')">📋 Copy All URLs</button>
+            </div>
+            <div id="publishers-live-${room.slug}">
+              <div style="padding: 10px; color: #718096; font-size: 13px; text-align: center;">Loading publishers...</div>
             </div>
           </div>
-          <div style="margin-top: 15px;">
-            <button onclick="showPublishers('${room.slug}')" class="btn btn-secondary">Manage Publishers</button>
-            <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-primary">+ Add Publisher</button>
-            <button onclick="showEditRoomModal('${room.slug}')" class="btn btn-primary" style="margin-left: 10px;">Edit Room</button>
-            <button onclick="deleteRoom('${room.slug}')" class="btn btn-danger" style="margin-left: 10px;">Delete Room</button>
+
+          <!-- 2. TRANSCRIPTION MONITOR (Critical for QA) -->
+          <div style="background: #fff9e6; padding: 15px; border-radius: 6px; border-left: 3px solid #f59e0b; margin-bottom: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span style="font-weight: bold; color: #2d3748; font-size: 14px;">🎙️ Transcription Monitor</span>
+              <button onclick="toggleTranscription('${room.slug}')" class="btn btn-small btn-secondary" id="transcription-toggle-${room.slug}">Collapse</button>
+            </div>
+            <div id="transcription-channels-${room.slug}" style="display: block;">
+              <div style="padding: 20px; color: #718096; text-align: center;">Loading transcription data...</div>
+            </div>
           </div>
+
+          <!-- 3. SETTINGS (Collapsed) -->
+          <div class="settings-row">
+            <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-secondary btn-small">+ Add Publisher</button>
+            <button onclick="showEditRoomModal('${room.slug}')" class="btn-link">⚙️ Room Settings</button>
+            <button onclick="deleteRoom('${room.slug}')" class="btn-link" style="color: #f56565;">🗑️ Delete Room</button>
+          </div>
+
+          <!-- Hidden publisher management panel -->
           <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
         </div>
       `).join('');
 
+      // Load publisher and live status for all rooms
+      rooms.forEach(room => loadPublishersAndLiveStatus(room.slug));
+
       // Update live stats for all rooms
       updateAllChannelStatsUI();
+
+      // Initialize transcription monitors (auto-start since they're expanded by default)
+      initTranscriptionMonitors();
+    }
+
+    // Load and display publishers with live status
+    async function loadPublishersAndLiveStatus(slug) {
+      const container = document.getElementById(`publishers-live-${slug}`);
+      const summaryEl = document.getElementById(`connection-summary-${slug}`);
+      if (!container) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px; text-align: center;">No publishers configured yet</div>';
+          if (summaryEl) {
+            summaryEl.textContent = '';
+            summaryEl.className = 'connection-summary';
+          }
+          return;
+        }
+
+        const baseUrl = getSecureBaseUrl();
+        const stats = channelStats[slug] || {};
+
+        // Calculate connection summary
+        let activeCount = 0;
+        let totalCount = data.publishers.length;
+
+        for (const channelName in stats) {
+          if (stats[channelName].publishers > 0) {
+            activeCount++;
+          }
+        }
+
+        // Update summary
+        if (summaryEl) {
+          if (activeCount === 0) {
+            summaryEl.textContent = 'All offline';
+            summaryEl.className = 'connection-summary offline';
+          } else if (activeCount < totalCount) {
+            summaryEl.textContent = `🟢 ${activeCount} of ${totalCount} live`;
+            summaryEl.className = 'connection-summary partial';
+          } else {
+            summaryEl.textContent = `🟢 All ${activeCount} live`;
+            summaryEl.className = 'connection-summary';
+          }
+        }
+
+        container.innerHTML = `
+          <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid #e2e8f0;">
+                <th style="text-align: left; padding: 8px; font-weight: bold;">Channel</th>
+                <th style="text-align: left; padding: 8px; font-weight: bold;">Publisher</th>
+                <th style="text-align: center; padding: 8px; font-weight: bold;">Status</th>
+                <th style="text-align: center; padding: 8px; font-weight: bold;">Listeners</th>
+                <th style="text-align: right; padding: 8px; font-weight: bold;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.publishers.map(pub => {
+          const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
+          const isLive = channelStat.publishers > 0;
+          const statusIcon = isLive ? '🟢' : '🔴';
+          const statusText = isLive ? 'Live' : 'Offline';
+
+          return `
+                  <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 8px; font-weight: bold;">${escapeHtml(pub.channel_name)}</td>
+                    <td style="padding: 8px;">${escapeHtml(pub.name)}</td>
+                    <td style="text-align: center; padding: 8px;">
+                      <span class="status-indicator ${isLive ? 'online' : 'offline'}">${statusIcon} ${statusText}</span>
+                    </td>
+                    <td style="text-align: center; padding: 8px;">
+                      👥 ${channelStat.subscribers}
+                    </td>
+                    <td style="text-align: right; padding: 8px;">
+                      <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(baseUrl + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy URL</button>
+                      <button class="btn btn-primary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}', '${escapeAttr(pub.transcription_language || '')}')">Edit</button>
+                      <button class="btn btn-danger btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="deletePublisher('${slug}', ${pub.id})">Delete</button>
+                    </td>
+                  </tr>
+                `;
+        }).join('')}
+            </tbody>
+          </table>
+        `;
+      } catch (error) {
+        container.innerHTML = '<div style="padding: 10px; color: #f56565; font-size: 13px; text-align: center;">Failed to load publishers</div>';
+      }
+    }
+
+    // Copy all publisher URLs for a room
+    async function copyAllPublisherUrls(slug) {
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          showError('No publishers to copy');
+          return;
+        }
+
+        const baseUrl = getSecureBaseUrl();
+        const room = roomsData.find(r => r.slug === slug);
+        const roomName = room ? room.name : slug;
+
+        const formatted = `Publisher Links for ${roomName}:
+
+${data.publishers.map(p =>
+          `${p.channel_name} - ${p.name}:
+${baseUrl}/room/${slug}/publish?token=${p.join_token}`
+        ).join('\n\n')}`;
+
+        copyToClipboard(formatted);
+      } catch (error) {
+        showError('Failed to copy publisher URLs');
+      }
     }
 
     function escapeHtml(text) {
@@ -823,15 +1367,21 @@
       const slug = document.getElementById('publisherRoomSlug').value;
       const name = document.getElementById('publisherName').value;
       const channel_name = document.getElementById('publisherChannelName').value;
+      const transcription_language = document.getElementById('publisherLanguage').value || undefined;
 
       try {
+        const body = { name, channel_name };
+        if (transcription_language) {
+          body.transcription_language = transcription_language;
+        }
+
         const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentApiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ name, channel_name })
+          body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -846,11 +1396,56 @@
         document.getElementById('addPublisherForm').reset();
         showSuccess('Publisher added successfully!');
 
-        // Refresh publisher list if it's visible
-        const publisherContainer = document.getElementById(`publishers-${slug}`);
-        if (publisherContainer && publisherContainer.style.display === 'block') {
-          showPublishers(slug);
+        // Refresh the combined publishers and live status table
+        loadPublishersAndLiveStatus(slug);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function showEditPublisherModal(slug, publisherId, name, channelName, language) {
+      document.getElementById('editPublisherRoomSlug').value = slug;
+      document.getElementById('editPublisherId').value = publisherId;
+      document.getElementById('editPublisherName').value = name;
+      document.getElementById('editPublisherChannelName').value = channelName;
+      document.getElementById('editPublisherLanguage').value = language || '';
+      document.getElementById('editPublisherModal').style.display = 'block';
+    }
+
+    async function editPublisher(event) {
+      event.preventDefault();
+
+      const slug = document.getElementById('editPublisherRoomSlug').value;
+      const publisherId = document.getElementById('editPublisherId').value;
+      const name = document.getElementById('editPublisherName').value;
+      const channel_name = document.getElementById('editPublisherChannelName').value;
+      const transcription_language = document.getElementById('editPublisherLanguage').value || undefined;
+
+      try {
+        const body = { name, channel_name };
+        if (transcription_language) {
+          body.transcription_language = transcription_language;
         }
+
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to update publisher');
+        }
+
+        showSuccess('Publisher updated successfully!');
+        closeModal('editPublisherModal');
+
+        // Refresh the combined publishers and live status table
+        loadPublishersAndLiveStatus(slug);
       } catch (error) {
         showError(error.message);
       }
@@ -891,8 +1486,12 @@
               <div class="interpreter-info">
                 <div class="interpreter-name">${escapeHtml(pub.name)}</div>
                 <div class="interpreter-lang">Channel: ${escapeHtml(pub.channel_name)}</div>
+                ${pub.transcription_language ? `<div class="interpreter-lang">Language: ${escapeHtml(pub.transcription_language).toUpperCase()}</div>` : ''}
               </div>
-              <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+              <div style="display: flex; gap: 5px;">
+                <button onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}', '${escapeAttr(pub.transcription_language || '')}')" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Edit</button>
+                <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+              </div>
             </div>
             <div class="url-value" style="font-size: 11px;">
               <span style="word-break: break-all;">${getSecureBaseUrl()}/room/${slug}/publish?token=${escapeHtml(pub.join_token)}</span>
@@ -924,7 +1523,7 @@
         }
 
         showSuccess('Publisher deleted successfully!');
-        showPublishers(slug); // Refresh the list
+        loadPublishersAndLiveStatus(slug); // Refresh the combined table
       } catch (error) {
         showError(error.message);
       }
@@ -1068,6 +1667,9 @@
       if (modalId === 'addPublisherModal') {
         document.getElementById('addPublisherForm').reset();
         document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      }
+      if (modalId === 'editPublisherModal') {
+        document.getElementById('editPublisherForm').reset();
       }
       if (modalId === 'editRoomModal') {
         document.getElementById('editRoomForm').reset();
@@ -1421,7 +2023,7 @@
       } catch (error) {
         showError(error.message);
         btn.disabled = false;
-        btn.textContent = isRecording ? 'Stop Recording' : 'Start Recording';
+        btn.textContent = isRecording ? 'Stop' : 'Record';
       }
     }
 
@@ -1438,12 +2040,12 @@
       btn.disabled = false;
 
       if (status?.isRecording) {
-        btn.textContent = 'Stop Recording';
+        btn.textContent = 'Stop';
         btn.classList.add('recording-active');
         indicator.style.display = 'inline';
         duration.style.display = 'inline';
         tracks.style.display = 'inline';
-        tracks.textContent = `(${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''})`;
+        tracks.textContent = `${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''}`;
 
         // Start duration timer
         if (recordingTimers[roomSlug]) {
@@ -1459,7 +2061,7 @@
           duration.textContent = formatDuration(status.startedAt);
         }
       } else {
-        btn.textContent = 'Start Recording';
+        btn.textContent = 'Record';
         btn.classList.remove('recording-active');
         indicator.style.display = 'none';
         duration.style.display = 'none';
@@ -1516,6 +2118,664 @@
 
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', checkSingleTenantMode);
+
+    // ============ Model Management Functions ============
+
+    // Available models metadata
+    const AVAILABLE_MODELS = [
+      { id: 'tiny.en', name: 'Tiny', type: 'English', size: '75 MB' },
+      { id: 'tiny', name: 'Tiny', type: 'Multilingual', size: '75 MB' },
+      { id: 'base.en', name: 'Base', type: 'English', size: '142 MB' },
+      { id: 'base', name: 'Base', type: 'Multilingual', size: '142 MB' },
+      { id: 'small.en', name: 'Small', type: 'English', size: '466 MB' },
+      { id: 'small', name: 'Small', type: 'Multilingual', size: '466 MB' },
+      { id: 'medium.en', name: 'Medium', type: 'English', size: '1.5 GB' },
+      { id: 'medium', name: 'Medium', type: 'Multilingual', size: '1.5 GB' },
+      { id: 'large', name: 'Large', type: 'Multilingual', size: '2.9 GB' }
+    ];
+
+    let downloadPollingInterval = null;
+
+    async function showModelModal() {
+      document.getElementById('modelModal').style.display = 'block';
+      await loadModels();
+    }
+
+    async function loadModels() {
+      try {
+        const response = await fetch(`${API_BASE}/models`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load models');
+        }
+
+        const data = await response.json();
+        displayAvailableModels(data.available || AVAILABLE_MODELS);
+        displayInstalledModels(data.installed || []);
+      } catch (error) {
+        console.error('Error loading models:', error);
+        document.getElementById('availableModelsList').innerHTML =
+          '<tr><td colspan="4" style="text-align: center; color: #f56565;">Failed to load models</td></tr>';
+        document.getElementById('installedModelsList').innerHTML =
+          '<tr><td colspan="3" style="text-align: center; color: #f56565;">Failed to load models</td></tr>';
+      }
+    }
+
+    function displayAvailableModels(models) {
+      const container = document.getElementById('availableModelsList');
+
+      if (models.length === 0) {
+        container.innerHTML = '<tr><td colspan="4" style="text-align: center;">No models available</td></tr>';
+        return;
+      }
+
+      container.innerHTML = models.map(model => `
+        <tr>
+          <td>${escapeHtml(model.name)}</td>
+          <td>${escapeHtml(model.type)}</td>
+          <td class="model-size">${escapeHtml(model.size)}</td>
+          <td>
+            <button onclick="downloadModel('${escapeAttr(model.id)}')" class="btn btn-primary btn-small">Download</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function displayInstalledModels(models) {
+      const container = document.getElementById('installedModelsList');
+
+      if (models.length === 0) {
+        container.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #718096;">No models installed yet</td></tr>';
+        return;
+      }
+
+      container.innerHTML = models.map(model => `
+        <tr>
+          <td>${escapeHtml(model.name || model.fileName)}</td>
+          <td class="model-size">${escapeHtml(model.sizeFormatted || model.size || 'Unknown')}</td>
+          <td>
+            <button onclick="deleteModel('${escapeAttr(model.fileName)}')" class="btn btn-danger btn-small">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function downloadModel(modelId) {
+      try {
+        const response = await fetch(`${API_BASE}/models/download`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ modelName: modelId })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to start download');
+        }
+
+        const data = await response.json();
+
+        showSuccess(`Started downloading ${modelId}`);
+
+        // Show progress section and start polling
+        document.getElementById('downloadProgressSection').style.display = 'block';
+        document.getElementById('downloadProgressModelName').textContent = `Downloading: ${modelId}`;
+
+        startDownloadPolling(data.downloadId || modelId);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function startDownloadPolling(downloadId) {
+      // Clear any existing polling
+      if (downloadPollingInterval) {
+        clearInterval(downloadPollingInterval);
+      }
+
+      downloadPollingInterval = setInterval(async () => {
+        try {
+          const response = await fetch(`${API_BASE}/models/download/${downloadId}`, {
+            headers: { 'Authorization': `Bearer ${currentApiKey}` }
+          });
+
+          if (!response.ok) {
+            clearInterval(downloadPollingInterval);
+            return;
+          }
+
+          const data = await response.json();
+          updateDownloadProgress(data);
+
+          if (data.status === 'completed' || data.status === 'error') {
+            clearInterval(downloadPollingInterval);
+            downloadPollingInterval = null;
+
+            if (data.status === 'completed') {
+              showSuccess('Download completed!');
+              setTimeout(() => {
+                document.getElementById('downloadProgressSection').style.display = 'none';
+                loadModels(); // Refresh model lists
+              }, 2000);
+            } else {
+              showError(data.error || 'Download failed');
+            }
+          }
+        } catch (error) {
+          console.error('Error polling download status:', error);
+        }
+      }, 1000); // Poll every second
+    }
+
+    function updateDownloadProgress(data) {
+      const percentage = Math.round(data.percentage || 0);
+      const progressBar = document.getElementById('downloadProgressBar');
+      const progressInfo = document.getElementById('downloadProgressInfo');
+
+      progressBar.style.width = `${percentage}%`;
+      progressBar.textContent = `${percentage}%`;
+
+      const info = [];
+      if (data.speed) info.push(`Speed: ${data.speed}`);
+      if (data.eta) info.push(`ETA: ${data.eta}`);
+      if (data.downloaded && data.total) info.push(`${data.downloaded} / ${data.total}`);
+
+      progressInfo.textContent = info.join(' | ');
+    }
+
+    async function deleteModel(filename) {
+      if (!confirm(`Are you sure you want to delete ${filename}?`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/models/${encodeURIComponent(filename)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete model');
+        }
+
+        showSuccess('Model deleted successfully!');
+        loadModels(); // Refresh model lists
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    // ============ Transcription Control Functions ============
+
+    function toggleTranscription(roomSlug) {
+      const channelsContainer = document.getElementById(`transcription-channels-${roomSlug}`);
+      const toggleBtn = document.getElementById(`transcription-toggle-${roomSlug}`);
+
+      if (!channelsContainer) return;
+
+      if (channelsContainer.style.display === 'none') {
+        channelsContainer.style.display = 'block';
+        if (toggleBtn) toggleBtn.textContent = 'Collapse';
+
+        // Load initial data (WebSocket will handle real-time updates)
+        refreshTranscriptionMonitor(roomSlug);
+        loadInstalledModelsForRoom(roomSlug);
+      } else {
+        channelsContainer.style.display = 'none';
+        if (toggleBtn) toggleBtn.textContent = 'Expand';
+      }
+    }
+
+    // Auto-start transcription monitors for all rooms when expanded by default
+    function initTranscriptionMonitors() {
+      const rooms = roomsData || [];
+      rooms.forEach(room => {
+        // Load initial data (WebSocket will handle real-time updates)
+        refreshTranscriptionMonitor(room.slug);
+        loadInstalledModelsForRoom(room.slug);
+      });
+    }
+
+    // Refresh transcription monitor with live output
+    async function refreshTranscriptionMonitor(roomSlug) {
+      const container = document.getElementById(`transcription-channels-${roomSlug}`);
+      if (!container) return;
+
+      try {
+        // Get active transcription sessions
+        const sessionsResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/status`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!sessionsResponse.ok) {
+          throw new Error('Failed to load transcription status');
+        }
+
+        const sessionsData = await sessionsResponse.json();
+        const sessions = sessionsData.sessions || [];
+
+        // Get recent transcripts for display
+        const transcriptsResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/transcripts?recent=5&limit=20`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        const transcriptsData = transcriptsResponse.ok ? await transcriptsResponse.json() : { transcripts: [] };
+        const transcripts = transcriptsData.transcripts || [];
+
+        // Get publishers to know all channels
+        const publishersResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/publishers`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        const publishersData = publishersResponse.ok ? await publishersResponse.json() : { publishers: [] };
+        const channels = [...new Set(publishersData.publishers.map(p => p.channel_name))];
+
+        if (channels.length === 0) {
+          container.innerHTML = '<div style="padding: 20px; color: #718096; text-align: center;">No channels configured. Add publishers first.</div>';
+          return;
+        }
+
+        // Build UI per channel
+        let html = '';
+
+        for (const channelName of channels) {
+          const channelSessions = sessions.filter(s => s.channelName === channelName);
+          const isRunning = channelSessions.length > 0;
+          const session = channelSessions[0];
+          const channelTranscripts = transcripts.filter(t => t.channel_name === channelName).slice(0, 10).reverse();
+
+          html += `
+            <div class="transcription-channel-panel">
+              <div class="transcription-channel-header">
+                <div class="transcription-channel-info">
+                  <span style="font-weight: bold;">${escapeHtml(channelName)}</span>
+                  ${isRunning ? `
+                    <span class="badge public" style="font-size: 11px;">Running</span>
+                    <span style="font-size: 12px; color: #718096;">${escapeHtml(session.language || 'auto')} - ${formatUptime(session.uptime || 0)}</span>
+                  ` : `
+                    <span class="badge offline" style="font-size: 11px;">Stopped</span>
+                  `}
+                </div>
+                ${isRunning ? `
+                  <button onclick="stopTranscriptionChannel('${roomSlug}', '${escapeAttr(session.producerId)}')" class="btn btn-danger btn-small">⏹️ Stop</button>
+                ` : `
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <select id="lang-select-${roomSlug}-${escapeAttr(channelName)}" style="padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;">
+                      <option value="en">English</option>
+                      <option value="zh">Chinese</option>
+                      <option value="ms">Malay</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="ja">Japanese</option>
+                      <option value="ko">Korean</option>
+                      <option value="ar">Arabic</option>
+                      <option value="hi">Hindi</option>
+                      <option value="pt">Portuguese</option>
+                      <option value="ru">Russian</option>
+                      <option value="it">Italian</option>
+                    </select>
+                    <button onclick="startTranscriptionWithLanguage('${roomSlug}', '${escapeAttr(channelName)}')" class="btn btn-primary btn-small">▶️ Start</button>
+                  </div>
+                `}
+              </div>
+
+              <div class="transcription-output" id="transcript-output-${roomSlug}-${escapeAttr(channelName)}">
+                ${channelTranscripts.length > 0 ? channelTranscripts.map(t => `
+                  <div class="transcript-line">
+                    <span class="timestamp">[${formatTranscriptTime(t.timestamp_start)}]</span>
+                    <span class="text">${escapeHtml(t.text_content)}</span>
+                  </div>
+                `).join('') : `
+                  <div style="color: #718096; text-align: center; padding: 10px;">
+                    ${isRunning ? 'Waiting for transcription...' : 'No transcripts yet - Click Start to begin transcription'}
+                  </div>
+                `}
+              </div>
+            </div>
+          `;
+        }
+
+        container.innerHTML = html;
+      } catch (error) {
+        console.error('Error loading transcription monitor:', error);
+        container.innerHTML = '<div style="padding: 20px; color: #f56565; text-align: center;">Failed to load transcription data</div>';
+      }
+    }
+
+    // Format transcript timestamp
+    function formatTranscriptTime(timestamp) {
+      const date = new Date(timestamp * 1000);
+      return date.toLocaleTimeString('en-US', { hour12: false });
+    }
+
+    // Handle real-time transcript update from WebSocket
+    function handleTranscriptUpdate(roomSlug, transcript) {
+      const outputEl = document.getElementById(`transcript-output-${roomSlug}-${transcript.channel_name}`);
+      if (!outputEl) return;
+
+      // Create new transcript line
+      const transcriptLine = document.createElement('div');
+      transcriptLine.className = 'transcript-line';
+      transcriptLine.innerHTML = `
+        <span class="timestamp">[${formatTranscriptTime(transcript.timestamp_start)}]</span>
+        <span class="text">${escapeHtml(transcript.text_content)}</span>
+      `;
+
+      // Append to output (chronological order - newest at bottom)
+      if (outputEl.firstChild && outputEl.firstChild.style && outputEl.firstChild.style.color === '#718096') {
+        // Remove placeholder
+        outputEl.innerHTML = '';
+      }
+      outputEl.appendChild(transcriptLine);
+
+      // Limit to 10 recent transcripts (remove oldest)
+      while (outputEl.children.length > 10) {
+        outputEl.removeChild(outputEl.firstChild);
+      }
+
+      // Auto-scroll to bottom
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+
+    // Handle transcription session status update from WebSocket
+    function handleSessionUpdate(roomSlug, update) {
+      // Refresh the transcription monitor UI to reflect session changes
+      refreshTranscriptionMonitor(roomSlug);
+    }
+
+    // Stop transcription for a specific channel
+    async function stopTranscriptionChannel(roomSlug, producerId) {
+      if (!confirm('Stop transcription for this channel?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/stop`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ sessionId: producerId })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to stop transcription');
+        }
+
+        showSuccess('Transcription stopped successfully!');
+        // WebSocket will push the session-update automatically
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    // Start transcription with selected language
+    function startTranscriptionWithLanguage(roomSlug, channelName) {
+      const selectId = `lang-select-${roomSlug}-${channelName}`;
+      const select = document.getElementById(selectId);
+      if (!select) return;
+
+      const language = select.value;
+      startTranscriptionForChannel(roomSlug, channelName, language);
+    }
+
+    // Start transcription for a specific channel
+    async function startTranscriptionForChannel(roomSlug, channelName, language) {
+      try {
+        // Get first available model
+        const modelsResponse = await fetch(`${API_BASE}/models`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!modelsResponse.ok) {
+          throw new Error('Failed to load models');
+        }
+
+        const modelsData = await modelsResponse.json();
+        const installedModels = modelsData.installed || [];
+
+        if (installedModels.length === 0) {
+          showError('No Whisper models installed. Please install a model first.');
+          return;
+        }
+
+        const modelPath = installedModels[0].path;
+
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/start`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            channelName,
+            language,
+            modelPath
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to start transcription');
+        }
+
+        showSuccess('Transcription started successfully!');
+        // WebSocket will push the session-update automatically
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function populateChannelDropdown(roomSlug) {
+      const dropdown = document.getElementById(`transcription-channel-${roomSlug}`);
+      if (!dropdown) return;
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/publishers`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        // Get unique channel names
+        const channels = [...new Set(data.publishers.map(p => p.channel_name))];
+
+        if (channels.length === 0) {
+          dropdown.innerHTML = '<option value="">No publishers yet - add a publisher first</option>';
+          dropdown.disabled = true;
+          return;
+        }
+
+        dropdown.disabled = false;
+        dropdown.innerHTML = channels.map(channel =>
+          `<option value="${escapeHtml(channel)}">${escapeHtml(channel)}</option>`
+        ).join('');
+
+      } catch (error) {
+        dropdown.innerHTML = '<option value="">Failed to load channels</option>';
+        dropdown.disabled = true;
+      }
+    }
+
+    async function refreshTranscriptionStatus(roomSlug) {
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/status`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load transcription status');
+        }
+
+        const data = await response.json();
+        displayTranscriptionSessions(roomSlug, data.sessions || []);
+      } catch (error) {
+        console.error('Error loading transcription status:', error);
+        const tbody = document.getElementById(`sessions-body-${roomSlug}`);
+        if (tbody) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #f56565;">Failed to load sessions</td></tr>';
+        }
+      }
+    }
+
+    function displayTranscriptionSessions(roomSlug, sessions) {
+      const tbody = document.getElementById(`sessions-body-${roomSlug}`);
+
+      if (!tbody) return;
+
+      if (sessions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #718096;">No active sessions</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = sessions.map(session => `
+        <tr>
+          <td>${escapeHtml(session.producerName || session.producerId)}</td>
+          <td>${escapeHtml(session.channelName || 'default')}</td>
+          <td>${escapeHtml(session.language || 'auto')}</td>
+          <td>${formatUptime(session.uptime || 0)}</td>
+          <td>${session.queueSize || 0}</td>
+          <td>
+            <button onclick="stopTranscription('${roomSlug}', '${escapeAttr(session.producerId)}')"
+                    class="btn btn-danger btn-small">Stop</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function formatUptime(seconds) {
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    async function loadInstalledModelsForRoom(roomSlug) {
+      try {
+        const response = await fetch(`${API_BASE}/models`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load models');
+        }
+
+        const data = await response.json();
+        const select = document.getElementById(`transcription-model-${roomSlug}`);
+
+        if (!select) return;
+
+        if (!data.installed || data.installed.length === 0) {
+          select.innerHTML = '<option value="">No models installed</option>';
+          return;
+        }
+
+        select.innerHTML = data.installed.map(model =>
+          `<option value="${escapeAttr(model.path)}">${escapeHtml(model.name || model.fileName)}</option>`
+        ).join('');
+      } catch (error) {
+        console.error('Error loading models for room:', error);
+      }
+    }
+
+    async function startTranscription(event, roomSlug) {
+      event.preventDefault();
+
+      const channelName = document.getElementById(`transcription-channel-${roomSlug}`).value;
+      const language = document.getElementById(`transcription-language-${roomSlug}`).value;
+      const modelPath = document.getElementById(`transcription-model-${roomSlug}`).value;
+
+      if (!modelPath) {
+        showError('Please select a model');
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/start`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            channelName,
+            language,
+            modelPath
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to start transcription');
+        }
+
+        showSuccess('Transcription started successfully!');
+
+        // Clear form
+        document.getElementById(`transcription-channel-${roomSlug}`).value = '';
+
+        // Refresh sessions
+        setTimeout(() => refreshTranscriptionStatus(roomSlug), 1000);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function stopTranscription(roomSlug, producerId) {
+      if (!confirm('Stop transcription for this producer?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/stop`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ producerId })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to stop transcription');
+        }
+
+        showSuccess('Transcription stopped successfully!');
+
+        // Refresh sessions
+        setTimeout(() => refreshTranscriptionStatus(roomSlug), 1000);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    // Update closeModal to handle model modal cleanup
+    const originalCloseModal = closeModal;
+    closeModal = function (modalId) {
+      if (modalId === 'modelModal') {
+        // Stop download polling if active
+        if (downloadPollingInterval) {
+          clearInterval(downloadPollingInterval);
+          downloadPollingInterval = null;
+        }
+        document.getElementById('downloadProgressSection').style.display = 'none';
+      }
+      originalCloseModal(modalId);
+    };
   </script>
 </body>
 

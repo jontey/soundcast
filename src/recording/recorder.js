@@ -472,6 +472,23 @@ export async function stopRecording(roomSlug, roomId) {
 
   const tenantId = session.tenantId;
 
+  // Finalize transcript files for all tracks
+  const { getTranscriptionSession } = await import('../transcription/transcriber.js');
+
+  for (const [producerId, trackRecorder] of session.tracks) {
+    const transcriptionSession = getTranscriptionSession(producerId);
+    if (transcriptionSession && transcriptionSession.fileWriter) {
+      try {
+        await transcriptionSession.fileWriter.finalize();
+        transcriptionSession.fileWriter = null;
+        transcriptionSession.recordingContext = null;
+        console.log(`[Recorder] Finalized transcript files for producer ${producerId}`);
+      } catch (err) {
+        console.error(`[Recorder] Error finalizing transcript files: ${err.message}`);
+      }
+    }
+  }
+
   // Stop all tracks
   const trackCount = session.tracks.size;
   for (const [producerId, trackRecorder] of session.tracks) {

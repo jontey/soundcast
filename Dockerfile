@@ -1,11 +1,14 @@
 # Build stage
 FROM node:22-bookworm AS builder
 
-# Install mediasoup dependencies
+# Install build dependencies (mediasoup + whisper.cpp + native addon)
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     build-essential \
+    cmake \
+    git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -13,17 +16,36 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies (including native dependencies)
 RUN npm ci --only=production
+
+# Copy native addon source
+COPY src/native ./src/native
+
+# Build whisper.cpp
+WORKDIR /app/src/native/deps/whisper.cpp
+RUN git submodule update --init --recursive && \
+    cmake -B build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF && \
+    cmake --build build --config Release -j4
+
+# Build native addon
+WORKDIR /app/src/native
+RUN npm install && npm run build
+
+# Build sqlite-vec extension
+WORKDIR /app
+COPY scripts/setup-sqlite-vec.sh ./scripts/
+RUN chmod +x scripts/setup-sqlite-vec.sh && ./scripts/setup-sqlite-vec.sh
 
 # Production stage
 FROM node:22-bookworm-slim
 
-# Install runtime dependencies for mediasoup, openssl for cert generation, and ffmpeg for recording
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
     openssl \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -31,14 +53,22 @@ WORKDIR /app
 # Copy node_modules from builder
 COPY --from=builder /app/node_modules ./node_modules
 
+# Copy built native addon
+COPY --from=builder /app/src/native/build ./src/native/build
+COPY --from=builder /app/src/native/node_modules ./src/native/node_modules
+COPY --from=builder /app/src/native/package.json ./src/native/
+
+# Copy built sqlite-vec extension
+COPY --from=builder /app/lib ./lib
+
 # Copy application source
 COPY package*.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY certs ./certs
 
-# Create directories for database, certificates, and recordings
-RUN mkdir -p /app/data /app/certs /app/recordings
+# Create directories
+RUN mkdir -p /app/data /app/certs /app/recordings /app/models
 
 # Generate self-signed TLS certificate at build time
 RUN chmod +x /app/scripts/generate-certs.sh && \
@@ -64,6 +94,20 @@ ENV RECORDING_DIR=/app/recordings
 ENV RECORDING_RTP_PORT_MIN=50000
 ENV RECORDING_RTP_PORT_MAX=50100
 
+# Transcription settings
+ENV TRANSCRIPTION_ENABLED=true
+ENV TRANSCRIPTION_USE_NATIVE=true
+ENV WHISPER_MODEL_DIR=/app/models
+ENV WHISPER_MODEL_SIZE=base
+ENV TRANSCRIPTION_RTP_PORT_MIN=51000
+ENV TRANSCRIPTION_RTP_PORT_MAX=51999
+
+# Embedding settings
+ENV EMBEDDING_ENABLED=true
+
+# SQLite-vec extension path
+ENV SQLITE_VEC_PATH=/app/lib/vec0.so
+
 # Expose HTTP port
 EXPOSE 3000
 
@@ -75,6 +119,9 @@ EXPOSE 40000-40100/udp
 
 # Expose recording RTP ports (UDP) - internal use only
 EXPOSE 50000-50100/udp
+
+# Expose transcription RTP ports (UDP) - internal use only
+EXPOSE 51000-51999/udp
 
 # Run the server
 CMD ["node", "src/server.js"]

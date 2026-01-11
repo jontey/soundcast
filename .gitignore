@@ -5,3 +5,17 @@ node_modules
 *.db-journal
 dist/
 recordings/
+
+# Build artifacts
+build/
+lib/
+src/native/build/
+
+# Whisper models (large binary files)
+/models/
+
+# Local configuration
+.mcp.json
+
+# Test artifacts
+test/

@@ -257,6 +257,150 @@
       color: #2d3748;
       font-size: 14px;
     }
+    /* Live Captions Overlay */
+    .captions-overlay {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: white;
+      padding: 15px 25px;
+      border-radius: 10px;
+      max-width: 80%;
+      display: none;
+      font-size: 18px;
+      text-align: center;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      animation: fadeIn 0.3s;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    .caption-text {
+      margin-bottom: 5px;
+      line-height: 1.4;
+    }
+
+    .caption-meta {
+      font-size: 12px;
+      color: #aaa;
+    }
+
+    /* Transcript Panel */
+    .transcript-panel {
+      background: white;
+      border-radius: 10px;
+      padding: 20px;
+      margin-top: 20px;
+      max-height: 400px;
+      overflow-y: auto;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+
+    .transcript-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .transcript-title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .transcript-search {
+      padding: 8px 12px;
+      border-radius: 5px;
+      border: 1px solid #cbd5e0;
+      width: 200px;
+      font-size: 14px;
+    }
+
+    .transcript-search:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .transcript-list {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .transcript-item {
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+      transition: background 0.2s;
+    }
+
+    .transcript-item:hover {
+      background: #f7fafc;
+    }
+
+    .transcript-item-meta {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 5px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .transcript-item-text {
+      color: #2d3748;
+      line-height: 1.5;
+    }
+
+    .transcript-item-highlight {
+      background: #fffacd;
+    }
+
+    .transcript-empty {
+      text-align: center;
+      color: #a0aec0;
+      padding: 40px;
+      font-style: italic;
+    }
+
+    /* Caption Toggle Button */
+    .caption-toggle {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+      transition: all 0.3s;
+      z-index: 1001;
+    }
+
+    .caption-toggle:hover {
+      background: #5a67d8;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+    }
+
+    /* Captions panel visibility states */
+    .captions-overlay.hidden {
+      display: none !important;
+    }
+
+    .captions-overlay {
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
   </style>
 </head>
 
@@ -329,6 +473,28 @@
 
     <audio id="audioPlayer" autoplay></audio>
   </div>
+
+  <!-- Live Captions Overlay -->
+  <div id="captionsOverlay" class="captions-overlay">
+    <div id="captionText" class="caption-text"></div>
+    <div id="captionMeta" class="caption-meta"></div>
+  </div>
+
+  <!-- Transcript Panel -->
+  <div id="transcriptPanel" class="transcript-panel" style="display: none;">
+    <div class="transcript-header">
+      <h3 class="transcript-title">Transcript</h3>
+      <input type="text" id="transcriptSearch" class="transcript-search" placeholder="Search transcript...">
+    </div>
+    <div id="transcriptList" class="transcript-list">
+      <div class="transcript-empty">No transcripts yet...</div>
+    </div>
+  </div>
+
+  <!-- Caption Toggle Button -->
+  <button id="captionToggle" class="caption-toggle" onclick="toggleCaptions()" style="display: none;">
+    Hide Captions
+  </button>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
   <script src="/js/common.js"></script>
@@ -462,6 +628,8 @@
           } else if (message.type === 'error') {
             showError(message.data.message);
             setStatus('Error: ' + message.data.message, 'disconnected');
+          } else if (message.type === 'transcription') {
+            handleTranscription(message.data);
           }
         } catch (error) {
           console.error('Error handling message:', error);
@@ -1001,10 +1169,160 @@
       connectToSfu(roomConfig.sfuUrl);
     }
 
+    // Transcription state
+    let transcripts = [];
+    let captionTimeout = null;
+    let searchDebounceTimeout = null;
+    let captionsVisible = true;
+
+    // Handle transcription messages
+    function handleTranscription(data) {
+      console.log('Transcription received:', data);
+
+      // Show live caption
+      showCaption(data.text, data.producerName || 'Speaker', data.confidence);
+
+      // Add to transcript list
+      addToTranscript(data);
+    }
+
+    // Show live caption overlay
+    function showCaption(text, speaker, confidence) {
+      const overlay = document.getElementById('captionsOverlay');
+      const textElement = document.getElementById('captionText');
+      const metaElement = document.getElementById('captionMeta');
+
+      textElement.textContent = text;
+      metaElement.textContent = `${speaker}${confidence ? ' (' + Math.round(confidence * 100) + '%)' : ''}`;
+
+      // Only show if captions are visible
+      if (captionsVisible) {
+        overlay.style.display = 'block';
+      }
+
+      // Auto-hide after 5 seconds
+      if (captionTimeout) {
+        clearTimeout(captionTimeout);
+      }
+      captionTimeout = setTimeout(() => {
+        overlay.style.display = 'none';
+      }, 5000);
+    }
+
+    // Toggle captions visibility
+    function toggleCaptions() {
+      captionsVisible = !captionsVisible;
+      const overlay = document.getElementById('captionsOverlay');
+      const toggleBtn = document.getElementById('captionToggle');
+
+      if (captionsVisible) {
+        overlay.classList.remove('hidden');
+        toggleBtn.textContent = 'Hide Captions';
+        localStorage.setItem('captionsVisible', 'true');
+      } else {
+        overlay.classList.add('hidden');
+        overlay.style.display = 'none';
+        toggleBtn.textContent = 'Show Captions';
+        localStorage.setItem('captionsVisible', 'false');
+      }
+    }
+
+    // Restore captions visibility preference on page load
+    function restoreCaptionsPreference() {
+      const saved = localStorage.getItem('captionsVisible');
+      if (saved === 'false') {
+        captionsVisible = false;
+        const overlay = document.getElementById('captionsOverlay');
+        const toggleBtn = document.getElementById('captionToggle');
+        overlay.classList.add('hidden');
+        toggleBtn.textContent = 'Show Captions';
+      }
+    }
+
+    // Add transcript to viewer
+    function addToTranscript(data) {
+      transcripts.push(data);
+
+      const listElement = document.getElementById('transcriptList');
+      const panel = document.getElementById('transcriptPanel');
+
+      // Remove empty message if exists
+      const emptyMessage = listElement.querySelector('.transcript-empty');
+      if (emptyMessage) {
+        emptyMessage.remove();
+      }
+
+      // Show panel and toggle button
+      panel.style.display = 'block';
+      document.getElementById('captionToggle').style.display = 'block';
+
+      // Create transcript item
+      const item = document.createElement('div');
+      item.className = 'transcript-item';
+      item.dataset.transcriptId = transcripts.length - 1;
+
+      const timestamp = new Date(data.timestamp * 1000).toLocaleTimeString();
+
+      item.innerHTML = `
+        <div class="transcript-item-meta">
+          <span>${data.producerName || 'Speaker'} - ${data.channelName || ''}</span>
+          <span>${timestamp}</span>
+        </div>
+        <div class="transcript-item-text">${data.text}</div>
+      `;
+
+      listElement.appendChild(item);
+
+      // Auto-scroll to bottom
+      listElement.scrollTop = listElement.scrollHeight;
+    }
+
+    // Search transcripts
+    function searchTranscripts(query) {
+      const items = document.querySelectorAll('.transcript-item');
+
+      if (!query.trim()) {
+        // Clear highlights
+        items.forEach(item => {
+          item.classList.remove('transcript-item-highlight');
+          item.style.display = 'block';
+        });
+        return;
+      }
+
+      const lowerQuery = query.toLowerCase();
+
+      items.forEach(item => {
+        const text = item.querySelector('.transcript-item-text').textContent.toLowerCase();
+
+        if (text.includes(lowerQuery)) {
+          item.classList.add('transcript-item-highlight');
+          item.style.display = 'block';
+        } else {
+          item.classList.remove('transcript-item-highlight');
+          item.style.display = 'none';
+        }
+      });
+    }
+
+    // Search input handler with debouncing
+    document.getElementById('transcriptSearch').addEventListener('input', function (e) {
+      if (searchDebounceTimeout) {
+        clearTimeout(searchDebounceTimeout);
+      }
+
+      searchDebounceTimeout = setTimeout(() => {
+        searchTranscripts(e.target.value);
+      }, 300);
+    });
+
     // Channel selector change handler
     document.getElementById('channelSelect').addEventListener('change', function (e) {
       selectedChannel = e.target.value;
     });
+
+    // Restore captions preference on page load
+    restoreCaptionsPreference();
 
     // Connect to room on page load
     connectToRoom();
