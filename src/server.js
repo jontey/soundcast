@@ -16,6 +16,7 @@ import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.j
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
 import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
+import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -339,6 +340,42 @@ function getChannelStatsForTenant(tenantId) {
     }
   }
   return stats;
+}
+
+// Get recording status for all rooms in a tenant
+function getRecordingStatusForTenant(tenantId) {
+  const recordingStats = {};
+  const rooms = listRoomsByTenant(tenantId);
+
+  for (const room of rooms) {
+    const status = getRecordingStatus(room.id);
+    if (status) {
+      recordingStats[room.slug] = status;
+    } else {
+      recordingStats[room.slug] = { isRecording: false };
+    }
+  }
+  return recordingStats;
+}
+
+// Notify tenant admins about recording status change
+function notifyRecordingStatusChange(tenantId, roomSlug, status) {
+  const adminClients = tenantAdminClients.get(tenantId);
+  if (!adminClients) return;
+
+  const message = JSON.stringify({
+    type: 'recording-status',
+    roomSlug,
+    ...status
+  });
+
+  for (const socket of adminClients) {
+    try {
+      socket.send(message);
+    } catch (e) {
+      fastify.log.error(`Failed to send recording status to admin: ${e.message}`);
+    }
+  }
 }
 
 // Find room and tenant for a channel name
@@ -865,10 +902,11 @@ async function registerMainWsRoutes(fastify) {
           // Create transport
           const { transport, params } = await createWebRtcTransport();
 
-          // Store transport
+          // Store transport and publisher name (for recording)
           clientInfo.transport = transport;
           clientInfo.isPublisher = true;
           clientInfo.channelId = data.channelId;
+          clientInfo.publisherName = data.publisherName || null;
 
 
 
@@ -935,15 +973,17 @@ async function registerMainWsRoutes(fastify) {
               fastify.log.debug(`Producer score update for ${producer.id}:`, score);
             });
 
-            // Store producer
+            // Store producer with name for recording
             const publishChannel = channels.get(clientInfo.channelId);
             const producerId = uuidv4();
             clientInfo.producer = { id: producerId, producer };
-            publishChannel.producers.set(producerId, {
+            const producerInfo = {
               transport: clientInfo.transport,
               producer,
-              clientId
-            });
+              clientId,
+              name: clientInfo.publisherName || `producer_${Date.now()}`
+            };
+            publishChannel.producers.set(producerId, producerInfo);
 
             fastify.log.info(`Audio producer created successfully with id ${producer.id}`);
             connection.send(JSON.stringify({
@@ -956,6 +996,22 @@ async function registerMainWsRoutes(fastify) {
 
             // Notify tenant admins about the new publisher
             notifyTenantAdmins(clientInfo.channelId);
+
+            // Check if recording is active for this room and add producer if so
+            const channelParts = clientInfo.channelId.split(':');
+            if (channelParts.length >= 2) {
+              const roomSlug = channelParts[0];
+              const channelName = channelParts.slice(1).join(':');
+              const room = getRoomBySlug(roomSlug);
+              if (room && isRecording(room.id)) {
+                try {
+                  await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  fastify.log.info(`Added producer ${producerId} to active recording for room ${roomSlug}`);
+                } catch (err) {
+                  fastify.log.error(`Failed to add producer to recording: ${err.message}`);
+                }
+              }
+            }
 
             // Create consumers for existing listeners in the same channel
             for (const [otherId, otherClient] of clients) {
@@ -1219,6 +1275,18 @@ async function registerMainWsRoutes(fastify) {
 
               stopBroadcastChannel.producers.delete(prodId);
 
+              // Stop recording for this producer if recording is active
+              const stopChannelParts = data.channelId.split(':');
+              if (stopChannelParts.length >= 2) {
+                const stopRoomSlug = stopChannelParts[0];
+                const stopRoom = getRoomBySlug(stopRoomSlug);
+                if (stopRoom && isRecording(stopRoom.id)) {
+                  removeProducerFromRecording(stopRoom.id, prodId).catch(err => {
+                    fastify.log.error(`Failed to remove producer from recording: ${err.message}`);
+                  });
+                }
+              }
+
               // Remove related consumers
               for (const [consumerId, consumer] of stopBroadcastChannel.consumers) {
                 if (consumer.producerId === prodId) {
@@ -1317,6 +1385,18 @@ async function registerMainWsRoutes(fastify) {
             try { producer.close(); } catch { }
           }
           channel.producers.delete(prodId);
+
+          // Stop recording for this producer if recording is active
+          const closeChannelParts = clientInfo.channelId.split(':');
+          if (closeChannelParts.length >= 2) {
+            const closeRoomSlug = closeChannelParts[0];
+            const closeRoom = getRoomBySlug(closeRoomSlug);
+            if (closeRoom && isRecording(closeRoom.id)) {
+              removeProducerFromRecording(closeRoom.id, prodId).catch(err => {
+                fastify.log.error(`Failed to remove producer from recording on disconnect: ${err.message}`);
+              });
+            }
+          }
 
           for (const [consumerId, consumer] of channel.consumers) {
             if (consumer.producerId === prodId) {
@@ -1595,6 +1675,13 @@ async function registerAdminWsRoutes(fastify) {
       stats
     }));
 
+    // Send initial recording status for all rooms
+    const recordingStats = getRecordingStatusForTenant(tenant.id);
+    connection.send(JSON.stringify({
+      type: 'recording-stats',
+      stats: recordingStats
+    }));
+
     connection.on('message', async (message) => {
       try {
         const payload = JSON.parse(message.toString());
@@ -1605,6 +1692,12 @@ async function registerAdminWsRoutes(fastify) {
           connection.send(JSON.stringify({
             type: 'channel-stats',
             stats
+          }));
+          // Also send recording status
+          const recordingStats = getRecordingStatusForTenant(tenant.id);
+          connection.send(JSON.stringify({
+            type: 'recording-stats',
+            stats: recordingStats
           }));
         }
       } catch (e) {
@@ -1816,6 +1909,14 @@ async function main() {
 
   // Create Router
   router = await worker.createRouter({ mediaCodecs });
+
+  // Initialize recorder module with notification callback
+  initRecorder({
+    router,
+    channels,
+    fastify,
+    onStatusChange: notifyRecordingStatusChange
+  });
 
   // Start HTTP server
   try {
