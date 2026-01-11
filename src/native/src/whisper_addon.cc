@@ -101,8 +101,21 @@ Napi::Value WhisperSession::Transcribe(const Napi::CallbackInfo& info) {
   wparams.print_realtime = false;
   wparams.print_timestamps = true;
   wparams.translate = false;
-  wparams.language = "en";
   wparams.n_threads = 4;
+
+  // Parse options if provided
+  std::string language = "en"; // default
+  if (info.Length() >= 2 && info[1].IsObject()) {
+    Napi::Object options = info[1].As<Napi::Object>();
+    if (options.Has("language") && options.Get("language").IsString()) {
+      language = options.Get("language").As<Napi::String>().Utf8Value();
+    }
+    if (options.Has("threads") && options.Get("threads").IsNumber()) {
+      wparams.n_threads = options.Get("threads").As<Napi::Number>().Int32Value();
+    }
+  }
+
+  wparams.language = language.c_str();
 
   // Run transcription
   if (whisper_full(ctx, wparams, audioData, audioLength) != 0) {

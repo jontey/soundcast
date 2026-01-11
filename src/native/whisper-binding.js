@@ -79,8 +79,12 @@ export class WhisperTranscriber extends EventEmitter {
       // Convert Float32Array to Node.js Buffer for N-API
       const nodeBuffer = Buffer.from(floatBuffer.buffer, floatBuffer.byteOffset, floatBuffer.byteLength);
 
-      // Call native transcription
-      const segments = this.session.transcribe(nodeBuffer);
+      // Call native transcription with options
+      const options = {
+        language: this.options.language,
+        threads: this.options.threads
+      };
+      const segments = this.session.transcribe(nodeBuffer, options);
 
       this.emit('transcription', { segments });
 
