@@ -940,6 +940,142 @@
     let recordingStatus = {}; // roomSlug -> { isRecording, startedAt, trackCount, ... }
     let recordingTimers = {}; // roomSlug -> intervalId for duration updates
 
+    // ========== Reactive State Management ==========
+    // Lightweight state store with change notifications using Proxy
+    const StateStore = {
+      _data: {},
+      _listeners: {},
+
+      init(initialState) {
+        this._data = new Proxy(initialState, {
+          set: (target, property, value) => {
+            const oldValue = target[property];
+            target[property] = value;
+            this._notify(property, value, oldValue);
+            return true;
+          }
+        });
+        return this._data;
+      },
+
+      subscribe(path, callback) {
+        if (!this._listeners[path]) {
+          this._listeners[path] = [];
+        }
+        this._listeners[path].push(callback);
+        // Return unsubscribe function
+        return () => {
+          this._listeners[path] = this._listeners[path].filter(cb => cb !== callback);
+        };
+      },
+
+      _notify(path, newValue, oldValue) {
+        if (this._listeners[path]) {
+          this._listeners[path].forEach(callback => {
+            try {
+              callback(newValue, oldValue);
+            } catch (err) {
+              console.error(`[StateStore] Listener error for ${path}:`, err);
+            }
+          });
+        }
+      },
+
+      get(path) {
+        return this._data[path];
+      },
+
+      set(path, value) {
+        this._data[path] = value;
+      }
+    };
+
+    // Initialize reactive state (backward compatible - wraps existing globals)
+    const state = StateStore.init({
+      rooms: {},
+      channelStats: {},
+      recordingStatus: {},
+      transcriptionSessions: {},
+      transcripts: {},
+      publishers: {}
+    });
+
+    // ========== Helper Utilities ==========
+    // Batch DOM updates to reduce reflows
+    function batchUpdate(updates) {
+      requestAnimationFrame(() => {
+        updates.forEach(fn => fn());
+      });
+    }
+
+    // Smart cache for API responses
+    const apiCache = {
+      _cache: new Map(),
+      _ttl: 5000, // 5 seconds
+
+      async get(key, fetcher) {
+        const cached = this._cache.get(key);
+        if (cached && Date.now() - cached.timestamp < this._ttl) {
+          return cached.data;
+        }
+
+        const data = await fetcher();
+        this._cache.set(key, { data, timestamp: Date.now() });
+        return data;
+      },
+
+      invalidate(key) {
+        this._cache.delete(key);
+      },
+
+      clear() {
+        this._cache.clear();
+      }
+    };
+
+    // Element creation with data attributes
+    function createElement(tag, attrs = {}, children = []) {
+      const el = document.createElement(tag);
+
+      Object.entries(attrs).forEach(([key, value]) => {
+        if (key === 'className') {
+          el.className = value;
+        } else if (key === 'dataset') {
+          Object.assign(el.dataset, value);
+        } else if (key.startsWith('on')) {
+          el.addEventListener(key.slice(2).toLowerCase(), value);
+        } else {
+          el.setAttribute(key, value);
+        }
+      });
+
+      children.forEach(child => {
+        if (typeof child === 'string') {
+          el.appendChild(document.createTextNode(child));
+        } else if (child) {
+          el.appendChild(child);
+        }
+      });
+
+      return el;
+    }
+
+    // Helper to update multiple element properties efficiently
+    function updateElementsFromTemplate(elements, template) {
+      Object.entries(template).forEach(([key, updates]) => {
+        const el = elements[key];
+        if (!el) return;
+
+        Object.entries(updates).forEach(([prop, value]) => {
+          if (prop === 'style') {
+            Object.assign(el.style, value);
+          } else {
+            el[prop] = value;
+          }
+        });
+      });
+    }
+
     // Connect to admin WebSocket for real-time stats
     function connectAdminWebSocket() {
       if (!currentApiKey) return;
@@ -959,9 +1095,21 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'channel-stats') {
+            // Update both old global and new state (backward compatible)
             channelStats = msg.stats;
+            state.channelStats = { ...msg.stats };
             updateAllChannelStatsUI();
           } else if (msg.type === 'channel-update') {
+            // Update state store (triggers reactivity)
+            if (!state.channelStats[msg.roomSlug]) {
+              state.channelStats[msg.roomSlug] = {};
+            }
+            state.channelStats[msg.roomSlug][msg.channelName] = {
+              publishers: msg.publishers,
+              subscribers: msg.subscribers
+            };
+
+            // Also update old global for backward compatibility
             if (!channelStats[msg.roomSlug]) {
               channelStats[msg.roomSlug] = {};
             }
@@ -969,21 +1117,29 @@
               publishers: msg.publishers,
               subscribers: msg.subscribers
             };
-            updateChannelStatsForRoom(msg.roomSlug);
+
+            // Targeted updates only (no API calls)
+            updateChannelStatsForRoomTargeted(msg.roomSlug);
           } else if (msg.type === 'recording-stats') {
             // Initial recording status for all rooms
             recordingStatus = msg.stats;
+            state.recordingStatus = { ...msg.stats };
             updateAllRecordingUI();
           } else if (msg.type === 'recording-status') {
             // Recording status update for a specific room
             recordingStatus[msg.roomSlug] = msg;
+            state.recordingStatus[msg.roomSlug] = { ...msg };
             updateRecordingUI(msg.roomSlug);
           } else if (msg.type === 'transcription-update') {
             // New transcript received
             handleTranscriptUpdate(msg.roomSlug, msg.transcript);
+            // Invalidate cache to get fresh data on next refresh
+            apiCache.invalidate(`transcripts-${msg.roomSlug}`);
           } else if (msg.type === 'transcription-session-update') {
             // Transcription session started or stopped
             handleSessionUpdate(msg.roomSlug, msg);
+            // Invalidate cache
+            apiCache.invalidate(`transcription-status-${msg.roomSlug}`);
           } else if (msg.type === 'error') {
             console.error('Admin WebSocket error:', msg.data.message);
           }
@@ -1018,8 +1174,48 @@
     }
 
     function updateChannelStatsForRoom(roomSlug) {
-      // Refresh the publishers and live status table
+      // Refresh the publishers and live status table (old way - full reload)
       loadPublishersAndLiveStatus(roomSlug);
+    }
+
+    function updateChannelStatsForRoomTargeted(roomSlug) {
+      // Targeted update - no API calls, uses cached data
+      const publishers = state.publishers[roomSlug];
+      const stats = state.channelStats[roomSlug] || {};
+      const summaryEl = document.getElementById(`connection-summary-${roomSlug}`);
+
+      if (!publishers || publishers.length === 0) {
+        // No cached data, fall back to full load
+        loadPublishersAndLiveStatus(roomSlug);
+        return;
+      }
+
+      // Calculate connection summary
+      let activeCount = 0;
+      const totalCount = publishers.length;
+
+      for (const channelName in stats) {
+        if (stats[channelName].publishers > 0) {
+          activeCount++;
+        }
+      }
+
+      // Update summary
+      if (summaryEl) {
+        if (activeCount === 0) {
+          summaryEl.textContent = 'All offline';
+          summaryEl.className = 'connection-summary offline';
+        } else if (activeCount < totalCount) {
+          summaryEl.textContent = `🟢 ${activeCount} of ${totalCount} live`;
+          summaryEl.className = 'connection-summary partial';
+        } else {
+          summaryEl.textContent = `🟢 All ${activeCount} live`;
+          summaryEl.className = 'connection-summary';
+        }
+      }
+
+      // Update table stats (targeted - no rebuild)
+      updatePublisherTableStats(roomSlug, publishers, stats);
     }
 
     function getApiKey() {
@@ -1180,15 +1376,21 @@
       if (!container) return;
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
-          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        // Fetch with caching
+        const data = await apiCache.get(`publishers-${slug}`, async () => {
+          const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+            headers: { 'Authorization': `Bearer ${currentApiKey}` }
+          });
+          if (!response.ok) throw new Error('Failed to load publishers');
+          return response.json();
         });
 
-        if (!response.ok) {
-          throw new Error('Failed to load publishers');
+        // Store in state
+        if (!state.publishers[slug]) {
+          state.publishers[slug] = data.publishers;
         }
 
-        const data = await response.json();
+        const stats = state.channelStats[slug] || channelStats[slug] || {};
 
         if (data.publishers.length === 0) {
           container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px; text-align: center;">No publishers configured yet</div>';
@@ -1199,12 +1401,9 @@
           return;
         }
 
-        const baseUrl = getSecureBaseUrl();
-        const stats = channelStats[slug] || {};
-
         // Calculate connection summary
         let activeCount = 0;
-        let totalCount = data.publishers.length;
+        const totalCount = data.publishers.length;
 
         for (const channelName in stats) {
           if (stats[channelName].publishers > 0) {
@@ -1226,48 +1425,95 @@
           }
         }
 
-        container.innerHTML = `
-          <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
-            <thead>
-              <tr style="border-bottom: 2px solid #e2e8f0;">
-                <th style="text-align: left; padding: 8px; font-weight: bold;">Channel</th>
-                <th style="text-align: left; padding: 8px; font-weight: bold;">Publisher</th>
-                <th style="text-align: center; padding: 8px; font-weight: bold;">Status</th>
-                <th style="text-align: center; padding: 8px; font-weight: bold;">Listeners</th>
-                <th style="text-align: right; padding: 8px; font-weight: bold;">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${data.publishers.map(pub => {
-          const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
-          const isLive = channelStat.publishers > 0;
-          const statusIcon = isLive ? '🟢' : '🔴';
-          const statusText = isLive ? 'Live' : 'Offline';
-
-          return `
-                  <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 8px; font-weight: bold;">${escapeHtml(pub.channel_name)}</td>
-                    <td style="padding: 8px;">${escapeHtml(pub.name)}</td>
-                    <td style="text-align: center; padding: 8px;">
-                      <span class="status-indicator ${isLive ? 'online' : 'offline'}">${statusIcon} ${statusText}</span>
-                    </td>
-                    <td style="text-align: center; padding: 8px;">
-                      👥 ${channelStat.subscribers}
-                    </td>
-                    <td style="text-align: right; padding: 8px;">
-                      <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(baseUrl + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy URL</button>
-                      <button class="btn btn-primary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}', '${escapeAttr(pub.transcription_language || '')}')">Edit</button>
-                      <button class="btn btn-danger btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="deletePublisher('${slug}', ${pub.id})">Delete</button>
-                    </td>
-                  </tr>
-                `;
-        }).join('')}
-            </tbody>
-          </table>
-        `;
+        // Check if table needs to be built or just updated
+        const existingTable = container.querySelector('table');
+        if (!existingTable || !container.dataset.initialized) {
+          // First render - build full table
+          buildPublisherTable(slug, data.publishers);
+          container.dataset.initialized = 'true';
+        } else {
+          // Subsequent renders - only update status cells
+          updatePublisherTableStats(slug, data.publishers, stats);
+        }
       } catch (error) {
         container.innerHTML = '<div style="padding: 10px; color: #f56565; font-size: 13px; text-align: center;">Failed to load publishers</div>';
       }
+    }
+
+    // Build initial publisher table structure (called once)
+    function buildPublisherTable(slug, publishers) {
+      const container = document.getElementById(`publishers-live-${slug}`);
+      if (!container) return;
+
+      const baseUrl = getSecureBaseUrl();
+      const stats = state.channelStats[slug] || channelStats[slug] || {};
+
+      container.innerHTML = `
+        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 2px solid #e2e8f0;">
+              <th style="text-align: left; padding: 8px; font-weight: bold;">Channel</th>
+              <th style="text-align: left; padding: 8px; font-weight: bold;">Publisher</th>
+              <th style="text-align: center; padding: 8px; font-weight: bold;">Status</th>
+              <th style="text-align: center; padding: 8px; font-weight: bold;">Listeners</th>
+              <th style="text-align: right; padding: 8px; font-weight: bold;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${publishers.map(pub => {
+        const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
+        const isLive = channelStat.publishers > 0;
+        const statusIcon = isLive ? '🟢' : '🔴';
+        const statusText = isLive ? 'Live' : 'Offline';
+
+        return `
+                <tr data-room="${escapeAttr(slug)}" data-channel="${escapeAttr(pub.channel_name)}" data-publisher-id="${pub.id}" style="border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 8px; font-weight: bold;">${escapeHtml(pub.channel_name)}</td>
+                  <td style="padding: 8px;">${escapeHtml(pub.name)}</td>
+                  <td style="text-align: center; padding: 8px;" data-status-cell>
+                    <span class="status-indicator ${isLive ? 'online' : 'offline'}">${statusIcon} ${statusText}</span>
+                  </td>
+                  <td style="text-align: center; padding: 8px;" data-listener-cell>
+                    👥 ${channelStat.subscribers}
+                  </td>
+                  <td style="text-align: right; padding: 8px;">
+                    <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(baseUrl + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy URL</button>
+                    <button class="btn btn-primary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}', '${escapeAttr(pub.transcription_language || '')}')">Edit</button>
+                    <button class="btn btn-danger btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="deletePublisher('${slug}', ${pub.id})">Delete</button>
+                  </td>
+                </tr>
+              `;
+      }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    // Update publisher table stats (targeted updates only)
+    function updatePublisherTableStats(slug, publishers, stats) {
+      publishers.forEach(pub => {
+        const row = document.querySelector(`[data-room="${slug}"][data-publisher-id="${pub.id}"]`);
+        if (!row) return;
+
+        const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
+        const isLive = channelStat.publishers > 0;
+
+        // Update status indicator
+        const statusCell = row.querySelector('[data-status-cell]');
+        if (statusCell) {
+          const statusIndicator = statusCell.querySelector('.status-indicator');
+          if (statusIndicator) {
+            statusIndicator.className = isLive ? 'status-indicator online' : 'status-indicator offline';
+            statusIndicator.innerHTML = `${isLive ? '🟢' : '🔴'} ${isLive ? 'Live' : 'Offline'}`;
+          }
+        }
+
+        // Update listener count
+        const listenerCell = row.querySelector('[data-listener-cell]');
+        if (listenerCell) {
+          listenerCell.textContent = `👥 ${channelStat.subscribers}`;
+        }
+      });
     }
 
     // Copy all publisher URLs for a room
@@ -2348,104 +2594,160 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       if (!container) return;
 
       try {
-        // Get active transcription sessions
-        const sessionsResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/status`, {
-          headers: { 'Authorization': `Bearer ${currentApiKey}` }
-        });
+        // Fetch data with caching
+        const [sessionsData, transcriptsData, publishersData] = await Promise.all([
+          apiCache.get(`transcription-status-${roomSlug}`, () =>
+            fetch(`${API_BASE}/rooms/${roomSlug}/transcription/status`, {
+              headers: { 'Authorization': `Bearer ${currentApiKey}` }
+            }).then(r => r.ok ? r.json() : { sessions: [] })
+          ),
+          apiCache.get(`transcripts-${roomSlug}`, () =>
+            fetch(`${API_BASE}/rooms/${roomSlug}/transcripts?recent=5&limit=20`, {
+              headers: { 'Authorization': `Bearer ${currentApiKey}` }
+            }).then(r => r.ok ? r.json() : { transcripts: [] })
+          ),
+          apiCache.get(`publishers-${roomSlug}`, () =>
+            fetch(`${API_BASE}/rooms/${roomSlug}/publishers`, {
+              headers: { 'Authorization': `Bearer ${currentApiKey}` }
+            }).then(r => r.ok ? r.json() : { publishers: [] })
+          )
+        ]);
 
-        if (!sessionsResponse.ok) {
-          throw new Error('Failed to load transcription status');
-        }
-
-        const sessionsData = await sessionsResponse.json();
         const sessions = sessionsData.sessions || [];
-
-        // Get recent transcripts for display
-        const transcriptsResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/transcripts?recent=5&limit=20`, {
-          headers: { 'Authorization': `Bearer ${currentApiKey}` }
-        });
-
-        const transcriptsData = transcriptsResponse.ok ? await transcriptsResponse.json() : { transcripts: [] };
         const transcripts = transcriptsData.transcripts || [];
+        const channels = [...new Set((publishersData.publishers || []).map(p => p.channel_name))];
 
-        // Get publishers to know all channels
-        const publishersResponse = await fetch(`${API_BASE}/rooms/${roomSlug}/publishers`, {
-          headers: { 'Authorization': `Bearer ${currentApiKey}` }
-        });
-
-        const publishersData = publishersResponse.ok ? await publishersResponse.json() : { publishers: [] };
-        const channels = [...new Set(publishersData.publishers.map(p => p.channel_name))];
+        // Store in state for other components
+        state.transcriptionSessions[roomSlug] = sessions;
+        state.transcripts[roomSlug] = transcripts;
 
         if (channels.length === 0) {
           container.innerHTML = '<div style="padding: 20px; color: #718096; text-align: center;">No channels configured. Add publishers first.</div>';
           return;
         }
 
-        // Build UI per channel
-        let html = '';
-
-        for (const channelName of channels) {
-          const channelSessions = sessions.filter(s => s.channelName === channelName);
-          const isRunning = channelSessions.length > 0;
-          const session = channelSessions[0];
-          const channelTranscripts = transcripts.filter(t => t.channel_name === channelName).slice(0, 10).reverse();
-
-          html += `
-            <div class="transcription-channel-panel">
-              <div class="transcription-channel-header">
-                <div class="transcription-channel-info">
-                  <span style="font-weight: bold;">${escapeHtml(channelName)}</span>
-                  ${isRunning ? `
-                    <span class="badge public" style="font-size: 11px;">Running</span>
-                    <span style="font-size: 12px; color: #718096;">${escapeHtml(session.language || 'auto')} - ${formatUptime(session.uptime || 0)}</span>
-                  ` : `
-                    <span class="badge offline" style="font-size: 11px;">Stopped</span>
-                  `}
-                </div>
-                ${isRunning ? `
-                  <button onclick="stopTranscriptionChannel('${roomSlug}', '${escapeAttr(session.producerId)}')" class="btn btn-danger btn-small">⏹️ Stop</button>
-                ` : `
-                  <div style="display: flex; gap: 8px; align-items: center;">
-                    <select id="lang-select-${roomSlug}-${escapeAttr(channelName)}" style="padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;">
-                      <option value="en">English</option>
-                      <option value="zh">Chinese</option>
-                      <option value="ms">Malay</option>
-                      <option value="es">Spanish</option>
-                      <option value="fr">French</option>
-                      <option value="de">German</option>
-                      <option value="ja">Japanese</option>
-                      <option value="ko">Korean</option>
-                      <option value="ar">Arabic</option>
-                      <option value="hi">Hindi</option>
-                      <option value="pt">Portuguese</option>
-                      <option value="ru">Russian</option>
-                      <option value="it">Italian</option>
-                    </select>
-                    <button onclick="startTranscriptionWithLanguage('${roomSlug}', '${escapeAttr(channelName)}')" class="btn btn-primary btn-small">▶️ Start</button>
-                  </div>
-                `}
-              </div>
-
-              <div class="transcription-output" id="transcript-output-${roomSlug}-${escapeAttr(channelName)}">
-                ${channelTranscripts.length > 0 ? channelTranscripts.map(t => `
-                  <div class="transcript-line">
-                    <span class="timestamp">[${formatTranscriptTime(t.timestamp_start)}]</span>
-                    <span class="text">${escapeHtml(t.text_content)}</span>
-                  </div>
-                `).join('') : `
-                  <div style="color: #718096; text-align: center; padding: 10px;">
-                    ${isRunning ? 'Waiting for transcription...' : 'No transcripts yet - Click Start to begin transcription'}
-                  </div>
-                `}
-              </div>
-            </div>
-          `;
+        // Check if this is first render (initialize structure)
+        if (!container.dataset.initialized) {
+          buildTranscriptionMonitorStructure(roomSlug, channels);
+          container.dataset.initialized = 'true';
         }
 
-        container.innerHTML = html;
+        // Update each channel's status (targeted updates only)
+        channels.forEach(channelName => {
+          const channelSessions = sessions.filter(s => s.channelName === channelName);
+          const channelTranscripts = transcripts.filter(t => t.channel_name === channelName).slice(0, 10).reverse();
+          updateTranscriptionChannelStatus(roomSlug, channelName, channelSessions, channelTranscripts);
+        });
       } catch (error) {
         console.error('Error loading transcription monitor:', error);
         container.innerHTML = '<div style="padding: 20px; color: #f56565; text-align: center;">Failed to load transcription data</div>';
+      }
+    }
+
+    // Build initial transcription monitor structure (called once)
+    function buildTranscriptionMonitorStructure(roomSlug, channels) {
+      const container = document.getElementById(`transcription-channels-${roomSlug}`);
+      if (!container) return;
+
+      container.innerHTML = channels.map(channelName => `
+        <div class="transcription-channel-panel" data-channel="${escapeAttr(channelName)}">
+          <div class="transcription-channel-header">
+            <div class="transcription-channel-info">
+              <span style="font-weight: bold;">${escapeHtml(channelName)}</span>
+              <span class="badge offline" style="font-size: 11px;" data-status-badge>Stopped</span>
+              <span class="language-display" style="font-size: 12px; color: #718096; display: none;" data-language-info></span>
+            </div>
+            <div class="channel-controls">
+              <button class="btn btn-danger btn-small btn-stop" style="display: none;" data-stop-btn>⏹️ Stop</button>
+              <div class="start-group" style="display: flex; gap: 8px; align-items: center;">
+                <select id="lang-select-${roomSlug}-${escapeAttr(channelName)}" style="padding: 6px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 13px;">
+                  <option value="en">English</option>
+                  <option value="zh">Chinese</option>
+                  <option value="ms">Malay</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="ar">Arabic</option>
+                  <option value="hi">Hindi</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ru">Russian</option>
+                  <option value="it">Italian</option>
+                </select>
+                <button onclick="startTranscriptionWithLanguage('${roomSlug}', '${escapeAttr(channelName)}')" class="btn btn-primary btn-small">▶️ Start</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="transcription-output" id="transcript-output-${roomSlug}-${escapeAttr(channelName)}">
+            <div style="color: #718096; text-align: center; padding: 10px;">
+              No transcripts yet - Click Start to begin transcription
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Update transcription channel status (targeted updates - preserves dropdown state)
+    function updateTranscriptionChannelStatus(roomSlug, channelName, sessions, transcripts) {
+      const panel = document.querySelector(`#transcription-channels-${roomSlug} [data-channel="${channelName}"]`);
+      if (!panel) return;
+
+      const isRunning = sessions.length > 0;
+      const session = sessions[0];
+
+      // Update status badge
+      const badge = panel.querySelector('[data-status-badge]');
+      if (badge) {
+        badge.className = isRunning ? 'badge public' : 'badge offline';
+        badge.style.fontSize = '11px';
+        badge.textContent = isRunning ? 'Running' : 'Stopped';
+      }
+
+      // Update language info
+      const languageInfo = panel.querySelector('[data-language-info]');
+      if (languageInfo) {
+        if (isRunning && session) {
+          languageInfo.textContent = `${escapeHtml(session.language || 'auto')} - ${formatUptime(session.uptime || 0)}`;
+          languageInfo.style.display = 'inline';
+        } else {
+          languageInfo.style.display = 'none';
+        }
+      }
+
+      // Toggle controls (Stop button vs Start button + dropdown)
+      const stopBtn = panel.querySelector('[data-stop-btn]');
+      const startGroup = panel.querySelector('.start-group');
+
+      if (stopBtn && startGroup) {
+        if (isRunning && session) {
+          stopBtn.style.display = 'inline-block';
+          stopBtn.setAttribute('onclick', `stopTranscriptionChannel('${roomSlug}', '${escapeAttr(session.producerId)}')`);
+          startGroup.style.display = 'none';
+        } else {
+          stopBtn.style.display = 'none';
+          startGroup.style.display = 'flex';
+        }
+      }
+
+      // Update transcript output
+      const outputEl = document.getElementById(`transcript-output-${roomSlug}-${escapeAttr(channelName)}`);
+      if (outputEl) {
+        if (transcripts.length > 0) {
+          outputEl.innerHTML = transcripts.map(t => `
+            <div class="transcript-line">
+              <span class="timestamp">[${formatTranscriptTime(t.timestamp_start)}]</span>
+              <span class="text">${escapeHtml(t.text_content)}</span>
+            </div>
+          `).join('');
+        } else {
+          outputEl.innerHTML = `
+            <div style="color: #718096; text-align: center; padding: 10px;">
+              ${isRunning ? 'Waiting for transcription...' : 'No transcripts yet - Click Start to begin transcription'}
+            </div>
+          `;
+        }
       }
     }
 
