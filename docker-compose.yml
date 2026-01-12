@@ -23,9 +23,21 @@ services:
       - TLS_CERT_PATH=/app/certs/server.crt
       # Recording settings
       - RECORDING_DIR=/app/recordings
+      # Transcription settings (NEW)
+      - TRANSCRIPTION_ENABLED=true
+      - TRANSCRIPTION_USE_NATIVE=true
+      - WHISPER_MODEL_DIR=/app/models
+      - WHISPER_MODEL_SIZE=base
+      - TRANSCRIPTION_RTP_PORT_MIN=51000
+      - TRANSCRIPTION_RTP_PORT_MAX=51999
+      # Embedding settings (NEW)
+      - EMBEDDING_ENABLED=true
+      # SQLite-vec extension path (NEW)
+      - SQLITE_VEC_PATH=/app/lib/vec0.so
     volumes:
       - soundcast-data:/app/data
       - soundcast-recordings:/app/recordings
+      - soundcast-models:/app/models  # NEW: persistent models storage
     restart: unless-stopped
     # For air-gapped deployments, network_mode: host may work better
     network_mode: host
@@ -33,3 +45,4 @@ services:
 volumes:
   soundcast-data:
   soundcast-recordings:
+  soundcast-models:  # NEW: volume for Whisper models

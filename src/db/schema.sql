@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS publishers (
     channel_name TEXT NOT NULL, -- Channel to broadcast to
     join_token TEXT NOT NULL, -- Plain text token for display in admin UI
     join_token_hash TEXT NOT NULL UNIQUE, -- Secure hash for verification
+    transcription_language TEXT DEFAULT 'en', -- Language code for Whisper transcription
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (room_id) REFERENCES rooms(id)
 );
@@ -90,3 +91,43 @@ CREATE INDEX IF NOT EXISTS idx_sfus_last_heartbeat ON sfus(last_heartbeat);
 CREATE INDEX IF NOT EXISTS idx_recordings_room_id ON recordings(room_id);
 CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status);
 CREATE INDEX IF NOT EXISTS idx_recording_tracks_recording_id ON recording_tracks(recording_id);
+
+-- 2.8. Transcripts Model (real-time transcription with timestamps)
+CREATE TABLE IF NOT EXISTS transcripts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL,
+    channel_name TEXT NOT NULL,
+    producer_id TEXT NOT NULL,       -- mediasoup producer UUID
+    producer_name TEXT,
+    text_content TEXT NOT NULL,
+    timestamp_start REAL NOT NULL,   -- Unix timestamp (seconds.milliseconds)
+    timestamp_end REAL NOT NULL,
+    confidence_score REAL,           -- 0.0 to 1.0
+    language TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_transcripts_room_id ON transcripts(room_id);
+CREATE INDEX IF NOT EXISTS idx_transcripts_producer_id ON transcripts(producer_id);
+CREATE INDEX IF NOT EXISTS idx_transcripts_timestamp ON transcripts(timestamp_start);
+CREATE INDEX IF NOT EXISTS idx_transcripts_channel ON transcripts(channel_name);
+
+-- 2.9. Embedding Metadata Model (tracks vector embeddings for transcripts)
+CREATE TABLE IF NOT EXISTS embedding_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL UNIQUE,
+    room_id INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (transcript_id) REFERENCES transcripts(id) ON DELETE CASCADE
+);
+
+-- 2.10. Vector Embeddings (sqlite-vec virtual table for semantic search)
+-- Note: Requires sqlite-vec extension to be loaded
+-- Run: chmod +x scripts/setup-sqlite-vec.sh && ./scripts/setup-sqlite-vec.sh
+CREATE VIRTUAL TABLE IF NOT EXISTS transcript_embeddings USING vec0(
+  embedding float[384]
+);
+
+-- Index for efficient rowid lookups (transcript_id is stored as rowid)
+-- The vec0 virtual table uses rowid as the primary key

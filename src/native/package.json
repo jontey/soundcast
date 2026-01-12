@@ -1,0 +1,19 @@
+{
+  "name": "whisper-native-addon",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Native N-API addon for Whisper.cpp integration",
+  "main": "whisper-binding.js",
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild",
+    "clean": "node-gyp clean"
+  },
+  "gypfile": true,
+  "dependencies": {
+    "node-addon-api": "^8.0.0"
+  },
+  "devDependencies": {
+    "node-gyp": "^10.0.0"
+  }
+}
