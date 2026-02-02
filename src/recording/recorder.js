@@ -22,6 +22,9 @@ const RECORDING_DIR = process.env.RECORDING_DIR || path.join(process.cwd(), 'rec
 const RTP_PORT_MIN = parseInt(process.env.RECORDING_RTP_PORT_MIN || '50000');
 const RTP_PORT_MAX = parseInt(process.env.RECORDING_RTP_PORT_MAX || '50999');
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
+const RECORDING_SEGMENT_SECONDS = parseInt(process.env.RECORDING_SEGMENT_SECONDS || '5');
+const RECORDING_MERGE_ON_STOP = process.env.RECORDING_MERGE_ON_STOP !== 'false';
+const RECORDING_DELETE_SEGMENTS_AFTER_MERGE = process.env.RECORDING_DELETE_SEGMENTS_AFTER_MERGE === 'true';
 
 // Dependencies injected from server.js
 let router = null;
@@ -128,11 +131,12 @@ class RecordingSession {
  * Track recorder class - manages a single producer's recording
  */
 class TrackRecorder {
-  constructor(producerId, channelName, producerName, filePath, trackId) {
+  constructor(producerId, channelName, producerName, segmentPattern, mergedFilePath, trackId) {
     this.producerId = producerId;
     this.channelName = channelName;
     this.producerName = producerName;
-    this.filePath = filePath;
+    this.segmentPattern = segmentPattern;
+    this.mergedFilePath = mergedFilePath;
     this.trackId = trackId;
     this.plainTransport = null;
     this.consumer = null;
@@ -181,20 +185,20 @@ class TrackRecorder {
       }
 
       // Ensure output directory exists BEFORE writing any files
-      const outputDir = path.dirname(this.filePath);
+      const outputDir = path.dirname(this.segmentPattern);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
       // Generate SDP file for FFmpeg
       const sdpContent = this.generateSdp();
-      this.sdpPath = this.filePath.replace(/\.ogg$/, '.sdp');
+      this.sdpPath = this.segmentPattern.replace(/%03d\.ogg$/, 'sdp');
       fs.writeFileSync(this.sdpPath, sdpContent);
 
       // Log SDP for debugging
       console.log(`SDP for ${this.producerName}:\n${sdpContent}`);
 
-      // Spawn FFmpeg process with robust streaming options
+      // Spawn FFmpeg process with segmented output to flush to disk continuously
       this.ffmpegProcess = spawn(FFMPEG_PATH, [
         '-protocol_whitelist', 'file,rtp,udp',
         '-analyzeduration', '10000000',  // 10 seconds
@@ -202,8 +206,11 @@ class TrackRecorder {
         '-fflags', '+genpts+discardcorrupt',
         '-i', this.sdpPath,
         '-c:a', 'copy',
+        '-f', 'segment',
+        '-segment_time', String(RECORDING_SEGMENT_SECONDS),
+        '-reset_timestamps', '1',
         '-y',
-        this.filePath
+        this.segmentPattern
       ], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -228,7 +235,7 @@ class TrackRecorder {
         }
       });
 
-      console.log(`Started recording track: ${this.producerName} -> ${this.filePath}`);
+      console.log(`Started recording track: ${this.producerName} -> ${this.segmentPattern}`);
       return true;
     } catch (err) {
       console.error(`Failed to start track recording: ${err.message}`);
@@ -283,6 +290,16 @@ class TrackRecorder {
       }
     }
 
+    let mergedOk = true;
+    if (RECORDING_MERGE_ON_STOP) {
+      try {
+        mergedOk = await this.mergeSegments();
+      } catch (err) {
+        mergedOk = false;
+        console.error(`Failed to merge segments for ${this.producerName}: ${err.message}`);
+      }
+    }
+
     // Close consumer
     if (this.consumer && !this.consumer.closed) {
       this.consumer.close();
@@ -301,10 +318,60 @@ class TrackRecorder {
 
     // Update database
     if (this.trackId) {
-      updateRecordingTrackStatus(this.trackId, 'stopped', now);
+      updateRecordingTrackStatus(this.trackId, mergedOk ? 'stopped' : 'error', now);
     }
 
     console.log(`Stopped recording track: ${this.producerName}`);
+  }
+
+  async mergeSegments() {
+    const outputDir = path.dirname(this.segmentPattern);
+    const baseName = path.basename(this.segmentPattern).replace(/_%03d\.ogg$/, '');
+    const segmentRegex = new RegExp(`^${baseName}_(\\d{3})\\.ogg$`);
+    const entries = fs.readdirSync(outputDir)
+      .filter(name => segmentRegex.test(name))
+      .sort();
+
+    if (entries.length === 0) {
+      console.warn(`No segments found for ${this.producerName}, skip merge`);
+      return false;
+    }
+
+    const listPath = path.join(outputDir, `${baseName}_concat.txt`);
+    const listContent = entries.map(name => `file '${path.join(outputDir, name)}'`).join('\n') + '\n';
+    fs.writeFileSync(listPath, listContent);
+
+    await new Promise((resolve, reject) => {
+      const proc = spawn(FFMPEG_PATH, [
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', listPath,
+        '-c', 'copy',
+        '-y',
+        this.mergedFilePath
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let stderr = '';
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr || `ffmpeg concat exited with code ${code}`));
+      });
+    });
+
+    fs.unlinkSync(listPath);
+
+    if (RECORDING_DELETE_SEGMENTS_AFTER_MERGE) {
+      for (const name of entries) {
+        fs.unlinkSync(path.join(outputDir, name));
+      }
+    }
+
+    return true;
   }
 }
 
@@ -402,10 +469,11 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   const sanitizedChannel = sanitizeName(channelName);
 
   // Create output path
-  const fileName = `${sanitizedName}_${Date.now()}.ogg`;
+  const baseName = `${sanitizedName}_${Date.now()}`;
   const channelDir = path.join(session.folderPath, sanitizedChannel);
-  const filePath = path.join(channelDir, fileName);
-  const relativePath = path.join(sanitizedChannel, fileName);
+  const segmentPattern = path.join(channelDir, `${baseName}_%03d.ogg`);
+  const mergedFilePath = path.join(channelDir, `${baseName}.ogg`);
+  const relativePath = path.join(sanitizedChannel, `${baseName}.ogg`);
 
   // Create track in database
   const track = createRecordingTrack(
@@ -421,7 +489,8 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
     producerId,
     channelName,
     producerName,
-    filePath,
+    segmentPattern,
+    mergedFilePath,
     track.id
   );
 
