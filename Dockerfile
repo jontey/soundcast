@@ -24,8 +24,9 @@ COPY src/native ./src/native
 
 # Build whisper.cpp
 WORKDIR /app/src/native/deps/whisper.cpp
-RUN git submodule update --init --recursive && \
-    cmake -B build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF && \
+RUN test -f CMakeLists.txt || (echo "whisper.cpp submodule not present. Run: git submodule update --init --recursive" && exit 1) && \
+    rm -rf build && \
+    cmake -B build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
     cmake --build build --config Release -j4
 
 # Build native addon
