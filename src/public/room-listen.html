@@ -361,8 +361,11 @@
     let listenAudioMeter = null;
     let listenAudioGainNode = null;
     let listenMeterUpdateInterval = null;
+    let keepAliveInterval = null;
+    let activeWakeLock = null;
     let isMuted = false;
     let selectedChannel = null;
+    let rtpCapabilities = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -384,6 +387,113 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    async function requestScreenWakeLock() {
+      if (!('wakeLock' in navigator)) {
+        return;
+      }
+
+      try {
+        if (activeWakeLock) {
+          await activeWakeLock.release();
+        }
+
+        activeWakeLock = await navigator.wakeLock.request('screen');
+        activeWakeLock.addEventListener('release', () => {
+          console.log('Screen wake lock released');
+          activeWakeLock = null;
+        });
+        console.log('Screen wake lock acquired');
+      } catch (err) {
+        console.warn('Failed to acquire screen wake lock:', err);
+      }
+    }
+
+    async function releaseScreenWakeLock() {
+      if (!activeWakeLock) {
+        return;
+      }
+
+      try {
+        await activeWakeLock.release();
+      } catch (err) {
+        console.warn('Failed to release wake lock:', err);
+      }
+      activeWakeLock = null;
+    }
+
+    function enableMediaSessionMetadata() {
+      if (!('mediaSession' in navigator)) {
+        return;
+      }
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: selectedChannel ? `${selectedChannel} (Live)` : 'Live Audio',
+        artist: roomSlug,
+        album: 'Soundcast',
+      });
+
+      navigator.mediaSession.setActionHandler('play', async () => {
+        try {
+          await audioElement.play();
+          isMuted = false;
+          document.getElementById('muteBtn').textContent = 'Mute';
+        } catch (err) {
+          console.warn('Media Session play action failed:', err);
+        }
+      });
+
+      navigator.mediaSession.setActionHandler('pause', () => {
+        if (!isMuted) {
+          toggleMute();
+        }
+      });
+
+      navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+    }
+
+    function disableMediaSessionMetadata() {
+      if (!('mediaSession' in navigator)) {
+        return;
+      }
+
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+    }
+
+    function startKeepAlive() {
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+      }
+
+      keepAliveInterval = setInterval(async () => {
+        if (document.visibilityState === 'visible') {
+          await requestScreenWakeLock();
+        }
+
+        if (audioElement && audioElement.srcObject && audioElement.paused && !isMuted) {
+          try {
+            await audioElement.play();
+          } catch (err) {
+            console.warn('Background audio keep-alive play() failed:', err);
+          }
+        }
+
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+        }
+      }, 20000);
+    }
+
+    function stopKeepAlive() {
+      if (!keepAliveInterval) {
+        return;
+      }
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
     }
 
     // Attempt to reconnect to room WebSocket
@@ -777,6 +887,10 @@
         document.getElementById('audioControls').style.display = 'block';
         document.getElementById('muteBtn').style.display = ''; // Show mute button when audio playing
 
+        await requestScreenWakeLock();
+        enableMediaSessionMetadata();
+        startKeepAlive();
+
         // Update speaker list (requires user gesture context)
         updateSpeakerList();
       } catch (error) {
@@ -838,6 +952,10 @@
         listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
       }
 
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+      }
+
       document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
     }
 
@@ -887,6 +1005,10 @@
         clearInterval(listenMeterUpdateInterval);
         listenMeterUpdateInterval = null;
       }
+
+      stopKeepAlive();
+      releaseScreenWakeLock();
+      disableMediaSessionMetadata();
 
       // Update UI
       setStatus('Select a channel and click Start', 'connected');
@@ -972,6 +1094,12 @@
     // Handle page unload
     window.addEventListener('beforeunload', () => {
       leaveChannel();
+    });
+
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && listenAudioStream) {
+        await requestScreenWakeLock();
+      }
     });
 
     // Start listening - called when user clicks the button (user gesture)
