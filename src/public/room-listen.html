@@ -327,7 +327,7 @@
       </div>
     </div>
 
-    <audio id="audioPlayer" autoplay></audio>
+    <audio id="audioPlayer" autoplay playsinline></audio>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
@@ -396,7 +396,7 @@
 
       try {
         if (activeWakeLock) {
-          await activeWakeLock.release();
+          return;
         }
 
         activeWakeLock = await navigator.wakeLock.request('screen');
@@ -423,6 +423,43 @@
       activeWakeLock = null;
     }
 
+    function setMuteState(nextMuted) {
+      isMuted = nextMuted;
+
+      listenConsumers.forEach(c => {
+        if (isMuted) {
+          c.consumer.pause();
+        } else {
+          c.consumer.resume();
+        }
+      });
+
+      if (listenAudioGainNode) {
+        listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
+      }
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+      }
+
+      const muteBtn = document.getElementById('muteBtn');
+      if (muteBtn) {
+        muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+      }
+    }
+
+    function keepAudioPlaying() {
+      if (!audioElement || !audioElement.srcObject || isMuted) {
+        return;
+      }
+
+      if (audioElement.paused) {
+        audioElement.play().catch(err => {
+          console.warn('Audio resume attempt failed:', err);
+        });
+      }
+    }
+
     function enableMediaSessionMetadata() {
       if (!('mediaSession' in navigator)) {
         return;
@@ -437,8 +474,7 @@
       navigator.mediaSession.setActionHandler('play', async () => {
         try {
           await audioElement.play();
-          isMuted = false;
-          document.getElementById('muteBtn').textContent = 'Mute';
+          setMuteState(false);
         } catch (err) {
           console.warn('Media Session play action failed:', err);
         }
@@ -446,7 +482,7 @@
 
       navigator.mediaSession.setActionHandler('pause', () => {
         if (!isMuted) {
-          toggleMute();
+          setMuteState(true);
         }
       });
 
@@ -474,13 +510,7 @@
           await requestScreenWakeLock();
         }
 
-        if (audioElement && audioElement.srcObject && audioElement.paused && !isMuted) {
-          try {
-            await audioElement.play();
-          } catch (err) {
-            console.warn('Background audio keep-alive play() failed:', err);
-          }
-        }
+        keepAudioPlaying();
 
         if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
@@ -938,25 +968,7 @@
 
     // Toggle mute
     function toggleMute() {
-      isMuted = !isMuted;
-
-      listenConsumers.forEach(c => {
-        if (isMuted) {
-          c.consumer.pause();
-        } else {
-          c.consumer.resume();
-        }
-      });
-
-      if (listenAudioGainNode) {
-        listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
-      }
-
-      if ('mediaSession' in navigator) {
-        navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
-      }
-
-      document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
+      setMuteState(!isMuted);
     }
 
     // Leave room
@@ -1100,6 +1112,11 @@
       if (document.visibilityState === 'visible' && listenAudioStream) {
         await requestScreenWakeLock();
       }
+      keepAudioPlaying();
+    });
+
+    audioElement.addEventListener('pause', () => {
+      keepAudioPlaying();
     });
 
     // Start listening - called when user clicks the button (user gesture)
@@ -1124,6 +1141,7 @@
 
       // Pre-create AudioContext here (inside user gesture) to avoid autoplay issues
       listenAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      requestScreenWakeLock();
 
       // Now connect to SFU
       connectToSfu(roomConfig.sfuUrl);
