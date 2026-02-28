@@ -26,7 +26,7 @@ COPY src/native ./src/native
 WORKDIR /app/src/native/deps/whisper.cpp
 RUN test -f CMakeLists.txt || (echo "whisper.cpp submodule not present. Run: git submodule update --init --recursive" && exit 1) && \
     rm -rf build && \
-    cmake -B build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    cmake -B build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DGGML_OPENMP=OFF -DWHISPER_OPENMP=OFF && \
     cmake --build build --config Release -j4
 
 # Build native addon
@@ -47,26 +47,27 @@ RUN apt-get update && apt-get install -y \
     openssl \
     ffmpeg \
     curl \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Copy node_modules from builder
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy built native addon
-COPY --from=builder /app/src/native/build ./src/native/build
-COPY --from=builder /app/src/native/node_modules ./src/native/node_modules
-COPY --from=builder /app/src/native/package.json ./src/native/
-
-# Copy built sqlite-vec extension
-COPY --from=builder /app/lib ./lib
 
 # Copy application source
 COPY package*.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY certs ./certs
+
+# Copy node_modules from builder
+COPY --from=builder /app/node_modules ./node_modules
+
+# Copy built native addon (after source to avoid overwriting linux build)
+COPY --from=builder /app/src/native/build ./src/native/build
+COPY --from=builder /app/src/native/node_modules ./src/native/node_modules
+COPY --from=builder /app/src/native/package.json ./src/native/
+
+# Copy built sqlite-vec extension
+COPY --from=builder /app/lib ./lib
 
 # Create directories
 RUN mkdir -p /app/data /app/certs /app/recordings /app/models

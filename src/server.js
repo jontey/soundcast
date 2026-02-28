@@ -311,14 +311,14 @@ function getChannelStatsForTenant(tenantId) {
       if (channels.has(fullChannelId)) {
         const ch = channels.get(fullChannelId);
         stats[room.slug][channelName] = {
-          publishers: ch.producers ? ch.producers.size : 0,
+          publishers: countActivePublishers(ch),
           subscribers: countUniqueListeners(ch)
         };
       } else if (channels.has(channelName)) {
         // Fallback to legacy format
         const ch = channels.get(channelName);
         stats[room.slug][channelName] = {
-          publishers: ch.producers ? ch.producers.size : 0,
+          publishers: countActivePublishers(ch),
           subscribers: countUniqueListeners(ch)
         };
       }
@@ -482,6 +482,105 @@ function getShortChannelName(channelId) {
   return colonIndex !== -1 ? channelId.substring(colonIndex + 1) : channelId;
 }
 
+// Remove a producer and any linked consumers from a channel
+function removeChannelProducer(channel, producerId) {
+  const producerInfo = channel?.producers?.get(producerId);
+  if (!producerInfo) return null;
+
+  if (producerInfo.producer && !producerInfo.producer.closed) {
+    try {
+      producerInfo.producer.close();
+    } catch { }
+  }
+
+  channel.producers.delete(producerId);
+
+  // Remove consumers linked to this producer and notify listeners
+  for (const [consumerId, consumer] of [...channel.consumers.entries()]) {
+    if (consumer.producerId !== producerId) continue;
+
+    if (consumer.consumer) {
+      try {
+        consumer.consumer.close();
+      } catch { }
+    }
+    channel.consumers.delete(consumerId);
+
+    if (consumer.clientId && clients.has(consumer.clientId)) {
+      const listenerClient = clients.get(consumer.clientId);
+      listenerClient.consumers = listenerClient.consumers.filter(c => c.id !== consumerId);
+      try {
+        listenerClient.socket.send(JSON.stringify({ action: 'producer-stopped', data: { producerId } }));
+      } catch { }
+    }
+  }
+
+  return {
+    producerId,
+    mediasoupProducerId: producerInfo.producer?.id
+  };
+}
+
+// Remove all producers for the same publisher identity (or same socket client)
+function removeProducersForPublisher(channel, { clientId, publisherId = null } = {}) {
+  if (!channel || !channel.producers) return [];
+
+  const removed = [];
+  for (const [producerId, producerInfo] of [...channel.producers.entries()]) {
+    const sameClient = producerInfo.clientId === clientId;
+    const samePublisher = publisherId && producerInfo.publisherId && producerInfo.publisherId === publisherId;
+    if (!sameClient && !samePublisher) continue;
+
+    const removedInfo = removeChannelProducer(channel, producerId);
+    if (removedInfo) {
+      removed.push(removedInfo);
+    }
+  }
+
+  return removed;
+}
+
+// Stop recording/transcription side effects for removed producers
+function cleanupProducerSideEffects(channelId, removedProducers) {
+  if (!removedProducers || removedProducers.length === 0 || !channelId) return;
+
+  const channelParts = channelId.split(':');
+  if (channelParts.length >= 2) {
+    const roomSlug = channelParts[0];
+    const room = getRoomBySlug(roomSlug);
+    if (room && isRecording(room.id)) {
+      for (const removed of removedProducers) {
+        removeProducerFromRecording(room.id, removed.producerId).catch(err => {
+          fastify.log.error(`Failed to remove stale producer from recording: ${err.message}`);
+        });
+      }
+    }
+  }
+
+  if (process.env.TRANSCRIPTION_ENABLED === 'true') {
+    for (const removed of removedProducers) {
+      if (removed.mediasoupProducerId) {
+        stopTranscription(removed.mediasoupProducerId).catch(err => {
+          fastify.log.error(`Failed to stop transcription for stale producer: ${err.message}`);
+        });
+      }
+    }
+  }
+}
+
+function countActivePublishers(channel) {
+  if (!channel?.producers) return 0;
+  let count = 0;
+  for (const [producerId, producerInfo] of channel.producers) {
+    const hasLiveClient = producerInfo.clientId && clients.has(producerInfo.clientId);
+    const isOpen = producerInfo.producer && !producerInfo.producer.closed;
+    if (hasLiveClient && isOpen) {
+      count++;
+    }
+  }
+  return count;
+}
+
 // Notify tenant admins about channel updates
 function notifyTenantAdmins(channelId, source = 'main') {
   const roomInfo = findRoomForChannel(channelId);
@@ -505,7 +604,7 @@ function notifyTenantAdmins(channelId, source = 'main') {
       }
     }
     channelStats = {
-      publishers: ch.producers ? ch.producers.size : 0,
+      publishers: countActivePublishers(ch),
       subscribers: uniqueListeners.size
     };
   } else {
@@ -668,6 +767,7 @@ async function registerMainWsRoutes(fastify) {
       isListener: false,
       channelId: null,
       displayName: null,
+      publisherId: null,
       transport: null,
       producer: null,
       consumers: [],
@@ -970,6 +1070,7 @@ async function registerMainWsRoutes(fastify) {
           clientInfo.isPublisher = true;
           clientInfo.channelId = data.channelId;
           clientInfo.publisherName = data.publisherName || null;
+          clientInfo.publisherId = data.publisherId || null;
 
 
 
@@ -1038,12 +1139,28 @@ async function registerMainWsRoutes(fastify) {
 
             // Store producer with name for recording
             const publishChannel = channels.get(clientInfo.channelId);
+            if (!publishChannel) {
+              throw new Error(`Channel ${clientInfo.channelId} does not exist`);
+            }
+
+            // De-duplicate stale producer(s) from the same publisher identity.
+            // This prevents publisher count inflation on refresh/reconnect.
+            const removedProducers = removeProducersForPublisher(publishChannel, {
+              clientId,
+              publisherId: clientInfo.publisherId
+            });
+            if (removedProducers.length > 0) {
+              fastify.log.info(`Removed ${removedProducers.length} stale producer(s) before creating new producer for client ${clientId}`);
+              cleanupProducerSideEffects(clientInfo.channelId, removedProducers);
+            }
+
             const producerId = uuidv4();
             clientInfo.producer = { id: producerId, producer };
             const producerInfo = {
               transport: clientInfo.transport,
               producer,
               clientId,
+              publisherId: clientInfo.publisherId,
               name: clientInfo.publisherName || `producer_${Date.now()}`
             };
             publishChannel.producers.set(producerId, producerInfo);
@@ -1740,6 +1857,7 @@ async function registerRoomWsRoutes(fastify) {
         iceServers: iceServers,
         isLocalOnly: room.is_local_only,
         channelName: publisher.channel_name,
+        publisherId: publisher.id,
         transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
         isRecording: isRecording(room.id)
       }

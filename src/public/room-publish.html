@@ -1064,7 +1064,10 @@
         setStatus('Creating transport...', 'connecting');
         sfuWs.send(JSON.stringify({
           action: 'create-publisher-transport',
-          data: { channelId: `${roomSlug}:${roomConfig.channelName}` }
+          data: {
+            channelId: `${roomSlug}:${roomConfig.channelName}`,
+            publisherId: roomConfig.publisherId || null
+          }
         }));
 
         // Update UI
