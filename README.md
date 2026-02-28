@@ -135,9 +135,9 @@ The mediasoup client is bundled using webpack to make it available in the browse
 
 ## Real-Time Transcription
 
-Soundcast includes optional real-time transcription with semantic search capabilities powered by Whisper.cpp (native N-API addon) and SQLite vector embeddings. For full documentation, see [docs/TRANSCRIPTION.md](docs/TRANSCRIPTION.md).
+Soundcast includes optional real-time transcription with semantic search capabilities powered by Whisper and/or VLLMs. The transcription mode is controlled via `TRANSCRIPTION_MODE` (`native`, `http`, or `qwen`), and you can toggle the N-API addon (`TRANSCRIPTION_USE_NATIVE`) or point at a vLLMs Qwen ASR sidecar (`TRANSCRIPTION_VLLMS_URL`). Set `EMBEDDING_ENABLED=true` to keep the searchable transcript vector store fresh. For full documentation, see [docs/TRANSCRIPTION.md](docs/TRANSCRIPTION.md).
 
-### Quick Setup
+### Native / Whisper-based mode
 
 1. **Install build dependencies**:
 ```bash
@@ -172,6 +172,7 @@ curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.b
 5. **Enable in `.env`**:
 ```bash
 TRANSCRIPTION_ENABLED=true
+TRANSCRIPTION_MODE=native
 TRANSCRIPTION_USE_NATIVE=true
 WHISPER_MODEL_DIR=./models
 WHISPER_MODEL_SIZE=base.en
@@ -184,9 +185,33 @@ EMBEDDING_ENABLED=true
    - **Admin**: Download/manage Whisper models, start/stop transcription sessions
    - **API**: Query transcripts with semantic search
 
+### Qwen ASR (vLLMs sidecar)
+
+If you prefer to pipe the audio stream into a Qwen ASR model running inside [vLLMs](https://github.com/vllm-project/vllm), switch the transcription mode to `qwen`. This avoids native bindings and Whisper downloads—Soundcast simply streams 16 kHz mono PCM chunks to the configured endpoint.
+
+1. **Run the vLLMs server** (example):
+```bash
+pip install vllm
+vllms serve --model qwen-qwen3-asr --port 11434 --listen 0.0.0.0
+```
+
+2. **Configure Soundcast**:
+```bash
+TRANSCRIPTION_ENABLED=true
+TRANSCRIPTION_MODE=qwen
+TRANSCRIPTION_VLLMS_URL=http://127.0.0.1:11434/asr
+TRANSCRIPTION_CHUNK_SECONDS=5
+TRANSCRIPTION_CHUNK_OVERLAP_SECONDS=1
+TRANSCRIPTION_REQUEST_TIMEOUT_MS=20000
+EMBEDDING_ENABLED=true
+```
+
+3. **Start Soundcast** and the transcription API will pipe each channel’s audio through vLLMs, broadcast live captions, and store transcripts for search.
+
 ### Features
 
-- **Native Performance**: 5x faster startup, 2x lower memory vs HTTP subprocess
+- **Native Performance**: 5x faster startup, 2x lower memory vs HTTP subprocess (Whisper native)
+- **Qwen ASR**: Plug straight into a vLLMs Qwen-Asr service without downloading Whisper weights
 - **Live Captions**: Real-time transcription appears for listeners during broadcasts
 - **Multi-Language**: Support for 99 languages (English, Spanish, French, German, Chinese, Japanese, etc.)
 - **Semantic Search**: Find transcripts by meaning using vector embeddings (sqlite-vec)

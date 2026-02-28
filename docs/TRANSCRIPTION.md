@@ -101,13 +101,41 @@ docker-compose up -d
 ```bash
 # Transcription
 TRANSCRIPTION_ENABLED=true              # Enable transcription system
-TRANSCRIPTION_USE_NATIVE=true          # Use native addon (vs HTTP subprocess)
-WHISPER_MODEL_DIR=/app/models          # Model storage directory
-WHISPER_MODEL_SIZE=base                # Default model (tiny/base/small/medium/large-v3)
+TRANSCRIPTION_MODE=native              # native | http | qwen (default: native)
+TRANSCRIPTION_USE_NATIVE=true           # Use native addon (ignored when mode=qwen)
+TRANSCRIPTION_VLLMS_URL=http://127.0.0.1:11434/asr  # Qwen ASR endpoint when mode=qwen
+TRANSCRIPTION_CHUNK_SECONDS=5           # Chunk length (seconds) sent to vLLMs
+TRANSCRIPTION_CHUNK_OVERLAP_SECONDS=1   # Overlap between chunks (seconds)
+TRANSCRIPTION_REQUEST_TIMEOUT_MS=20000  # Timeout for vLLMs requests when mode=qwen
+WHISPER_MODEL_DIR=/app/models           # Model storage directory
+WHISPER_MODEL_SIZE=base                 # Default model (tiny/base/small/medium/large-v3)
 
 # Transcription RTP ports
 TRANSCRIPTION_RTP_PORT_MIN=51000
 TRANSCRIPTION_RTP_PORT_MAX=51999
+
+## Qwen ASR (vLLMs) mode
+
+When `TRANSCRIPTION_MODE=qwen`, Soundcast streams buffered 16 kHz mono PCM chunks to the configured `TRANSCRIPTION_VLLMS_URL` (default: `http://127.0.0.1:11434/asr`). The endpoint is expected to return JSON segments like:
+
+```json
+{
+  "segments": [
+    { "text": "hello world", "start_time": 0.1, "end_time": 1.3, "confidence": 0.92 }
+  ]
+}
+```
+
+The transcription service runs asynchronously and handles retries/timeouts controlled by `TRANSCRIPTION_REQUEST_TIMEOUT_MS`, `TRANSCRIPTION_CHUNK_SECONDS`, and `TRANSCRIPTION_CHUNK_OVERLAP_SECONDS`.
+
+### Running the vLLMs server
+
+```bash
+pip install vllm
+vllms serve --model qwen-qwen3-asr --port 11434 --listen 0.0.0.0
+```
+
+Set `TRANSCRIPTION_MODE=qwen` and point `TRANSCRIPTION_VLLMS_URL` to the server above. Soundcast will batch 5-second chunks (adjustable) and submit them to vLLMs for transcription, then store the text in SQLite and emit live captions to listeners.
 
 # Embeddings
 EMBEDDING_ENABLED=true                  # Enable semantic search
