@@ -12,6 +12,7 @@ import {
   createTranscriptSegment,
   listTranscriptDocsByRoom,
   getTranscriptDocByRoomChannel,
+  getLatestTranscriptDocByRoomEventChannel,
   upsertTranscriptDoc
 } from '../db/models/transcription.js';
 
@@ -370,8 +371,14 @@ export class TranscriptionRuntime {
           language: 'English'
         });
 
-        const docState = await this.getOrCreateDoc(session.roomId, session.roomSlug, session.sessionId, streamState.channelName);
-        this.appendAsrText(docState, streamState, finalText.trim());
+        const docState = await this.getOrCreateDoc(
+          session.roomId,
+          session.roomSlug,
+          session.sessionId,
+          streamState.channelName,
+          session.eventName
+        );
+        this.appendAsrText(docState, finalText.trim());
       } catch (error) {
         this.fastify.log.error(`Failed to transcribe segment ${filePath}: ${error.message}`);
         await sleep(100);
@@ -440,13 +447,12 @@ export class TranscriptionRuntime {
     return finalText;
   }
 
-  appendAsrText(docState, streamState, text) {
+  appendAsrText(docState, text) {
     if (!text) return;
-    const line = `[${streamState.channelName}] ${streamState.producerName || streamState.producerId}: ${text}`;
     docState.ydoc.transact(() => {
       const current = docState.ytext.toString();
       const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
-      docState.ytext.insert(current.length, `${prefix}${line}\n`);
+      docState.ytext.insert(current.length, `${prefix}${text}\n`);
     }, 'asr');
   }
 
@@ -480,18 +486,22 @@ export class TranscriptionRuntime {
     }
   }
 
-  async getOrCreateDoc(roomId, roomSlug, sessionId, channelName) {
+  async getOrCreateDoc(roomId, roomSlug, sessionId, channelName, eventName = null) {
     const key = this.makeDocKey(roomSlug, channelName);
     if (this.docs.has(key)) return this.docs.get(key);
 
-    const existing = getTranscriptDocByRoomChannel(roomId, channelName);
+    const activeDoc = getTranscriptDocByRoomChannel(roomId, channelName);
+    const seedDoc = activeDoc?.session_id === sessionId
+      ? activeDoc
+      : getLatestTranscriptDocByRoomEventChannel(roomId, eventName, channelName);
+
     const docState = new TranscriptDocState({
       roomId,
       roomSlug,
       channelName,
       sessionId,
-      initialText: existing?.text_content || '',
-      initialRevision: existing?.revision || 0
+      initialText: seedDoc?.text_content || '',
+      initialRevision: seedDoc?.revision || 0
     });
 
     docState.ydoc.on('update', (update, origin) => {
@@ -588,7 +598,13 @@ export class TranscriptionRuntime {
           return;
         }
 
-        const docState = await this.getOrCreateDoc(room.id, roomSlug, session.sessionId, channelName);
+        const docState = await this.getOrCreateDoc(
+          room.id,
+          roomSlug,
+          session.sessionId,
+          channelName,
+          session.eventName || session.event_name
+        );
         docState.clients.add(socket);
 
         const fullUpdate = Y.encodeStateAsUpdate(docState.ydoc);
