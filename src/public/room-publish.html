@@ -901,8 +901,44 @@
 
         console.log('Microphone access granted');
 
-        // Audio meter initialization is optional and can fail on headless/virtual audio devices.
-        // Broadcast must continue even without meter.
+        // Initialize audio meter (best-effort; broadcast continues even if this fails).
+        try {
+          if (!pubAudioContext || pubAudioContext.state === 'closed') {
+            pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+          }
+
+          if (pubAudioContext.state === 'suspended') {
+            await pubAudioContext.resume();
+          }
+
+          if (pubAudioSource) {
+            try {
+              pubAudioSource.disconnect();
+            } catch (e) {
+              console.warn('Error disconnecting old audio source:', e);
+            }
+            pubAudioSource = null;
+          }
+
+          if (pubAudioMeter) {
+            pubAudioMeter.shutdown();
+            pubAudioMeter = null;
+          }
+
+          pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
+          pubAudioMeter = createAudioMeter(pubAudioContext);
+          pubAudioSource.connect(pubAudioMeter);
+
+          if (pubMeterUpdateInterval) {
+            clearInterval(pubMeterUpdateInterval);
+            pubMeterUpdateInterval = null;
+          }
+          pubMeterUpdateInterval = setInterval(() => {
+            updateAudioMeter(pubAudioMeter, document.getElementById('audioMeterBar'));
+          }, 100);
+        } catch (meterError) {
+          console.warn('Audio meter initialization failed:', meterError);
+        }
 
         // Create mediasoup device
         pubDevice = new mediasoupClient.Device();
