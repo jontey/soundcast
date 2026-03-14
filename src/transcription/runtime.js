@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'timers/promises';
 import * as Y from 'yjs';
 import {
   createTranscriptionSession,
+  getTranscriptionSessionByRoomAndId,
   getActiveTranscriptionSessionByRoomId,
   stopTranscriptionSession,
   upsertTranscriptionStream,
@@ -11,7 +12,9 @@ import {
   stopTranscriptionStream,
   createTranscriptSegment,
   listTranscriptDocsByRoom,
+  listTranscriptDocsBySession,
   getTranscriptDocByRoomChannel,
+  getTranscriptDocBySessionChannel,
   getLatestTranscriptDocByRoomEventChannel,
   upsertTranscriptDoc
 } from '../db/models/transcription.js';
@@ -54,8 +57,9 @@ function parseTranscriptWsRequest(req) {
   let channelName = params.channel_name;
   let apiKey = query.apiKey;
   let token = query.token;
+  let sessionIdRaw = query.sessionId;
 
-  if (!roomSlug || !channelName || (!apiKey && !token)) {
+  if (!roomSlug || !channelName || (!apiKey && !token) || sessionIdRaw === undefined || sessionIdRaw === null) {
     const host = req?.headers?.host || 'localhost';
     const protocol = req?.socket?.encrypted ? 'https' : 'http';
     const parsed = new URL(req?.url || '/', `${protocol}://${host}`);
@@ -70,13 +74,23 @@ function parseTranscriptWsRequest(req) {
 
     apiKey = apiKey || parsed.searchParams.get('apiKey') || undefined;
     token = token || parsed.searchParams.get('token') || undefined;
+    if (sessionIdRaw === undefined || sessionIdRaw === null) {
+      sessionIdRaw = parsed.searchParams.get('sessionId');
+    }
   }
+
+  const hasSessionId = sessionIdRaw !== undefined && sessionIdRaw !== null && String(sessionIdRaw).trim() !== '';
+  const parsedSessionId = hasSessionId ? parseInt(String(sessionIdRaw), 10) : null;
+  const invalidSessionId = hasSessionId && (!Number.isFinite(parsedSessionId) || parsedSessionId <= 0);
 
   return {
     roomSlug,
     channelName,
     apiKey,
-    token
+    token,
+    sessionId: invalidSessionId ? null : parsedSessionId,
+    hasSessionId,
+    invalidSessionId
   };
 }
 
@@ -108,7 +122,7 @@ export class TranscriptionRuntime {
     this.listRoomsByTenant = listRoomsByTenant;
 
     this.sessions = new Map(); // roomId -> sessionState
-    this.docs = new Map(); // key(roomSlug:channel) -> TranscriptDocState
+    this.docs = new Map(); // key(sessionId:roomSlug:channel) -> TranscriptDocState
 
     this.lastAvailabilityCheckAt = 0;
     this.lastAvailability = null;
@@ -118,8 +132,8 @@ export class TranscriptionRuntime {
     return process.platform === 'darwin' && process.arch === 'arm64';
   }
 
-  makeDocKey(roomSlug, channelName) {
-    return `${roomSlug}::${channelName}`;
+  makeDocKey(roomSlug, channelName, sessionId) {
+    return `${sessionId}::${roomSlug}::${channelName}`;
   }
 
   async checkAvailability() {
@@ -261,6 +275,7 @@ export class TranscriptionRuntime {
 
     for (const [docKey, docState] of this.docs) {
       if (docState.roomId !== roomId) continue;
+      if (docState.sessionId !== session.sessionId) continue;
       await this.persistDocSnapshot(docState);
       for (const socket of docState.clients) {
         try {
@@ -487,13 +502,11 @@ export class TranscriptionRuntime {
   }
 
   async getOrCreateDoc(roomId, roomSlug, sessionId, channelName, eventName = null) {
-    const key = this.makeDocKey(roomSlug, channelName);
+    const key = this.makeDocKey(roomSlug, channelName, sessionId);
     if (this.docs.has(key)) return this.docs.get(key);
 
-    const activeDoc = getTranscriptDocByRoomChannel(roomId, channelName);
-    const seedDoc = activeDoc?.session_id === sessionId
-      ? activeDoc
-      : getLatestTranscriptDocByRoomEventChannel(roomId, eventName, channelName);
+    const existingDocForSession = getTranscriptDocBySessionChannel(roomId, sessionId, channelName);
+    const seedDoc = existingDocForSession || getLatestTranscriptDocByRoomEventChannel(roomId, eventName, channelName);
 
     const docState = new TranscriptDocState({
       roomId,
@@ -536,7 +549,7 @@ export class TranscriptionRuntime {
       if (!allowed) {
         return { ok: false, status: 403, message: 'Room not allowed for tenant' };
       }
-      return { ok: true, room };
+      return { ok: true, room, authMode: 'admin' };
     }
 
     if (token) {
@@ -544,7 +557,7 @@ export class TranscriptionRuntime {
       if (!publisher || publisher.room_id !== room.id) {
         return { ok: false, status: 403, message: 'Invalid publisher token for room' };
       }
-      return { ok: true, room };
+      return { ok: true, room, authMode: 'publisher' };
     }
 
     return { ok: false, status: 401, message: 'Missing apiKey or token' };
@@ -559,9 +572,14 @@ export class TranscriptionRuntime {
           return;
         }
 
-        const { roomSlug, channelName, apiKey, token } = parseTranscriptWsRequest(req);
+        const { roomSlug, channelName, apiKey, token, sessionId, hasSessionId, invalidSessionId } = parseTranscriptWsRequest(req);
         if (!roomSlug || !channelName) {
           socket.send(JSON.stringify({ type: 'error', message: 'Invalid transcript websocket path' }));
+          socket.close();
+          return;
+        }
+        if (invalidSessionId) {
+          socket.send(JSON.stringify({ type: 'error', message: 'Invalid sessionId' }));
           socket.close();
           return;
         }
@@ -573,7 +591,8 @@ export class TranscriptionRuntime {
         }
 
         const room = auth.room;
-        const session = this.getRoomSession(room.id) || (() => {
+        const runtimeActiveSession = this.getRoomSession(room.id);
+        const activeSession = runtimeActiveSession || (() => {
           const active = getActiveTranscriptionSessionByRoomId(room.id);
           if (!active) return null;
           return {
@@ -592,8 +611,39 @@ export class TranscriptionRuntime {
           };
         })();
 
+        if (auth.authMode === 'publisher' && hasSessionId) {
+          socket.send(JSON.stringify({ type: 'error', message: 'Publishers can only edit the active transcription session' }));
+          socket.close();
+          return;
+        }
+
+        let session = activeSession;
+        if (auth.authMode === 'admin' && hasSessionId) {
+          if (activeSession?.sessionId === sessionId) {
+            session = activeSession;
+          } else {
+            const requestedSession = getTranscriptionSessionByRoomAndId(room.id, sessionId);
+            session = requestedSession
+              ? {
+                roomId: room.id,
+                roomSlug,
+                recordingId: requestedSession.recording_id,
+                folderName: null,
+                recordingFolderPath: null,
+                sessionId: requestedSession.id,
+                eventName: requestedSession.event_name,
+                modelName: requestedSession.model_name,
+                startedAt: requestedSession.started_at,
+                pollTimer: null,
+                polling: false,
+                streams: new Map()
+              }
+              : null;
+          }
+        }
+
         if (!session) {
-          socket.send(JSON.stringify({ type: 'error', message: 'No active transcription session' }));
+          socket.send(JSON.stringify({ type: 'error', message: 'Transcription session not found' }));
           socket.close();
           return;
         }
@@ -632,6 +682,86 @@ export class TranscriptionRuntime {
         });
       });
     });
+  }
+
+  getSessionDocs(roomId, roomSlug, sessionId) {
+    const session = getTranscriptionSessionByRoomAndId(roomId, sessionId);
+    if (!session) return null;
+
+    const docs = listTranscriptDocsBySession(roomId, sessionId);
+    const docsByChannel = new Map(docs.map((doc) => [doc.channel_name, doc]));
+
+    for (const docState of this.docs.values()) {
+      if (docState.roomId !== roomId || docState.sessionId !== sessionId) continue;
+      docsByChannel.set(docState.channelName, {
+        channel_name: docState.channelName,
+        text_content: docState.ytext.toString(),
+        revision: docState.revision,
+        updated_at: nowIso()
+      });
+    }
+
+    const resolvedDocs = Array.from(docsByChannel.values())
+      .sort((a, b) => a.channel_name.localeCompare(b.channel_name))
+      .map((doc) => ({
+        channelName: doc.channel_name,
+        text: doc.text_content,
+        revision: doc.revision,
+        updatedAt: doc.updated_at
+      }));
+
+    return {
+      transcriptionSessionId: session.id,
+      eventName: session.event_name,
+      modelName: session.model_name,
+      status: session.status,
+      startedAt: session.started_at,
+      stoppedAt: session.stopped_at,
+      docs: resolvedDocs
+    };
+  }
+
+  getSessionChannelDoc(roomId, roomSlug, sessionId, channelName) {
+    const session = getTranscriptionSessionByRoomAndId(roomId, sessionId);
+    if (!session) return null;
+
+    const liveDoc = this.docs.get(this.makeDocKey(roomSlug, channelName, sessionId));
+    const doc = liveDoc
+      ? {
+        channel_name: channelName,
+        text_content: liveDoc.ytext.toString(),
+        revision: liveDoc.revision,
+        updated_at: nowIso()
+      }
+      : getTranscriptDocBySessionChannel(roomId, sessionId, channelName);
+
+    if (!doc) {
+      return {
+        transcriptionSessionId: session.id,
+        eventName: session.event_name,
+        modelName: session.model_name,
+        status: session.status,
+        startedAt: session.started_at,
+        stoppedAt: session.stopped_at,
+        channelName,
+        text: '',
+        revision: 0,
+        updatedAt: null
+      };
+    }
+
+    return {
+      transcriptionSessionId: session.id,
+      eventName: session.event_name,
+      modelName: session.model_name,
+      status: session.status,
+      startedAt: session.started_at,
+      stoppedAt: session.stopped_at,
+      channelName: doc.channel_name,
+      text: doc.text_content,
+      revision: doc.revision,
+      updatedAt: doc.updated_at
+    };
   }
 
   getCurrentRoomDocs(roomId) {

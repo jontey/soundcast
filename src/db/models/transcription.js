@@ -24,6 +24,37 @@ export function getTranscriptionSessionById(id) {
   `).get(id);
 }
 
+export function getTranscriptionSessionByRoomAndId(room_id, session_id) {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT id, room_id, recording_id, event_name, model_name, status, started_at, stopped_at, error_message
+    FROM transcription_sessions_v2
+    WHERE room_id = ? AND id = ?
+    LIMIT 1
+  `).get(room_id, session_id);
+}
+
+export function listTranscriptionSessionsByRoom(room_id, limit = 20, offset = 0) {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT id, room_id, recording_id, event_name, model_name, status, started_at, stopped_at, error_message
+    FROM transcription_sessions_v2
+    WHERE room_id = ?
+    ORDER BY started_at DESC
+    LIMIT ? OFFSET ?
+  `).all(room_id, limit, offset);
+}
+
+export function countTranscriptionSessionsByRoom(room_id) {
+  const db = getDatabase();
+  const row = db.prepare(`
+    SELECT COUNT(*) as total
+    FROM transcription_sessions_v2
+    WHERE room_id = ?
+  `).get(room_id);
+  return row?.total || 0;
+}
+
 export function getActiveTranscriptionSessionByRoomId(room_id) {
   const db = getDatabase();
   return db.prepare(`
@@ -156,6 +187,16 @@ export function listTranscriptDocsByRoom(room_id) {
   `).all(room_id);
 }
 
+export function listTranscriptDocsBySession(room_id, session_id) {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT d.id, d.session_id, d.room_id, d.channel_name, d.text_content, d.revision, d.updated_at, d.created_at
+    FROM transcript_docs_v2 d
+    WHERE d.room_id = ? AND d.session_id = ?
+    ORDER BY d.channel_name ASC
+  `).all(room_id, session_id);
+}
+
 export function getTranscriptDocByRoomChannel(room_id, channel_name) {
   const db = getDatabase();
   return db.prepare(`
@@ -166,6 +207,16 @@ export function getTranscriptDocByRoomChannel(room_id, channel_name) {
     ORDER BY d.updated_at DESC
     LIMIT 1
   `).get(room_id, channel_name);
+}
+
+export function getTranscriptDocBySessionChannel(room_id, session_id, channel_name) {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT d.id, d.session_id, d.room_id, d.channel_name, d.text_content, d.revision, d.updated_at, d.created_at
+    FROM transcript_docs_v2 d
+    WHERE d.room_id = ? AND d.session_id = ? AND d.channel_name = ?
+    LIMIT 1
+  `).get(room_id, session_id, channel_name);
 }
 
 export function getLatestTranscriptDocByRoomEventChannel(room_id, event_name, channel_name) {
@@ -234,6 +285,9 @@ export function listTranscriptSegmentsByRoomChannel(room_id, channel_name, limit
 export default {
   createTranscriptionSession,
   getTranscriptionSessionById,
+  getTranscriptionSessionByRoomAndId,
+  listTranscriptionSessionsByRoom,
+  countTranscriptionSessionsByRoom,
   getActiveTranscriptionSessionByRoomId,
   stopTranscriptionSession,
   upsertTranscriptionStream,
@@ -242,7 +296,9 @@ export default {
   stopTranscriptionStream,
   createTranscriptSegment,
   listTranscriptDocsByRoom,
+  listTranscriptDocsBySession,
   getTranscriptDocByRoomChannel,
+  getTranscriptDocBySessionChannel,
   getLatestTranscriptDocByRoomEventChannel,
   upsertTranscriptDoc,
   listTranscriptSegmentsByRoomChannel

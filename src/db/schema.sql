@@ -175,6 +175,9 @@ CREATE TABLE IF NOT EXISTS transcript_docs_v2 (
 CREATE INDEX IF NOT EXISTS idx_transcription_sessions_v2_room_status
 ON transcription_sessions_v2(room_id, status);
 
+CREATE INDEX IF NOT EXISTS idx_transcription_sessions_v2_room_started
+ON transcription_sessions_v2(room_id, started_at);
+
 CREATE INDEX IF NOT EXISTS idx_transcription_streams_v2_session
 ON transcription_streams_v2(session_id);
 

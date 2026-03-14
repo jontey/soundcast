@@ -56,6 +56,9 @@ npm start
 - `GET /api/rooms/:room_slug/recordings`
 - `GET /api/rooms/:room_slug/transcriptions/current`
 - `GET /api/rooms/:room_slug/transcriptions/channels/:channel_name`
+- `GET /api/rooms/:room_slug/transcriptions/sessions?limit=&offset=`
+- `GET /api/rooms/:room_slug/transcriptions/sessions/:session_id`
+- `GET /api/rooms/:room_slug/transcriptions/sessions/:session_id/channels/:channel_name`
 
 ## Web UI
 

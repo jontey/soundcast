@@ -585,6 +585,39 @@
       color: #4a5568;
       margin-bottom: 8px;
     }
+
+    .transcript-session-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .transcript-session-select {
+      min-width: 280px;
+      max-width: 100%;
+      background: #fff;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: #2d3748;
+    }
+
+    .transcript-session-pager {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    .transcript-session-meta {
+      font-size: 11px;
+      color: #718096;
+      min-width: 120px;
+      text-align: right;
+    }
   </style>
 </head>
 
@@ -729,6 +762,8 @@
     let recordingTimers = {}; // roomSlug -> intervalId for duration updates
     let transcriptBindings = {}; // roomSlug -> { channelName, binding }
     let transcriptChannels = {}; // roomSlug -> channelName[]
+    let transcriptSessions = {}; // roomSlug -> session[]
+    let transcriptSessionState = {}; // roomSlug -> { limit, offset, total, selectedSessionId }
 
     // ========== Reactive State Management ==========
     // Lightweight state store with change notifications using Proxy
@@ -1069,6 +1104,8 @@
         destroyTranscriptBinding(roomSlug);
       }
       transcriptChannels = {};
+      transcriptSessions = {};
+      transcriptSessionState = {};
 
       if (rooms.length === 0) {
         container.innerHTML = '<div class="loading">No rooms yet. Create one to get started!</div>';
@@ -1125,6 +1162,16 @@
 
           <div id="transcript-panel-${room.slug}" class="transcript-panel hidden">
             <div id="transcript-status-${room.slug}" class="transcript-status">Transcription panel hidden</div>
+            <div class="transcript-session-row">
+              <select id="transcript-session-select-${room.slug}" class="transcript-session-select" onchange="onTranscriptSessionChange('${room.slug}', this.value)">
+                <option value="">No sessions</option>
+              </select>
+              <div class="transcript-session-pager">
+                <button id="transcript-prev-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', -1)">Prev</button>
+                <button id="transcript-next-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', 1)">Next</button>
+                <span id="transcript-session-meta-${room.slug}" class="transcript-session-meta">0 sessions</span>
+              </div>
+            </div>
             <div id="transcript-tabs-${room.slug}" class="transcript-tabs"></div>
             <textarea id="transcript-editor-${room.slug}" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
           </div>
@@ -1871,6 +1918,63 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       if (statusEl) statusEl.textContent = message;
     }
 
+    function getTranscriptSessionState(roomSlug) {
+      if (!transcriptSessionState[roomSlug]) {
+        transcriptSessionState[roomSlug] = {
+          limit: 20,
+          offset: 0,
+          total: 0,
+          selectedSessionId: null,
+          selectedSession: null
+        };
+      }
+      return transcriptSessionState[roomSlug];
+    }
+
+    function formatSessionTimestamp(value) {
+      if (!value) return 'n/a';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatSessionOptionLabel(session) {
+      const eventLabel = session.eventName || 'Untitled';
+      const started = formatSessionTimestamp(session.startedAt);
+      return `${eventLabel} | #${session.id} | ${session.status} | ${started}`;
+    }
+
+    function renderTranscriptSessionControls(roomSlug) {
+      const state = getTranscriptSessionState(roomSlug);
+      const sessions = transcriptSessions[roomSlug] || [];
+      const select = document.getElementById(`transcript-session-select-${roomSlug}`);
+      const prevBtn = document.getElementById(`transcript-prev-${roomSlug}`);
+      const nextBtn = document.getElementById(`transcript-next-${roomSlug}`);
+      const meta = document.getElementById(`transcript-session-meta-${roomSlug}`);
+      if (!select || !prevBtn || !nextBtn || !meta) return;
+
+      if (sessions.length === 0) {
+        select.innerHTML = '<option value="">No sessions</option>';
+        select.value = '';
+      } else {
+        select.innerHTML = sessions
+          .map((session) => `<option value="${session.id}">${escapeHtml(formatSessionOptionLabel(session))}</option>`)
+          .join('');
+        select.value = state.selectedSessionId ? String(state.selectedSessionId) : String(sessions[0].id);
+      }
+
+      const pageStart = state.total === 0 ? 0 : state.offset + 1;
+      const pageEnd = Math.min(state.offset + sessions.length, state.total);
+      meta.textContent = `${pageStart}-${pageEnd} of ${state.total}`;
+      prevBtn.disabled = state.offset <= 0;
+      nextBtn.disabled = state.offset + state.limit >= state.total;
+    }
+
+    function getSelectedTranscriptSession(roomSlug) {
+      const state = getTranscriptSessionState(roomSlug);
+      return state.selectedSession || null;
+    }
+
     function destroyTranscriptBinding(roomSlug) {
       const existing = transcriptBindings[roomSlug];
       if (!existing) return;
@@ -1910,24 +2014,103 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
 
     async function loadRoomTranscripts(roomSlug) {
       try {
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/current`, {
+        const sessionState = getTranscriptSessionState(roomSlug);
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions?limit=${sessionState.limit}&offset=${sessionState.offset}`, {
           headers: { 'Authorization': `Bearer ${currentApiKey}` }
         });
 
         if (!response.ok) {
           const error = await response.json().catch(() => ({}));
-          throw new Error(error.message || 'No active transcription session');
+          throw new Error(error.message || 'Failed to load transcription sessions');
         }
 
         const data = await response.json();
-        let channels = (data.docs || []).map(doc => doc.channelName);
+        transcriptSessions[roomSlug] = data.sessions || [];
+        sessionState.total = data.pagination?.total || 0;
+
+        if (!transcriptSessions[roomSlug].length) {
+          sessionState.selectedSessionId = null;
+          sessionState.selectedSession = null;
+          transcriptChannels[roomSlug] = [];
+          renderTranscriptSessionControls(roomSlug);
+          renderTranscriptTabs(roomSlug, [], null);
+          const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+          if (editor) editor.value = '';
+          destroyTranscriptBinding(roomSlug);
+          setTranscriptStatus(roomSlug, 'No transcript sessions found for this room');
+          return;
+        }
+
+        const activeSessionId = recordingStatus[roomSlug]?.transcriptionSessionId || null;
+        const selectedStillVisible = transcriptSessions[roomSlug].some((session) => session.id === sessionState.selectedSessionId);
+        if (!selectedStillVisible) {
+          const activeVisible = transcriptSessions[roomSlug].some((session) => session.id === activeSessionId);
+          sessionState.selectedSessionId = activeVisible ? activeSessionId : transcriptSessions[roomSlug][0].id;
+        }
+
+        renderTranscriptSessionControls(roomSlug);
+        await loadTranscriptSession(roomSlug, sessionState.selectedSessionId);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message);
+        renderTranscriptSessionControls(roomSlug);
+        renderTranscriptTabs(roomSlug, [], null);
+        const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+        if (editor) editor.value = '';
+        destroyTranscriptBinding(roomSlug);
+      }
+    }
+
+    async function changeTranscriptSessionPage(roomSlug, direction) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const nextOffset = sessionState.offset + (direction * sessionState.limit);
+      if (nextOffset < 0) return;
+      if (nextOffset >= sessionState.total && direction > 0) return;
+      sessionState.offset = nextOffset;
+      await loadRoomTranscripts(roomSlug);
+    }
+
+    async function onTranscriptSessionChange(roomSlug, value) {
+      const sessionId = parseInt(value, 10);
+      if (!Number.isFinite(sessionId) || sessionId <= 0) return;
+      const sessionState = getTranscriptSessionState(roomSlug);
+      sessionState.selectedSessionId = sessionId;
+      await loadTranscriptSession(roomSlug, sessionId);
+    }
+
+    async function loadTranscriptSession(roomSlug, sessionId) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${sessionId}`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.message || 'Failed to load transcription session');
+        }
+
+        const payload = await response.json();
+        sessionState.selectedSessionId = payload.transcriptionSessionId;
+        sessionState.selectedSession = {
+          id: payload.transcriptionSessionId,
+          eventName: payload.eventName,
+          modelName: payload.modelName,
+          status: payload.status,
+          startedAt: payload.startedAt,
+          stoppedAt: payload.stoppedAt
+        };
+
+        let channels = (payload.docs || []).map((doc) => doc.channelName);
         if (channels.length === 0 && Array.isArray(state.publishers[roomSlug])) {
-          channels = [...new Set(state.publishers[roomSlug].map(p => p.channel_name))];
+          channels = [...new Set(state.publishers[roomSlug].map((publisher) => publisher.channel_name))];
         }
         transcriptChannels[roomSlug] = channels;
+        renderTranscriptSessionControls(roomSlug);
 
-        if (channels.length === 0) {
-          setTranscriptStatus(roomSlug, 'Transcription active, waiting for channel text...');
+        if (!channels.length) {
+          setTranscriptStatus(
+            roomSlug,
+            `Event: ${payload.eventName || 'Untitled'} | Session ${payload.transcriptionSessionId} (${payload.status}) | No channel docs yet`
+          );
           renderTranscriptTabs(roomSlug, [], null);
           const editor = document.getElementById(`transcript-editor-${roomSlug}`);
           if (editor) editor.value = '';
@@ -1935,8 +2118,13 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
           return;
         }
 
-        setTranscriptStatus(roomSlug, `Event: ${data.eventName || 'Untitled'} | Session ${data.transcriptionSessionId}`);
-        await openTranscriptChannel(roomSlug, channels[0]);
+        setTranscriptStatus(
+          roomSlug,
+          `Event: ${payload.eventName || 'Untitled'} | Session ${payload.transcriptionSessionId} (${payload.status})`
+        );
+        const currentChannel = transcriptBindings[roomSlug]?.channelName;
+        const defaultChannel = channels.includes(currentChannel) ? currentChannel : channels[0];
+        await openTranscriptChannel(roomSlug, defaultChannel);
       } catch (error) {
         setTranscriptStatus(roomSlug, error.message);
         renderTranscriptTabs(roomSlug, [], null);
@@ -1949,6 +2137,11 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     async function openTranscriptChannel(roomSlug, channelName) {
       const editor = document.getElementById(`transcript-editor-${roomSlug}`);
       if (!editor) return;
+      const sessionState = getTranscriptSessionState(roomSlug);
+      if (!sessionState.selectedSessionId) {
+        setTranscriptStatus(roomSlug, 'No selected transcription session');
+        return;
+      }
 
       const channels = transcriptChannels[roomSlug] || [];
       if (!channels.includes(channelName)) {
@@ -1963,17 +2156,21 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       try {
         await waitForTranscriptLib();
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?apiKey=${encodeURIComponent(currentApiKey)}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?apiKey=${encodeURIComponent(currentApiKey)}&sessionId=${encodeURIComponent(sessionState.selectedSessionId)}`;
         const binding = await window.SoundcastTranscript.createBinding({
           wsUrl,
           textarea: editor,
           onStatus: (status, message) => {
+            const selectedSession = getSelectedTranscriptSession(roomSlug);
+            const prefix = selectedSession
+              ? `Event: ${selectedSession.eventName || 'Untitled'} | Session ${selectedSession.id} (${selectedSession.status})`
+              : 'Transcript';
             if (status === 'connected') {
-              setTranscriptStatus(roomSlug, `Channel: ${channelName} (live sync)`);
+              setTranscriptStatus(roomSlug, `${prefix} | Channel: ${channelName} (live sync)`);
             } else if (status === 'disconnected') {
-              setTranscriptStatus(roomSlug, `Channel: ${channelName} (disconnected)`);
+              setTranscriptStatus(roomSlug, `${prefix} | Channel: ${channelName} (disconnected)`);
             } else if (status === 'error') {
-              setTranscriptStatus(roomSlug, message || `Channel: ${channelName} (error)`);
+              setTranscriptStatus(roomSlug, message || `${prefix} | Channel: ${channelName} (error)`);
             }
           }
         });

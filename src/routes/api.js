@@ -3,6 +3,7 @@ import { createRoom, getRoomBySlug, updateRoom, listRoomsByTenant, deleteRoom } 
 import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherById, updatePublisher } from '../db/models/publisher.js';
 import { startRecording, stopRecording, getRecordingStatus, isRecording } from '../recording/recorder.js';
 import { listRecordingsByRoomId } from '../db/models/recording.js';
+import { listTranscriptionSessionsByRoom, countTranscriptionSessionsByRoom } from '../db/models/transcription.js';
 
 /**
  * Register REST API routes
@@ -751,6 +752,127 @@ export async function registerApiRoutes(fastify) {
       } catch (error) {
         console.error('Error getting current room transcriptions:', error);
         return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to get room transcriptions' });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/transcriptions/sessions - List room transcription sessions (paginated)
+  fastify.get('/api/rooms/:room_slug/transcriptions/sessions', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to view this room' });
+        }
+
+        const rawLimit = parseInt(request.query?.limit ?? '20', 10);
+        const rawOffset = parseInt(request.query?.offset ?? '0', 10);
+        const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 100)) : 20;
+        const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+
+        const sessions = listTranscriptionSessionsByRoom(room.id, limit, offset);
+        const total = countTranscriptionSessionsByRoom(room.id);
+
+        return reply.code(200).send({
+          sessions: sessions.map((session) => ({
+            id: session.id,
+            roomId: session.room_id,
+            recordingId: session.recording_id,
+            eventName: session.event_name,
+            modelName: session.model_name,
+            status: session.status,
+            startedAt: session.started_at,
+            stoppedAt: session.stopped_at,
+            errorMessage: session.error_message
+          })),
+          pagination: {
+            limit,
+            offset,
+            total,
+            hasMore: offset + sessions.length < total
+          }
+        });
+      } catch (error) {
+        console.error('Error listing transcription sessions:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to list transcription sessions' });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/transcriptions/sessions/:session_id - Get room transcription docs by session
+  fastify.get('/api/rooms/:room_slug/transcriptions/sessions/:session_id', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, session_id } = request.params;
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to view this room' });
+        }
+
+        const sessionId = parseInt(session_id, 10);
+        if (!Number.isFinite(sessionId) || sessionId <= 0) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid session_id' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = transcriptionRuntime.getSessionDocs(room.id, room.slug, sessionId);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Transcription session not found for this room' });
+        }
+
+        return reply.code(200).send(payload);
+      } catch (error) {
+        console.error('Error getting room transcription session docs:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to get transcription session docs' });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/transcriptions/sessions/:session_id/channels/:channel_name - Get room transcript by session and channel
+  fastify.get('/api/rooms/:room_slug/transcriptions/sessions/:session_id/channels/:channel_name', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, session_id, channel_name } = request.params;
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to view this room' });
+        }
+
+        const sessionId = parseInt(session_id, 10);
+        if (!Number.isFinite(sessionId) || sessionId <= 0) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid session_id' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = transcriptionRuntime.getSessionChannelDoc(room.id, room.slug, sessionId, channel_name);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Transcription session not found for this room' });
+        }
+        return reply.code(200).send(payload);
+      } catch (error) {
+        console.error('Error getting room transcription session channel doc:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to get transcription session channel doc' });
       }
     }
   });
