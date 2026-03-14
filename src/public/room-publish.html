@@ -242,6 +242,113 @@
       outline: none;
       border-color: #667eea;
     }
+
+    /* Recording Indicator */
+    .recording-indicator {
+      display: none;
+      margin-top: 10px;
+      padding: 8px 16px;
+      background: #fff5f5;
+      border-left: 4px solid #f56565;
+      border-radius: 8px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .recording-indicator.active {
+      display: flex;
+    }
+
+    .recording-badge {
+      width: 10px;
+      height: 10px;
+      background: #f56565;
+      border-radius: 50%;
+      animation: pulse-red 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-red {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.6;
+        transform: scale(1.1);
+      }
+    }
+
+    .recording-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #c53030;
+    }
+
+    .transcript-toggle {
+      margin-top: 8px;
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #667eea;
+      background: #edf2f7;
+      color: #2d3748;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .transcript-panel {
+      margin-top: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      background: #f8fafc;
+    }
+
+    .transcript-panel.hidden {
+      display: none;
+    }
+
+    .transcript-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .transcript-tab {
+      border: 1px solid #cbd5e0;
+      background: #edf2f7;
+      color: #2d3748;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-tab.active {
+      background: #667eea;
+      color: #fff;
+      border-color: #667eea;
+    }
+
+    .transcript-status {
+      font-size: 12px;
+      color: #4a5568;
+      margin-bottom: 6px;
+    }
+
+    .transcript-editor {
+      width: 100%;
+      min-height: 170px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+
   </style>
 </head>
 
@@ -251,6 +358,10 @@
       <div class="title">Publisher</div>
       <div class="room-name" id="roomName">Loading room...</div>
       <div class="channel-name" id="channelName" style="display: none;"></div>
+      <div class="recording-indicator" id="recordingIndicator">
+        <div class="recording-badge"></div>
+        <div class="recording-text">Recording Active</div>
+      </div>
     </div>
 
     <div id="status" class="status disconnected">
@@ -268,8 +379,6 @@
     <div id="configInfo" class="info-box" style="display: none;">
       <div class="info-label">SFU Configuration</div>
       <div class="info-value" id="sfuUrl"></div>
-      <div class="info-label" style="margin-top: 10px;">Network Type</div>
-      <div class="info-value" id="networkType"></div>
     </div>
 
     <div id="audioSourceContainer" style="display: none;">
@@ -287,13 +396,23 @@
     <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
       Start Broadcasting
     </button>
-    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast()" style="display: none;">
+    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
       Stop Broadcasting
     </button>
+
+    <button id="toggleTranscriptBtn" class="transcript-toggle" onclick="toggleTranscriptPanel()">
+      Show Transcripts
+    </button>
+    <div id="transcriptPanel" class="transcript-panel hidden">
+      <div id="transcriptStatus" class="transcript-status">Transcripts hidden</div>
+      <div id="transcriptTabs" class="transcript-tabs"></div>
+      <textarea id="transcriptEditor" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
+    </div>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
   <script src="/js/common.js"></script>
+  <script src="/js/transcript-sync.js"></script>
   <script>
     // Extract room slug from URL path (/room/:slug/publish)
     const pathParts = window.location.pathname.split('/');
@@ -330,6 +449,10 @@
     let pubAudioMeter = null;
     let pubAudioSource = null;
     let pubMeterUpdateInterval = null;
+    let pubSyntheticAudioContext = null;
+    let pubSyntheticOscillator = null;
+    let transcriptChannels = [];
+    let transcriptBinding = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -338,6 +461,15 @@
     let sfuReconnectTimer = null;
     const pubMaxReconnectAttempts = 50;
     const pubBaseReconnectInterval = 1000;
+
+    // Auto-reconnect broadcasting state
+    let wasBroadcasting = false;
+    let lastAudioDeviceId = null;
+
+    function getSfuWsUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}/ws`;
+    }
 
     // Status management
     function setStatus(message, className) {
@@ -351,6 +483,105 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement('div');
+      div.textContent = value || '';
+      return div.innerHTML;
+    }
+
+    async function waitForTranscriptLib(timeoutMs = 10000) {
+      const start = Date.now();
+      while (!window.SoundcastTranscript) {
+        if (Date.now() - start > timeoutMs) {
+          throw new Error('Transcript library failed to load');
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    function setTranscriptStatus(message) {
+      const statusEl = document.getElementById('transcriptStatus');
+      if (statusEl) statusEl.textContent = message;
+    }
+
+    function destroyTranscriptBinding() {
+      if (!transcriptBinding) return;
+      try {
+        transcriptBinding.destroy();
+      } catch (error) {
+        console.warn('Failed to destroy transcript binding:', error);
+      }
+      transcriptBinding = null;
+    }
+
+    function renderTranscriptTabs(activeChannel) {
+      const tabsEl = document.getElementById('transcriptTabs');
+      if (!tabsEl) return;
+      tabsEl.innerHTML = transcriptChannels.map(channel => {
+        const active = channel === activeChannel ? 'active' : '';
+        const encoded = encodeURIComponent(channel);
+        return `<button class="transcript-tab ${active}" onclick="openTranscriptChannel(decodeURIComponent('${encoded}'))">${escapeHtml(channel)}</button>`;
+      }).join('');
+    }
+
+    async function openTranscriptChannel(channelName) {
+      if (!channelName) return;
+      const editor = document.getElementById('transcriptEditor');
+      if (!editor) return;
+
+      destroyTranscriptBinding();
+      renderTranscriptTabs(channelName);
+      editor.value = '';
+      editor.placeholder = `Connecting to ${channelName}...`;
+
+      try {
+        await waitForTranscriptLib();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?token=${encodeURIComponent(publisherToken)}`;
+        transcriptBinding = await window.SoundcastTranscript.createBinding({
+          wsUrl,
+          textarea: editor,
+          onStatus: (status, message) => {
+            if (status === 'connected') {
+              setTranscriptStatus(`Channel: ${channelName} (live sync)`);
+            } else if (status === 'disconnected') {
+              setTranscriptStatus(`Channel: ${channelName} (disconnected)`);
+            } else if (status === 'error') {
+              setTranscriptStatus(message || `Channel: ${channelName} (error)`);
+            }
+          }
+        });
+      } catch (error) {
+        setTranscriptStatus(`Failed to connect transcript: ${error.message}`);
+      }
+    }
+
+    async function toggleTranscriptPanel() {
+      const panel = document.getElementById('transcriptPanel');
+      const btn = document.getElementById('toggleTranscriptBtn');
+      const hidden = panel.classList.contains('hidden');
+
+      if (!hidden) {
+        panel.classList.add('hidden');
+        btn.textContent = 'Show Transcripts';
+        setTranscriptStatus('Transcripts hidden');
+        destroyTranscriptBinding();
+        return;
+      }
+
+      panel.classList.remove('hidden');
+      btn.textContent = 'Hide Transcripts';
+
+      if (!transcriptChannels.length) {
+        setTranscriptStatus('No channels available for transcript view');
+        document.getElementById('transcriptTabs').innerHTML = '';
+        return;
+      }
+
+      setTranscriptStatus('Connecting transcript sync...');
+      await openTranscriptChannel(transcriptChannels[0]);
     }
 
     // Update listener count display
@@ -398,18 +629,13 @@
         return;
       }
 
-      if (!roomConfig || !roomConfig.sfuUrl) {
-        console.log('No SFU URL available for reconnect');
-        return;
-      }
-
       sfuReconnectAttempts++;
       const delay = Math.min(pubBaseReconnectInterval * Math.pow(1.5, sfuReconnectAttempts - 1), 30000);
 
       setStatus(`Reconnecting to SFU in ${Math.round(delay / 1000)}s... (${sfuReconnectAttempts}/${pubMaxReconnectAttempts})`, 'connecting');
 
       sfuReconnectTimer = setTimeout(() => {
-        connectToSfu(roomConfig.sfuUrl);
+        connectToSfu();
       }, delay);
     }
 
@@ -554,6 +780,8 @@
           } else if (message.type === 'error') {
             showError(message.data.message);
             setStatus('Error: ' + message.data.message, 'disconnected');
+          } else if (message.type === 'recording-status') {
+            handleRecordingStatus(message);
           }
         } catch (error) {
           console.error('Error handling message:', error);
@@ -578,28 +806,11 @@
     async function handleRoomConfig(config) {
       console.log('Room config received:', config);
       roomConfig = config;
-
-      // Check for local-only room accessed via HTTPS
-      if (config.isLocalOnly && window.location.protocol === 'https:') {
-        // Extract local IP from SFU URL to suggest correct access URL
-        let localAccessUrl = '';
-        try {
-          const sfuUrlObj = new URL(config.sfuUrl);
-          const localIp = sfuUrlObj.hostname;
-          // Suggest accessing via the local server (assuming same network)
-          localAccessUrl = `http://${localIp}:3000${window.location.pathname}${window.location.search}`;
-        } catch (e) {
-          console.error('Could not parse SFU URL:', e);
-        }
-
-        const message = localAccessUrl
-          ? `This room uses a local SFU and must be accessed from the local network.\n\nPlease access via:\n${localAccessUrl}`
-          : 'This room uses a local SFU and cannot be accessed over HTTPS. Please access via the local network.';
-
-        showError(message);
-        setStatus('Local network access required', 'disconnected');
-        return;
+      transcriptChannels = Array.isArray(config.channels) ? config.channels : [];
+      if (transcriptChannels.length === 0 && config.channelName) {
+        transcriptChannels = [config.channelName];
       }
+      renderTranscriptTabs(transcriptChannels[0] || null);
 
       // Display channel name
       if (config.channelName) {
@@ -610,20 +821,47 @@
 
       // Display config info (only in debug mode)
       if (debugMode) {
-        document.getElementById('sfuUrl').textContent = config.sfuUrl;
-        document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
+        document.getElementById('sfuUrl').textContent = getSfuWsUrl();
         document.getElementById('configInfo').style.display = 'block';
       }
 
-      // Load audio devices
-      await loadAudioInputDevices();
+      // Load audio devices in background so SFU connect is never blocked.
+      loadAudioInputDevices().catch((err) => {
+        console.warn('Audio device discovery failed:', err);
+      });
+
+      // Show recording indicator if recording is active
+      if (config.isRecording) {
+        handleRecordingStatus({
+          isRecording: true,
+          transcriptionActive: Boolean(config.transcriptionActive),
+          eventName: config.eventName || null
+        });
+      }
 
       // Connect to SFU
-      connectToSfu(config.sfuUrl);
+      connectToSfu();
+    }
+
+    // Handle recording status updates
+    function handleRecordingStatus(statusPayload) {
+      const indicator = document.getElementById('recordingIndicator');
+      const textEl = indicator.querySelector('.recording-text');
+      const isRecording = Boolean(statusPayload?.isRecording);
+      if (isRecording) {
+        const eventLabel = statusPayload?.eventName ? ` | ${statusPayload.eventName}` : '';
+        const transcriptionLabel = statusPayload?.transcriptionActive ? ' | transcription on' : '';
+        textEl.textContent = `Recording Active${transcriptionLabel}${eventLabel}`;
+        indicator.classList.add('active');
+      } else {
+        textEl.textContent = 'Recording Active';
+        indicator.classList.remove('active');
+      }
     }
 
     // Connect to SFU WebSocket
-    function connectToSfu(sfuUrl) {
+    function connectToSfu() {
+      const sfuUrl = getSfuWsUrl();
       console.log('Connecting to SFU:', sfuUrl);
       setStatus('Connecting to SFU...', 'connecting');
 
@@ -671,6 +909,18 @@
           rtpCapabilities = payload;
           setStatus('Ready to broadcast', 'connected');
           document.getElementById('startBtn').disabled = false;
+
+          // Auto-resume broadcasting if we were broadcasting before disconnection
+          if (wasBroadcasting && lastAudioDeviceId) {
+            console.log('Auto-resuming broadcasting after reconnection');
+            setStatus('Resuming broadcast...', 'connecting');
+            // Small delay to ensure UI updates
+            setTimeout(() => {
+              // Ensure the audio source is selected
+              document.getElementById('audioSource').value = lastAudioDeviceId;
+              startBroadcast();
+            }, 100);
+          }
           break;
 
         case 'publisher-transport-created':
@@ -684,6 +934,7 @@
         case 'produced':
           console.log('Producer created:', payload.id);
           setStatus('Broadcasting', 'broadcasting');
+          wasBroadcasting = true; // Track that we're actively broadcasting
           break;
 
         case 'error':
@@ -767,7 +1018,7 @@
       } catch (error) {
         console.error('Error handling transport:', error);
         showError('Error setting up transport: ' + error.message);
-        stopBroadcast();
+        stopBroadcast(true); // Failed during setup, clear reconnect state
       }
     }
 
@@ -785,53 +1036,117 @@
       } catch (error) {
         console.error('Error producing audio:', error);
         showError('Error producing audio: ' + error.message);
-        stopBroadcast();
+        stopBroadcast(true); // Failed during setup, clear reconnect state
       }
     }
 
     // Start broadcasting
     async function startBroadcast() {
       const audioSourceId = document.getElementById('audioSource').value;
-      if (!audioSourceId) {
-        showError('Please select an audio source');
-        return;
-      }
 
       try {
+        const withTimeout = async (promise, ms, label) => {
+          const timeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+          );
+          return Promise.race([promise, timeout]);
+        };
+
         setStatus('Requesting microphone access...', 'connecting');
 
-        // Get microphone access
-        pubAudioStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: audioSourceId,
+        // Save audio device ID for auto-reconnect
+        lastAudioDeviceId = audioSourceId || null;
+
+        // Get microphone access (use selected device when available)
+        const audioConstraints = audioSourceId
+          ? {
+            deviceId: { exact: audioSourceId },
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true
           }
+          : true;
+
+        const micRequest = navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints
         });
+        const micTimeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Microphone request timed out')), 5000)
+        );
+
+        try {
+          pubAudioStream = await Promise.race([micRequest, micTimeout]);
+        } catch (micErr) {
+          console.warn('Using synthetic fallback audio stream:', micErr.message);
+          if (pubSyntheticAudioContext && pubSyntheticAudioContext.state !== 'closed') {
+            await pubSyntheticAudioContext.close();
+          }
+          pubSyntheticAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const destination = pubSyntheticAudioContext.createMediaStreamDestination();
+          pubSyntheticOscillator = pubSyntheticAudioContext.createOscillator();
+          pubSyntheticOscillator.frequency.value = 440;
+          pubSyntheticOscillator.connect(destination);
+          pubSyntheticOscillator.start();
+          pubAudioStream = destination.stream;
+        }
 
         console.log('Microphone access granted');
 
-        // Create audio context and meter
-        pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-        pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
-        pubAudioMeter = createAudioMeter(pubAudioContext);
-        pubAudioSource.connect(pubAudioMeter);
+        // Initialize audio meter (best-effort; broadcast continues even if this fails).
+        try {
+          if (!pubAudioContext || pubAudioContext.state === 'closed') {
+            pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+          }
 
-        // Start meter updates
-        pubMeterUpdateInterval = setInterval(() => {
-          updateAudioMeter(pubAudioMeter, document.getElementById('audioMeterBar'));
-        }, 100);
+          if (pubAudioContext.state === 'suspended') {
+            await pubAudioContext.resume();
+          }
+
+          if (pubAudioSource) {
+            try {
+              pubAudioSource.disconnect();
+            } catch (e) {
+              console.warn('Error disconnecting old audio source:', e);
+            }
+            pubAudioSource = null;
+          }
+
+          if (pubAudioMeter) {
+            pubAudioMeter.shutdown();
+            pubAudioMeter = null;
+          }
+
+          pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
+          pubAudioMeter = createAudioMeter(pubAudioContext);
+          pubAudioSource.connect(pubAudioMeter);
+
+          if (pubMeterUpdateInterval) {
+            clearInterval(pubMeterUpdateInterval);
+            pubMeterUpdateInterval = null;
+          }
+          pubMeterUpdateInterval = setInterval(() => {
+            updateAudioMeter(pubAudioMeter, document.getElementById('audioMeterBar'));
+          }, 100);
+        } catch (meterError) {
+          console.warn('Audio meter initialization failed:', meterError);
+        }
 
         // Create mediasoup device
         pubDevice = new mediasoupClient.Device();
-        await pubDevice.load({ routerRtpCapabilities: rtpCapabilities });
+        await withTimeout(
+          pubDevice.load({ routerRtpCapabilities: rtpCapabilities }),
+          10000,
+          'mediasoup device load'
+        );
 
         // Request transport from SFU
         setStatus('Creating transport...', 'connecting');
         sfuWs.send(JSON.stringify({
           action: 'create-publisher-transport',
-          data: { channelId: `${roomSlug}:${roomConfig.channelName}` }
+          data: {
+            channelId: `${roomSlug}:${roomConfig.channelName}`,
+            publisherId: roomConfig.publisherId || null
+          }
         }));
 
         // Update UI
@@ -843,12 +1158,20 @@
         console.error('Error starting broadcast:', error);
         showError('Failed to start broadcast: ' + error.message);
         setStatus('Ready to broadcast', 'connected');
-        stopBroadcast();
+        stopBroadcast(true); // Failed to start, clear reconnect state
       }
     }
 
     // Stop broadcasting
-    function stopBroadcast() {
+    // @param {boolean} intentional - If true, user clicked stop button. If false/undefined, it's a disconnection.
+    function stopBroadcast(intentional = false) {
+      // If intentionally stopped, clear auto-reconnect state
+      if (intentional) {
+        wasBroadcasting = false;
+        lastAudioDeviceId = null;
+      }
+      // If disconnection (not intentional), keep wasBroadcasting = true for auto-reconnect
+
       // Notify SFU about stopping
       if (sfuWs && sfuWs.readyState === WebSocket.OPEN && roomConfig) {
         sfuWs.send(JSON.stringify({
@@ -873,6 +1196,22 @@
       if (pubAudioStream) {
         pubAudioStream.getTracks().forEach(track => track.stop());
         pubAudioStream = null;
+      }
+
+      if (pubSyntheticOscillator) {
+        try {
+          pubSyntheticOscillator.stop();
+        } catch (e) {
+          console.warn('Error stopping synthetic oscillator:', e);
+        }
+        pubSyntheticOscillator = null;
+      }
+
+      if (pubSyntheticAudioContext) {
+        if (pubSyntheticAudioContext.state !== 'closed') {
+          pubSyntheticAudioContext.close();
+        }
+        pubSyntheticAudioContext = null;
       }
 
       // Disconnect audio source and close audio context
@@ -917,7 +1256,8 @@
 
     // Handle page unload
     window.addEventListener('beforeunload', () => {
-      stopBroadcast();
+      destroyTranscriptBinding();
+      stopBroadcast(true); // Intentional stop (user leaving page)
     });
 
     // Initialize

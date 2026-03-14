@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import path from 'path';
-import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import mediasoup from 'mediasoup';
@@ -11,12 +11,11 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase, getDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
-import { registerSfuRoutes } from './routes/sfu-api.js';
-import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.js';
+import { getRoomBySlug, getRoomById, listRoomsByTenant, createRoom } from './db/models/room.js';
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
-import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
-import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import TranscriptionRuntime from './transcription/runtime.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +45,8 @@ const fastify = Fastify({
   logger: true
 });
 
+let transcriptionRuntime = null;
+
 // Initialize database
 const dbPath = process.env.DB_PATH || './soundcast.db';
 initDatabase(dbPath);
@@ -70,93 +71,27 @@ if (singleTenantMode) {
   // Auto-create default "main" room if it doesn't exist
   const existingRoom = getRoomBySlug('main');
   if (!existingRoom) {
-    const defaultSfuUrl = `ws://localhost:${process.env.PORT || 3000}/ws`;
     createRoom({
       tenant_id: defaultTenant.id,
       name: 'Main',
-      slug: 'main',
-      is_local_only: false,
-      sfu_url: defaultSfuUrl,
-      coturn_config_json: '[]'
+      slug: 'main'
     });
     console.log('Single-tenant mode: Created default "main" room');
   }
 }
 
-/**
- * Rewrite SFU URL protocol and port based on connection security
- * If client connected via wss://, rewrite ws:// to wss:// and update port
- * @param {string} sfuUrl - The original SFU URL
- * @param {object} req - The request object to check connection security
- * @returns {string} The potentially rewritten URL
- */
-function getSecureSfuUrl(sfuUrl, req) {
-  if (!sfuUrl) return sfuUrl;
+// Room-level TURN/STUN settings were removed; use a single runtime default.
+const DEFAULT_ICE_SERVERS = [];
 
-  // Check if the incoming connection is secure
-  // req.headers['x-forwarded-proto'] for reverse proxy scenarios
-  // req.socket.encrypted for direct TLS connections
-  const isSecure = req.socket?.encrypted ||
-    req.headers?.['x-forwarded-proto'] === 'https' ||
-    req.protocol === 'https';
-
-  if (isSecure && sfuUrl.startsWith('ws://')) {
-    const httpPort = process.env.PORT || '3000';
-    const httpsPort = process.env.HTTPS_PORT || '3001';
-
-    // Replace protocol
-    let secureUrl = sfuUrl.replace(/^ws:\/\//, 'wss://');
-
-    // Replace port if it matches the HTTP port
-    // Matches :3000/ or :3000 at end of string
-    const portRegex = new RegExp(`:${httpPort}(\\/|$)`);
-    secureUrl = secureUrl.replace(portRegex, `:${httpsPort}$1`);
-
-    return secureUrl;
-  }
-
-  return sfuUrl;
-}
-
-/**
- * Generate TURN credentials using coturn's static-auth-secret mechanism
- * @param {string} secret - The static-auth-secret from coturn config
- * @param {number} ttl - Time-to-live in seconds (default 24 hours)
- * @returns {{ username: string, credential: string }}
- */
-function generateTurnCredentials(secret, ttl = 86400) {
-  const timestamp = Math.floor(Date.now() / 1000) + ttl;
-  const username = `${timestamp}:soundcast`;
-  const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
-  return { username, credential };
-}
-
-/**
- * Process ICE servers array and generate dynamic TURN credentials where needed
- *
- * ICE servers with __turn_secret__ field will have credentials generated dynamically.
- * Format: { "urls": [...], "__turn_secret__": "secret", "__turn_ttl__": 86400 }
- *
- * @param {Array} iceServers - Array of ICE server configurations
- * @returns {Array} Processed ICE servers with generated credentials
- */
-function processIceServers(iceServers) {
-  return iceServers.map(server => {
-    if (server.__turn_secret__) {
-      const ttl = server.__turn_ttl__ || 86400;
-      const { username, credential } = generateTurnCredentials(server.__turn_secret__, ttl);
-
-      // Return new server object without the secret fields
-      const { __turn_secret__, __turn_ttl__, ...rest } = server;
-      return {
-        ...rest,
-        username,
-        credential
-      };
-    }
-    return server;
-  });
-}
+// Transcription runtime (sidecar + Yjs) is shared across HTTP/HTTPS servers.
+transcriptionRuntime = new TranscriptionRuntime({
+  fastify,
+  verifyPublisherToken,
+  verifyTenantApiKey,
+  getRoomBySlug,
+  getRoomById,
+  listRoomsByTenant
+});
 
 // Fastify setup - serve static files
 const publicDir = getPublicDir();
@@ -175,9 +110,6 @@ fastify.register(fastifyWebsocket, {
 
 // Register REST API routes
 fastify.register(registerApiRoutes);
-
-// Register SFU management routes
-fastify.register(registerSfuRoutes);
 
 // Room-specific HTML routes
 fastify.get('/room/:slug/publish', async (request, reply) => {
@@ -222,6 +154,27 @@ console.log(`  Listen IP:    ${mediasoupConfig.listenIp}`);
 console.log(`  Announced IP: ${mediasoupConfig.announcedIp}`);
 console.log(`  RTC Ports:    ${mediasoupConfig.rtcMinPort}-${mediasoupConfig.rtcMaxPort}`);
 
+function getLocalInterfaceIps() {
+  const interfaces = os.networkInterfaces();
+  const ips = new Set(['127.0.0.1', '::1']);
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      if (!entry || !entry.address) continue;
+      ips.add(entry.address);
+    }
+  }
+  return ips;
+}
+
+const localIps = getLocalInterfaceIps();
+if (mediasoupConfig.announcedIp && !localIps.has(mediasoupConfig.announcedIp)) {
+  console.warn('WARNING: ANNOUNCED_IP is not assigned to this machine.');
+  console.warn(`         Configured: ${mediasoupConfig.announcedIp}`);
+  console.warn(`         Local IPs:  ${Array.from(localIps).join(', ')}`);
+  console.warn('         This can cause WebRTC to connect but not deliver RTP media.');
+}
+
 if (mediasoupConfig.announcedIp === '127.0.0.1') {
   console.warn('WARNING: ANNOUNCED_IP is set to 127.0.0.1 - remote clients will not be able to connect!');
   console.warn('         Set ANNOUNCED_IP to your server\'s public IP address.');
@@ -249,12 +202,6 @@ const clients = new Map();
 // Tenant admin WebSocket connections: tenantId -> Set<socket>
 const tenantAdminClients = new Map();
 
-// SFU stats WebSocket connections: sfuId -> socket
-const sfuStatsClients = new Map();
-
-// Local SFU stats: sfuId -> { channels: { channelName: { publishers, subscribers } } }
-const localSfuStats = new Map();
-
 // Broadcast updated channel list to all clients
 function broadcastChannelList() {
   const list = Array.from(channels.keys());
@@ -267,19 +214,7 @@ function broadcastChannelList() {
   }
 }
 
-// Get SFU ID for a room by matching sfu_url
-function getSfuIdForRoom(room) {
-  if (!room.sfu_url) return null;
-  const sfus = listSfus();
-  for (const sfu of sfus) {
-    if (sfu.url === room.sfu_url) {
-      return sfu.id;
-    }
-  }
-  return null;
-}
-
-// Get channel stats for a specific tenant (combines main SFU and local SFU data)
+// Get channel stats for a specific tenant.
 function getChannelStatsForTenant(tenantId) {
   const stats = {};
   const rooms = listRoomsByTenant(tenantId);
@@ -306,34 +241,20 @@ function getChannelStatsForTenant(tenantId) {
         return uniqueListeners.size;
       }
 
-      // Check main SFU's channels Map (try both formats)
+      // Check channels Map (try both full and legacy formats)
       if (channels.has(fullChannelId)) {
         const ch = channels.get(fullChannelId);
         stats[room.slug][channelName] = {
-          publishers: ch.producers ? ch.producers.size : 0,
+          publishers: countActivePublishers(ch),
           subscribers: countUniqueListeners(ch)
         };
       } else if (channels.has(channelName)) {
         // Fallback to legacy format
         const ch = channels.get(channelName);
         stats[room.slug][channelName] = {
-          publishers: ch.producers ? ch.producers.size : 0,
+          publishers: countActivePublishers(ch),
           subscribers: countUniqueListeners(ch)
         };
-      }
-      // Check local SFU stats (if room uses local SFU)
-      else if (room.is_local_only) {
-        const sfuId = getSfuIdForRoom(room);
-        const sfuStats = sfuId ? localSfuStats.get(sfuId) : null;
-        // Local SFU uses full channel ID format
-        if (sfuStats?.channels?.[fullChannelId]) {
-          stats[room.slug][channelName] = sfuStats.channels[fullChannelId];
-        } else if (sfuStats?.channels?.[channelName]) {
-          // Fallback to legacy format
-          stats[room.slug][channelName] = sfuStats.channels[channelName];
-        } else {
-          stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
-        }
       } else {
         stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
       }
@@ -349,13 +270,45 @@ function getRecordingStatusForTenant(tenantId) {
 
   for (const room of rooms) {
     const status = getRecordingStatus(room.id);
+    const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
     if (status) {
-      recordingStats[room.slug] = status;
+      recordingStats[room.slug] = {
+        ...status,
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null,
+        modelName: transcriptionStatus?.modelName || null
+      };
     } else {
-      recordingStats[room.slug] = { isRecording: false };
+      recordingStats[room.slug] = {
+        isRecording: false,
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null,
+        modelName: transcriptionStatus?.modelName || null
+      };
     }
   }
   return recordingStats;
+}
+
+// Notify publishers in a room about recording status change
+function notifyPublishersRecordingStatus(roomSlug, payload) {
+  const message = JSON.stringify({
+    type: 'recording-status',
+    ...payload
+  });
+
+  // Find all publishers in this room
+  for (const [clientId, client] of clients) {
+    if (client.isPublisher && client.channelId && client.channelId.startsWith(roomSlug + ':')) {
+      try {
+        client.socket.send(message);
+      } catch (e) {
+        fastify.log.error(`Failed to send recording status to publisher: ${e.message}`);
+      }
+    }
+  }
 }
 
 // Notify tenant admins about recording status change
@@ -363,10 +316,22 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
   const adminClients = tenantAdminClients.get(tenantId);
   if (!adminClients) return;
 
+  const room = getRoomBySlug(roomSlug);
+  const transcriptionStatus = room && transcriptionRuntime
+    ? transcriptionRuntime.getRoomTranscriptionStatus(room.id)
+    : null;
+  const normalizedStatus = {
+    ...status,
+    transcriptionActive: Boolean(transcriptionStatus),
+    transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+    eventName: transcriptionStatus?.eventName || null,
+    modelName: transcriptionStatus?.modelName || null
+  };
+
   const message = JSON.stringify({
     type: 'recording-status',
     roomSlug,
-    ...status
+    ...normalizedStatus
   });
 
   for (const socket of adminClients) {
@@ -376,6 +341,9 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
       fastify.log.error(`Failed to send recording status to admin: ${e.message}`);
     }
   }
+
+  // Also notify publishers in the room
+  notifyPublishersRecordingStatus(roomSlug, normalizedStatus);
 }
 
 // Find room and tenant for a channel name
@@ -419,6 +387,99 @@ function getShortChannelName(channelId) {
   return colonIndex !== -1 ? channelId.substring(colonIndex + 1) : channelId;
 }
 
+// Remove a producer and any linked consumers from a channel
+function removeChannelProducer(channel, producerId) {
+  const producerInfo = channel?.producers?.get(producerId);
+  if (!producerInfo) return null;
+
+  if (producerInfo.producer && !producerInfo.producer.closed) {
+    try {
+      producerInfo.producer.close();
+    } catch { }
+  }
+
+  channel.producers.delete(producerId);
+
+  // Remove consumers linked to this producer and notify listeners
+  for (const [consumerId, consumer] of [...channel.consumers.entries()]) {
+    if (consumer.producerId !== producerId) continue;
+
+    if (consumer.consumer) {
+      try {
+        consumer.consumer.close();
+      } catch { }
+    }
+    channel.consumers.delete(consumerId);
+
+    if (consumer.clientId && clients.has(consumer.clientId)) {
+      const listenerClient = clients.get(consumer.clientId);
+      listenerClient.consumers = listenerClient.consumers.filter(c => c.id !== consumerId);
+      try {
+        listenerClient.socket.send(JSON.stringify({ action: 'producer-stopped', data: { producerId } }));
+      } catch { }
+    }
+  }
+
+  return {
+    producerId,
+    mediasoupProducerId: producerInfo.producer?.id
+  };
+}
+
+// Remove all producers for the same publisher identity (or same socket client)
+function removeProducersForPublisher(channel, { clientId, publisherId = null } = {}) {
+  if (!channel || !channel.producers) return [];
+
+  const removed = [];
+  for (const [producerId, producerInfo] of [...channel.producers.entries()]) {
+    const sameClient = producerInfo.clientId === clientId;
+    const samePublisher = publisherId && producerInfo.publisherId && producerInfo.publisherId === publisherId;
+    if (!sameClient && !samePublisher) continue;
+
+    const removedInfo = removeChannelProducer(channel, producerId);
+    if (removedInfo) {
+      removed.push(removedInfo);
+    }
+  }
+
+  return removed;
+}
+
+// Stop recording side effects for removed producers
+function cleanupProducerSideEffects(channelId, removedProducers) {
+  if (!removedProducers || removedProducers.length === 0 || !channelId) return;
+
+  const channelParts = channelId.split(':');
+  if (channelParts.length >= 2) {
+    const roomSlug = channelParts[0];
+    const room = getRoomBySlug(roomSlug);
+    if (room && isRecording(room.id)) {
+      for (const removed of removedProducers) {
+        removeProducerFromRecording(room.id, removed.producerId).catch(err => {
+          fastify.log.error(`Failed to remove stale producer from recording: ${err.message}`);
+        });
+        if (transcriptionRuntime && transcriptionRuntime.getRoomSession(room.id)) {
+          transcriptionRuntime.unregisterProducerStream(room.id, removed.producerId);
+        }
+      }
+    }
+  }
+
+}
+
+function countActivePublishers(channel) {
+  if (!channel?.producers) return 0;
+  let count = 0;
+  for (const [producerId, producerInfo] of channel.producers) {
+    const hasLiveClient = producerInfo.clientId && clients.has(producerInfo.clientId);
+    const isOpen = producerInfo.producer && !producerInfo.producer.closed;
+    if (hasLiveClient && isOpen) {
+      count++;
+    }
+  }
+  return count;
+}
+
 // Notify tenant admins about channel updates
 function notifyTenantAdmins(channelId, source = 'main') {
   const roomInfo = findRoomForChannel(channelId);
@@ -442,7 +503,7 @@ function notifyTenantAdmins(channelId, source = 'main') {
       }
     }
     channelStats = {
-      publishers: ch.producers ? ch.producers.size : 0,
+      publishers: countActivePublishers(ch),
       subscribers: uniqueListeners.size
     };
   } else {
@@ -495,56 +556,6 @@ function notifyPublishersListenerCount(channelId) {
       } catch (e) {
         // Client may have disconnected
       }
-    }
-  }
-}
-
-// Notify tenant admins with stats from local SFU
-function notifyTenantAdminsFromSfu(sfuId, channelId, stats) {
-  // Find which rooms use this SFU
-  const allSfus = listSfus();
-  const sfu = allSfus.find(s => s.id === sfuId);
-  if (!sfu) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: SFU ${sfuId} not found`);
-    return;
-  }
-
-  const tenantId = sfu.tenant_id;
-  const adminSockets = tenantAdminClients.get(tenantId);
-  if (!adminSockets || adminSockets.size === 0) {
-    fastify.log.info(`notifyTenantAdminsFromSfu: No admin sockets for tenant ${tenantId}`);
-    return;
-  }
-
-  // Find the room for this channel
-  const roomInfo = findRoomForChannel(channelId);
-  if (!roomInfo) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: Room not found for channel "${channelId}"`);
-    return;
-  }
-  if (roomInfo.tenant_id !== tenantId) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: Channel "${channelId}" belongs to tenant ${roomInfo.tenant_id}, not ${tenantId}`);
-    return;
-  }
-
-  // Use short channel name for the update (frontend expects "English", not "sjh2:English")
-  const shortChannelName = getShortChannelName(channelId);
-
-  const update = {
-    type: 'channel-update',
-    roomSlug: roomInfo.slug,
-    channelName: shortChannelName,
-    publishers: stats.publishers,
-    subscribers: stats.subscribers
-  };
-
-  fastify.log.info(`Sending channel update to ${adminSockets.size} admin(s): ${JSON.stringify(update)}`);
-
-  for (const socket of adminSockets) {
-    try {
-      socket.send(JSON.stringify(update));
-    } catch (e) {
-      fastify.log.error(`Failed to send SFU update to tenant admin: ${e.message}`);
     }
   }
 }
@@ -605,6 +616,7 @@ async function registerMainWsRoutes(fastify) {
       isListener: false,
       channelId: null,
       displayName: null,
+      publisherId: null,
       transport: null,
       producer: null,
       consumers: [],
@@ -907,6 +919,7 @@ async function registerMainWsRoutes(fastify) {
           clientInfo.isPublisher = true;
           clientInfo.channelId = data.channelId;
           clientInfo.publisherName = data.publisherName || null;
+          clientInfo.publisherId = data.publisherId || null;
 
 
 
@@ -975,12 +988,28 @@ async function registerMainWsRoutes(fastify) {
 
             // Store producer with name for recording
             const publishChannel = channels.get(clientInfo.channelId);
+            if (!publishChannel) {
+              throw new Error(`Channel ${clientInfo.channelId} does not exist`);
+            }
+
+            // De-duplicate stale producer(s) from the same publisher identity.
+            // This prevents publisher count inflation on refresh/reconnect.
+            const removedProducers = removeProducersForPublisher(publishChannel, {
+              clientId,
+              publisherId: clientInfo.publisherId
+            });
+            if (removedProducers.length > 0) {
+              fastify.log.info(`Removed ${removedProducers.length} stale producer(s) before creating new producer for client ${clientId}`);
+              cleanupProducerSideEffects(clientInfo.channelId, removedProducers);
+            }
+
             const producerId = uuidv4();
             clientInfo.producer = { id: producerId, producer };
             const producerInfo = {
               transport: clientInfo.transport,
               producer,
               clientId,
+              publisherId: clientInfo.publisherId,
               name: clientInfo.publisherName || `producer_${Date.now()}`
             };
             publishChannel.producers.set(producerId, producerInfo);
@@ -1005,12 +1034,16 @@ async function registerMainWsRoutes(fastify) {
               const room = getRoomBySlug(roomSlug);
               if (room && isRecording(room.id)) {
                 try {
-                  await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  const trackInfo = await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  if (transcriptionRuntime && trackInfo && transcriptionRuntime.getRoomSession(room.id)) {
+                    transcriptionRuntime.registerProducerStream(room.id, trackInfo);
+                  }
                   fastify.log.info(`Added producer ${producerId} to active recording for room ${roomSlug}`);
                 } catch (err) {
                   fastify.log.error(`Failed to add producer to recording: ${err.message}`);
                 }
               }
+
             }
 
             // Create consumers for existing listeners in the same channel
@@ -1284,6 +1317,9 @@ async function registerMainWsRoutes(fastify) {
                   removeProducerFromRecording(stopRoom.id, prodId).catch(err => {
                     fastify.log.error(`Failed to remove producer from recording: ${err.message}`);
                   });
+                  if (transcriptionRuntime && transcriptionRuntime.getRoomSession(stopRoom.id)) {
+                    transcriptionRuntime.unregisterProducerStream(stopRoom.id, prodId);
+                  }
                 }
               }
 
@@ -1395,7 +1431,11 @@ async function registerMainWsRoutes(fastify) {
               removeProducerFromRecording(closeRoom.id, prodId).catch(err => {
                 fastify.log.error(`Failed to remove producer from recording on disconnect: ${err.message}`);
               });
+              if (transcriptionRuntime && transcriptionRuntime.getRoomSession(closeRoom.id)) {
+                transcriptionRuntime.unregisterProducerStream(closeRoom.id, prodId);
+              }
             }
+
           }
 
           for (const [consumerId, consumer] of channel.consumers) {
@@ -1466,34 +1506,16 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
-    // Parse ICE servers from JSON and generate dynamic TURN credentials
-    let iceServers;
-    try {
-      const rawIceServers = JSON.parse(room.coturn_config_json);
-      iceServers = processIceServers(rawIceServers);
-    } catch (e) {
-      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid room configuration' }
-      }));
-      connection.close();
-      return;
-    }
+    const iceServers = DEFAULT_ICE_SERVERS;
 
     // Get available channels for this room
     const channels = getChannelsByRoom(room.id);
-
-    // Rewrite SFU URL to wss:// if client connected securely
-    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
 
     // Prepare configuration message with channels
     const config = {
       type: 'config',
       data: {
-        sfuUrl: sfuUrl,
         iceServers: iceServers,
-        isLocalOnly: room.is_local_only,
         channels: channels,
         roomSlug: slug
       }
@@ -1507,7 +1529,7 @@ async function registerRoomWsRoutes(fastify) {
         if (payload.type === 'get-config') {
           // Client requests config after handlers are ready (fixes iOS Safari timing issue)
           connection.send(JSON.stringify(config));
-          fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, sfuUrl: ${sfuUrl}, channels: ${channels.join(', ')}`);
+          fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, channels: ${channels.join(', ')}`);
         } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
@@ -1578,32 +1600,23 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
-    // Parse ICE servers from JSON and generate dynamic TURN credentials
-    let iceServers;
-    try {
-      const rawIceServers = JSON.parse(room.coturn_config_json);
-      iceServers = processIceServers(rawIceServers);
-    } catch (e) {
-      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid room configuration' }
-      }));
-      connection.close();
-      return;
-    }
+    const iceServers = DEFAULT_ICE_SERVERS;
+    const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
 
-    // Rewrite SFU URL to wss:// if client connected securely
-    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
+    const channelsForRoom = getChannelsByRoom(room.id);
 
     // Prepare configuration message with channel name
     const config = {
       type: 'config',
       data: {
-        sfuUrl: sfuUrl,
         iceServers: iceServers,
-        isLocalOnly: room.is_local_only,
-        channelName: publisher.channel_name
+        channels: channelsForRoom,
+        channelName: publisher.channel_name,
+        publisherId: publisher.id,
+        isRecording: isRecording(room.id),
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null
       }
     };
 
@@ -1615,7 +1628,7 @@ async function registerRoomWsRoutes(fastify) {
         if (payload.type === 'get-config') {
           // Client requests config after handlers are ready (fixes iOS Safari timing issue)
           connection.send(JSON.stringify(config));
-          fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, sfuUrl: ${sfuUrl}, channel: ${publisher.channel_name}`);
+          fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
         } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
@@ -1717,97 +1730,6 @@ async function registerAdminWsRoutes(fastify) {
     });
   });
 
-  // SFU Stats endpoint: /ws/sfu-stats?secretKey=xxx
-  fastify.get('/ws/sfu-stats', { websocket: true }, (connection, req) => {
-    const secretKey = req.query.secretKey;
-
-    // Verify secret key
-    if (!secretKey) {
-      fastify.log.warn('Missing secret key for SFU stats WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Missing secret key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    const sfu = verifySfuSecretKey(secretKey);
-    if (!sfu) {
-      fastify.log.warn('Invalid secret key for SFU stats WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid secret key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    fastify.log.info(`SFU stats connected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
-
-    // Store connection
-    sfuStatsClients.set(sfu.id, connection);
-
-    // Initialize empty stats for this SFU
-    localSfuStats.set(sfu.id, { channels: {} });
-
-    // Send acknowledgment
-    connection.send(JSON.stringify({
-      type: 'connected',
-      sfuId: sfu.id
-    }));
-
-    connection.on('message', async (message) => {
-      try {
-        const payload = JSON.parse(message.toString());
-
-        if (payload.type === 'stats-update') {
-          fastify.log.info(`Received stats-update from SFU ${sfu.id}: ${JSON.stringify(payload.channels)}`);
-
-          // Update local SFU stats
-          const previousStats = localSfuStats.get(sfu.id) || { channels: {} };
-          localSfuStats.set(sfu.id, { channels: payload.channels || {} });
-
-          // Notify tenant admins for each channel that changed
-          for (const channelName in payload.channels) {
-            const newStats = payload.channels[channelName];
-            const oldStats = previousStats.channels?.[channelName];
-
-            // Only notify if stats changed
-            if (!oldStats ||
-              oldStats.publishers !== newStats.publishers ||
-              oldStats.subscribers !== newStats.subscribers) {
-              fastify.log.info(`Stats changed for channel ${channelName}, notifying tenant admins...`);
-              notifyTenantAdminsFromSfu(sfu.id, channelName, newStats);
-            }
-          }
-
-          // Check for removed channels
-          for (const channelName in previousStats.channels) {
-            if (!(channelName in (payload.channels || {}))) {
-              notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
-            }
-          }
-        }
-      } catch (e) {
-        fastify.log.error(`Invalid message from SFU ${sfu.id}: ${e.message}`);
-      }
-    });
-
-    connection.on('close', () => {
-      fastify.log.info(`SFU stats disconnected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
-      sfuStatsClients.delete(sfu.id);
-
-      // Clear stats and notify admins about offline channels
-      const oldStats = localSfuStats.get(sfu.id);
-      if (oldStats?.channels) {
-        for (const channelName in oldStats.channels) {
-          notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
-        }
-      }
-      localSfuStats.delete(sfu.id);
-    });
-  });
 }
 
 // Register all WebSocket routes on a Fastify instance
@@ -1815,6 +1737,9 @@ function registerAllWsRoutes(fastifyInstance) {
   fastifyInstance.register(registerMainWsRoutes);
   fastifyInstance.register(registerRoomWsRoutes);
   fastifyInstance.register(registerAdminWsRoutes);
+  if (transcriptionRuntime) {
+    transcriptionRuntime.registerWsRoute(fastifyInstance);
+  }
 }
 
 // Register WebSocket routes on HTTP server
@@ -1861,8 +1786,9 @@ function createHttpsServer() {
     }
   });
 
+  fastifyHttps.decorate('transcriptionRuntime', transcriptionRuntime);
+  fastifyHttps.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
   fastifyHttps.register(registerApiRoutes);
-  fastifyHttps.register(registerSfuRoutes);
 
   // Register WebSocket routes on HTTPS server
   registerAllWsRoutes(fastifyHttps);
@@ -1893,6 +1819,33 @@ function createHttpsServer() {
   return fastifyHttps;
 }
 
+/**
+ * Get recording context for a producer
+ * @param {number} roomId - Room ID
+ * @param {string} producerId - Producer ID
+ * @returns {object|null} Recording context or null
+ */
+function getRecordingContextForProducer(roomId, producerId) {
+  if (!isRecording(roomId)) return null;
+
+  const recordings = getActiveRecordings();
+  const session = recordings.get(roomId);
+  if (!session) return null;
+
+  const track = session.tracks.get(producerId);
+  if (!track) return null;
+
+  // Extract baseFilename (remove .ogg extension)
+  const baseFilename = path.basename(track.filePath, '.ogg');
+
+  return {
+    recordingId: session.recordingId,
+    folderPath: session.folderPath,
+    channelName: track.channelName,
+    baseFilename
+  };
+}
+
 // Main async entry point
 async function main() {
   // Create mediasoup Worker
@@ -1917,6 +1870,17 @@ async function main() {
     fastify,
     onStatusChange: notifyRecordingStatusChange
   });
+
+  const recoveredRecordings = recoverRecordingSessions({ getRoomById });
+  fastify.log.info({ ...recoveredRecordings }, 'Recording recovery summary');
+  const recoveredTranscriptions = transcriptionRuntime.recoverTranscriptionSessions();
+  fastify.log.info({ ...recoveredTranscriptions }, 'Transcription recovery summary');
+
+  // Decorate fastify with router and channels for API routes
+  fastify.decorate('mediasoupRouter', router);
+  fastify.decorate('mediasoupChannels', channels);
+  fastify.decorate('transcriptionRuntime', transcriptionRuntime);
+  fastify.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
 
   // Start HTTP server
   try {

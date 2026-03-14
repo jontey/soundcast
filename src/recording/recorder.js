@@ -5,13 +5,13 @@ import { fileURLToPath } from 'url';
 import {
   createRecording,
   getActiveRecordingByRoomId,
+  listActiveRecordings,
+  getRecordingById,
   updateRecordingStatus,
   createRecordingTrack,
-  getRecordingTrackByProducerId,
   updateRecordingTrackStatus,
   listTracksByRecordingId,
-  stopAllTracksForRecording,
-  markActiveRecordingsAsError
+  stopAllTracksForRecording
 } from '../db/models/recording.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +22,11 @@ const RECORDING_DIR = process.env.RECORDING_DIR || path.join(process.cwd(), 'rec
 const RTP_PORT_MIN = parseInt(process.env.RECORDING_RTP_PORT_MIN || '50000');
 const RTP_PORT_MAX = parseInt(process.env.RECORDING_RTP_PORT_MAX || '50999');
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
+const RECORDING_SEGMENT_SECONDS = parseInt(process.env.RECORDING_SEGMENT_SECONDS || '5');
+const RECORDING_MERGE_ON_STOP = process.env.RECORDING_MERGE_ON_STOP !== 'false';
+const RECORDING_DELETE_SEGMENTS_AFTER_MERGE = process.env.RECORDING_DELETE_SEGMENTS_AFTER_MERGE === 'true';
+const SESSION_LOCK_VERSION = 1;
+const SESSION_LOCK_FILENAME = 'session.lock.json';
 
 // Dependencies injected from server.js
 let router = null;
@@ -31,6 +36,7 @@ let onStatusChange = null; // Callback for status change notifications
 
 // Active recording sessions: roomId -> RecordingSession
 const activeRecordings = new Map();
+const blockedRecordings = new Map(); // roomId -> { recordingId, roomSlug, tenantId, folderName, startedAt, reason }
 
 // Port allocation tracking
 const usedPorts = new Set();
@@ -54,13 +60,137 @@ export function initRecorder(deps) {
     fs.mkdirSync(RECORDING_DIR, { recursive: true });
   }
 
-  // Mark any interrupted recordings from previous runs as error
-  const interrupted = markActiveRecordingsAsError();
-  if (interrupted > 0) {
-    console.log(`Marked ${interrupted} interrupted recording(s) as error`);
-  }
-
   console.log(`Recorder initialized. Recordings directory: ${RECORDING_DIR}`);
+}
+
+function isPidAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function atomicWriteJson(filePath, data) {
+  const tmpPath = `${filePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+function getSessionLockPath(folderPath) {
+  return path.join(folderPath, SESSION_LOCK_FILENAME);
+}
+
+function serializeSessionLock(session, status = 'recording') {
+  const tracks = {};
+  for (const [producerId, track] of session.tracks.entries()) {
+    tracks[producerId] = {
+      channelName: track.channelName,
+      producerName: track.producerName,
+      segmentPattern: track.segmentPattern,
+      mergedFilePath: track.mergedFilePath,
+      publisherId: track.publisherId || null,
+      lastSeenAt: new Date().toISOString()
+    };
+  }
+  return {
+    version: SESSION_LOCK_VERSION,
+    pid: process.pid,
+    startedAt: session.startedAt.toISOString(),
+    updatedAt: new Date().toISOString(),
+    roomId: session.roomId,
+    roomSlug: session.roomSlug,
+    tenantId: session.tenantId || null,
+    recordingId: session.recordingId,
+    folderName: path.basename(session.folderPath),
+    status,
+    tracks
+  };
+}
+
+function persistSessionLock(session, status = 'recording') {
+  if (!session?.folderPath) return;
+  const lockPath = getSessionLockPath(session.folderPath);
+  atomicWriteJson(lockPath, serializeSessionLock(session, status));
+}
+
+function removeSessionLock(session) {
+  if (!session?.folderPath) return;
+  const lockPath = getSessionLockPath(session.folderPath);
+  if (fs.existsSync(lockPath)) {
+    fs.unlinkSync(lockPath);
+  }
+}
+
+export function recoverRecordingSessions({ getRoomById }) {
+  const active = listActiveRecordings();
+  const now = new Date().toISOString();
+  const result = { recovered: 0, failed: 0, blocked: 0 };
+  for (const recording of active) {
+    const room = getRoomById(recording.room_id);
+    if (!room) {
+      updateRecordingStatus(recording.id, 'error', now);
+      stopAllTracksForRecording(recording.id);
+      result.failed += 1;
+      fastify?.log?.warn({ recordingId: recording.id, reason: 'room_not_found' }, 'Recording recovery failed');
+      continue;
+    }
+
+    const folderPath = path.join(RECORDING_DIR, recording.folder_name);
+    const lockPath = getSessionLockPath(folderPath);
+    const lock = readJsonFile(lockPath);
+    if (!lock || lock.version !== SESSION_LOCK_VERSION || lock.recordingId !== recording.id || lock.roomId !== room.id) {
+      updateRecordingStatus(recording.id, 'error', now);
+      stopAllTracksForRecording(recording.id);
+      result.failed += 1;
+      fastify?.log?.warn({ recordingId: recording.id, roomId: room.id, reason: 'resume_state_missing' }, 'Recording recovery failed');
+      continue;
+    }
+
+    const lockPid = parseInt(lock.pid, 10);
+    if (lockPid && lockPid !== process.pid && isPidAlive(lockPid)) {
+      blockedRecordings.set(room.id, {
+        recordingId: recording.id,
+        roomSlug: room.slug,
+        tenantId: room.tenant_id,
+        folderName: recording.folder_name,
+        startedAt: recording.started_at,
+        reason: 'session_in_use'
+      });
+      result.blocked += 1;
+      fastify?.log?.warn({ recordingId: recording.id, roomId: room.id, pid: lockPid, reason: 'session_in_use' }, 'Recording recovery blocked');
+      continue;
+    }
+
+    if (!fs.existsSync(folderPath)) {
+      updateRecordingStatus(recording.id, 'error', now);
+      stopAllTracksForRecording(recording.id);
+      result.failed += 1;
+      fastify?.log?.warn({ recordingId: recording.id, roomId: room.id, reason: 'recording_folder_missing' }, 'Recording recovery failed');
+      continue;
+    }
+
+    const session = new RecordingSession(room.id, room.slug, recording.id, folderPath);
+    session.tenantId = room.tenant_id;
+    session.startedAt = new Date(recording.started_at || lock.startedAt || now);
+    session.recovered = true;
+    activeRecordings.set(room.id, session);
+    persistSessionLock(session, 'recording');
+    result.recovered += 1;
+    fastify?.log?.info({ recordingId: recording.id, roomId: room.id, recovered: true }, 'Recording session recovered');
+  }
+  return result;
 }
 
 /**
@@ -121,6 +251,7 @@ class RecordingSession {
     this.folderPath = folderPath;
     this.tracks = new Map(); // producerId -> TrackRecorder
     this.startedAt = new Date();
+    this.recovered = false;
   }
 }
 
@@ -128,17 +259,31 @@ class RecordingSession {
  * Track recorder class - manages a single producer's recording
  */
 class TrackRecorder {
-  constructor(producerId, channelName, producerName, filePath, trackId) {
+  constructor(producerId, channelName, producerName, segmentPattern, mergedFilePath, trackId, publisherId = null) {
     this.producerId = producerId;
     this.channelName = channelName;
     this.producerName = producerName;
-    this.filePath = filePath;
+    this.segmentPattern = segmentPattern;
+    this.mergedFilePath = mergedFilePath;
     this.trackId = trackId;
+    this.publisherId = publisherId;
     this.plainTransport = null;
     this.consumer = null;
     this.ffmpegProcess = null;
     this.rtpPort = null;
     this.sdpPath = null;
+  }
+
+  toMetadata() {
+    return {
+      trackId: this.trackId,
+      producerId: this.producerId,
+      producerName: this.producerName,
+      channelName: this.channelName,
+      segmentPattern: this.segmentPattern,
+      mergedFilePath: this.mergedFilePath,
+      publisherId: this.publisherId
+    };
   }
 
   async start(producer) {
@@ -181,20 +326,20 @@ class TrackRecorder {
       }
 
       // Ensure output directory exists BEFORE writing any files
-      const outputDir = path.dirname(this.filePath);
+      const outputDir = path.dirname(this.segmentPattern);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
       // Generate SDP file for FFmpeg
       const sdpContent = this.generateSdp();
-      this.sdpPath = this.filePath.replace(/\.ogg$/, '.sdp');
+      this.sdpPath = this.segmentPattern.replace(/%03d\.ogg$/, 'sdp');
       fs.writeFileSync(this.sdpPath, sdpContent);
 
       // Log SDP for debugging
       console.log(`SDP for ${this.producerName}:\n${sdpContent}`);
 
-      // Spawn FFmpeg process with robust streaming options
+      // Spawn FFmpeg process with segmented output to flush to disk continuously
       this.ffmpegProcess = spawn(FFMPEG_PATH, [
         '-protocol_whitelist', 'file,rtp,udp',
         '-analyzeduration', '10000000',  // 10 seconds
@@ -202,8 +347,11 @@ class TrackRecorder {
         '-fflags', '+genpts+discardcorrupt',
         '-i', this.sdpPath,
         '-c:a', 'copy',
+        '-f', 'segment',
+        '-segment_time', String(RECORDING_SEGMENT_SECONDS),
+        '-reset_timestamps', '1',
         '-y',
-        this.filePath
+        this.segmentPattern
       ], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -228,7 +376,7 @@ class TrackRecorder {
         }
       });
 
-      console.log(`Started recording track: ${this.producerName} -> ${this.filePath}`);
+      console.log(`Started recording track: ${this.producerName} -> ${this.segmentPattern}`);
       return true;
     } catch (err) {
       console.error(`Failed to start track recording: ${err.message}`);
@@ -283,6 +431,16 @@ class TrackRecorder {
       }
     }
 
+    let mergedOk = true;
+    if (RECORDING_MERGE_ON_STOP) {
+      try {
+        mergedOk = await this.mergeSegments();
+      } catch (err) {
+        mergedOk = false;
+        console.error(`Failed to merge segments for ${this.producerName}: ${err.message}`);
+      }
+    }
+
     // Close consumer
     if (this.consumer && !this.consumer.closed) {
       this.consumer.close();
@@ -301,10 +459,60 @@ class TrackRecorder {
 
     // Update database
     if (this.trackId) {
-      updateRecordingTrackStatus(this.trackId, 'stopped', now);
+      updateRecordingTrackStatus(this.trackId, mergedOk ? 'stopped' : 'error', now);
     }
 
     console.log(`Stopped recording track: ${this.producerName}`);
+  }
+
+  async mergeSegments() {
+    const outputDir = path.dirname(this.segmentPattern);
+    const baseName = path.basename(this.segmentPattern).replace(/_%03d\.ogg$/, '');
+    const segmentRegex = new RegExp(`^${baseName}_(\\d{3})\\.ogg$`);
+    const entries = fs.readdirSync(outputDir)
+      .filter(name => segmentRegex.test(name))
+      .sort();
+
+    if (entries.length === 0) {
+      console.warn(`No segments found for ${this.producerName}, skip merge`);
+      return false;
+    }
+
+    const listPath = path.join(outputDir, `${baseName}_concat.txt`);
+    const listContent = entries.map(name => `file '${path.join(outputDir, name)}'`).join('\n') + '\n';
+    fs.writeFileSync(listPath, listContent);
+
+    await new Promise((resolve, reject) => {
+      const proc = spawn(FFMPEG_PATH, [
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', listPath,
+        '-c', 'copy',
+        '-y',
+        this.mergedFilePath
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      let stderr = '';
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(stderr || `ffmpeg concat exited with code ${code}`));
+      });
+    });
+
+    fs.unlinkSync(listPath);
+
+    if (RECORDING_DELETE_SEGMENTS_AFTER_MERGE) {
+      for (const name of entries) {
+        fs.unlinkSync(path.join(outputDir, name));
+      }
+    }
+
+    return true;
   }
 }
 
@@ -316,9 +524,18 @@ class TrackRecorder {
  * @returns {object} Recording session info
  */
 export async function startRecording(roomSlug, roomId, tenantId) {
+  if (blockedRecordings.has(roomId)) {
+    throw new Error('Recording session is currently owned by another live process');
+  }
+
   // Check if already recording
   const existing = activeRecordings.get(roomId);
   if (existing) {
+    throw new Error('Recording already in progress for this room');
+  }
+
+  const activeDbRecording = getActiveRecordingByRoomId(roomId);
+  if (activeDbRecording) {
     throw new Error('Recording already in progress for this room');
   }
 
@@ -334,10 +551,12 @@ export async function startRecording(roomSlug, roomId, tenantId) {
   const session = new RecordingSession(roomId, roomSlug, recording.id, folderPath);
   session.tenantId = tenantId;
   activeRecordings.set(roomId, session);
+  persistSessionLock(session, 'recording');
 
   // Find all active producers for this room and start recording them
   const roomChannelPrefix = `${roomSlug}:`;
   let tracksStarted = 0;
+  const tracks = [];
 
   for (const [channelId, channel] of channels) {
     // Check if this channel belongs to the room
@@ -347,7 +566,8 @@ export async function startRecording(roomSlug, roomId, tenantId) {
 
     for (const [producerId, producerInfo] of channel.producers) {
       try {
-        await addProducerToRecording(roomId, producerId, channelName, producerInfo, session);
+        const trackInfo = await addProducerToRecording(roomId, producerId, channelName, producerInfo, session);
+        if (trackInfo) tracks.push(trackInfo);
         tracksStarted++;
       } catch (err) {
         console.error(`Failed to start recording for producer ${producerId}: ${err.message}`);
@@ -357,6 +577,7 @@ export async function startRecording(roomSlug, roomId, tenantId) {
 
   // Write initial metadata
   writeMetadata(session);
+  persistSessionLock(session, 'recording');
 
   console.log(`Started recording for room ${roomSlug}: ${tracksStarted} track(s)`);
 
@@ -364,7 +585,9 @@ export async function startRecording(roomSlug, roomId, tenantId) {
     recordingId: recording.id,
     folderName,
     startedAt: recording.started_at,
-    trackCount: tracksStarted
+    trackCount: tracksStarted,
+    recovered: false,
+    tracks
   };
 
   // Notify about recording status change
@@ -391,7 +614,9 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   if (!session) return;
 
   // Skip if already recording this producer
-  if (session.tracks.has(producerId)) return;
+  if (session.tracks.has(producerId)) {
+    return session.tracks.get(producerId).toMetadata();
+  }
 
   const producer = producerInfo.producer;
   if (!producer || producer.closed) return;
@@ -402,10 +627,11 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   const sanitizedChannel = sanitizeName(channelName);
 
   // Create output path
-  const fileName = `${sanitizedName}_${Date.now()}.ogg`;
+  const baseName = `${sanitizedName}_${Date.now()}`;
   const channelDir = path.join(session.folderPath, sanitizedChannel);
-  const filePath = path.join(channelDir, fileName);
-  const relativePath = path.join(sanitizedChannel, fileName);
+  const segmentPattern = path.join(channelDir, `${baseName}_%03d.ogg`);
+  const mergedFilePath = path.join(channelDir, `${baseName}.ogg`);
+  const relativePath = path.join(sanitizedChannel, `${baseName}.ogg`);
 
   // Create track in database
   const track = createRecordingTrack(
@@ -421,8 +647,10 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
     producerId,
     channelName,
     producerName,
-    filePath,
-    track.id
+    segmentPattern,
+    mergedFilePath,
+    track.id,
+    producerInfo.publisherId || null
   );
 
   try {
@@ -431,6 +659,8 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
 
     // Update metadata
     writeMetadata(session);
+    persistSessionLock(session, 'recording');
+    return trackRecorder.toMetadata();
   } catch (err) {
     updateRecordingTrackStatus(track.id, 'error', new Date().toISOString());
     throw err;
@@ -454,6 +684,7 @@ export async function removeProducerFromRecording(roomId, producerId) {
 
   // Update metadata
   writeMetadata(session);
+  persistSessionLock(session, 'recording');
 
   console.log(`Removed producer ${producerId} from recording for room ${session.roomSlug}`);
 }
@@ -466,6 +697,9 @@ export async function removeProducerFromRecording(roomId, producerId) {
  */
 export async function stopRecording(roomSlug, roomId) {
   const session = activeRecordings.get(roomId);
+  if (!session && blockedRecordings.has(roomId)) {
+    throw new Error('Recording session is currently owned by another live process');
+  }
   if (!session) {
     throw new Error('No active recording for this room');
   }
@@ -486,6 +720,8 @@ export async function stopRecording(roomSlug, roomId) {
 
   // Final metadata update
   writeMetadata(session, true);
+  persistSessionLock(session, 'stopped');
+  removeSessionLock(session);
 
   // Remove session
   activeRecordings.delete(roomId);
@@ -497,7 +733,8 @@ export async function stopRecording(roomSlug, roomId) {
     folderName: recording.folder_name,
     startedAt: recording.started_at,
     stoppedAt: recording.stopped_at,
-    trackCount
+    trackCount,
+    recovered: Boolean(session.recovered)
   };
 
   // Notify about recording status change
@@ -553,7 +790,7 @@ function writeMetadata(session, final = false) {
  * @returns {boolean}
  */
 export function isRecording(roomId) {
-  return activeRecordings.has(roomId);
+  return activeRecordings.has(roomId) || blockedRecordings.has(roomId);
 }
 
 /**
@@ -562,6 +799,26 @@ export function isRecording(roomId) {
  * @returns {object|null} Recording status or null if not recording
  */
 export function getRecordingStatus(roomId) {
+  const blocked = blockedRecordings.get(roomId);
+  if (blocked) {
+    const dbRecording = getRecordingById(blocked.recordingId);
+    if (!dbRecording || dbRecording.status !== 'recording') {
+      blockedRecordings.delete(roomId);
+    } else {
+      return {
+        isRecording: true,
+        recordingId: blocked.recordingId,
+        folderName: blocked.folderName,
+        startedAt: blocked.startedAt,
+        trackCount: 0,
+        tracks: [],
+        recovered: false,
+        unavailable: true,
+        unavailableReason: blocked.reason
+      };
+    }
+  }
+
   const session = activeRecordings.get(roomId);
   if (!session) {
     return null;
@@ -573,6 +830,7 @@ export function getRecordingStatus(roomId) {
     folderName: path.basename(session.folderPath),
     startedAt: session.startedAt.toISOString(),
     trackCount: session.tracks.size,
+    recovered: Boolean(session.recovered),
     tracks: Array.from(session.tracks.values()).map(t => ({
       channelName: t.channelName,
       producerName: t.producerName
@@ -590,6 +848,7 @@ export function getActiveRecordings() {
 
 export default {
   initRecorder,
+  recoverRecordingSessions,
   startRecording,
   stopRecording,
   addProducerToRecording,

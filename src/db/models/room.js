@@ -20,24 +20,14 @@ function generateSlug(name, id) {
  * @param {object} roomData - Room data
  * @param {number} roomData.tenant_id - Tenant ID
  * @param {string} roomData.name - Room name
- * @param {boolean} roomData.is_local_only - Is local only flag
- * @param {string} roomData.sfu_url - SFU WebSocket URL
- * @param {string} roomData.coturn_config_json - COTURN config JSON string
  * @returns {object} Created room
  */
-export function createRoom({ tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json }) {
+export function createRoom({ tenant_id, name, slug }) {
   const db = getDatabase();
-
-  // Validate coturn_config_json is valid JSON
-  try {
-    JSON.parse(coturn_config_json);
-  } catch (e) {
-    throw new Error('coturn_config_json must be valid JSON');
-  }
 
   // First insert without slug to get the ID
   const stmt = db.prepare(
-    'INSERT INTO rooms (tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO rooms (tenant_id, name, slug) VALUES (?, ?, ?)'
   );
 
   // Temporary slug (will be updated)
@@ -46,10 +36,7 @@ export function createRoom({ tenant_id, name, slug, is_local_only, sfu_url, cotu
   const result = stmt.run(
     tenant_id,
     name,
-    tempSlug,
-    is_local_only ? 1 : 0,
-    sfu_url,
-    coturn_config_json
+    tempSlug
   );
 
   const roomId = result.lastInsertRowid;
@@ -73,13 +60,9 @@ export function createRoom({ tenant_id, name, slug, is_local_only, sfu_url, cotu
 export function getRoomById(id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json, created_at FROM rooms WHERE id = ?'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE id = ?'
   );
-  const room = stmt.get(id);
-  if (room) {
-    room.is_local_only = Boolean(room.is_local_only);
-  }
-  return room;
+  return stmt.get(id);
 }
 
 /**
@@ -90,13 +73,9 @@ export function getRoomById(id) {
 export function getRoomBySlug(slug) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json, created_at FROM rooms WHERE slug = ?'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE slug = ?'
   );
-  const room = stmt.get(slug);
-  if (room) {
-    room.is_local_only = Boolean(room.is_local_only);
-  }
-  return room;
+  return stmt.get(slug);
 }
 
 /**
@@ -113,20 +92,12 @@ export function updateRoom(slug, updates) {
     return null;
   }
 
-  const allowedFields = ['name', 'slug', 'is_local_only', 'sfu_url', 'coturn_config_json'];
+  const allowedFields = ['name', 'slug'];
   const updateFields = [];
   const values = [];
 
   for (const field of allowedFields) {
     if (updates[field] !== undefined) {
-      if (field === 'coturn_config_json') {
-        // Validate JSON
-        try {
-          JSON.parse(updates[field]);
-        } catch (e) {
-          throw new Error('coturn_config_json must be valid JSON');
-        }
-      }
       if (field === 'slug') {
         // Validate slug format
         const slugValue = updates[field].toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -142,7 +113,7 @@ export function updateRoom(slug, updates) {
         values.push(slugValue);
       } else {
         updateFields.push(`${field} = ?`);
-        values.push(field === 'is_local_only' ? (updates[field] ? 1 : 0) : updates[field]);
+        values.push(updates[field]);
       }
     }
   }
@@ -169,13 +140,9 @@ export function updateRoom(slug, updates) {
 export function listRoomsByTenant(tenant_id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, is_local_only, sfu_url, coturn_config_json, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
   );
-  const rooms = stmt.all(tenant_id);
-  return rooms.map(room => ({
-    ...room,
-    is_local_only: Boolean(room.is_local_only)
-  }));
+  return stmt.all(tenant_id);
 }
 
 /**
@@ -192,13 +159,24 @@ export function deleteRoom(slug) {
     return false;
   }
 
-  // Delete related publishers first
-  deletePublishersByRoom(room.id);
+  // Delete related rows first (some legacy FKs are non-cascading).
+  const deleteTxn = db.transaction(() => {
+    // Publishers table has room_id FK without ON DELETE CASCADE.
+    deletePublishersByRoom(room.id);
 
-  // Now delete the room
-  const stmt = db.prepare('DELETE FROM rooms WHERE slug = ?');
-  const result = stmt.run(slug);
-  return result.changes > 0;
+    // Recordings table has room_id FK without ON DELETE CASCADE.
+    db.prepare(`
+      DELETE FROM recording_tracks
+      WHERE recording_id IN (SELECT id FROM recordings WHERE room_id = ?)
+    `).run(room.id);
+    db.prepare('DELETE FROM recordings WHERE room_id = ?').run(room.id);
+
+    // Finally delete the room.
+    const result = db.prepare('DELETE FROM rooms WHERE slug = ?').run(slug);
+    return result.changes > 0;
+  });
+
+  return deleteTxn();
 }
 
 export default {

@@ -106,6 +106,42 @@ export function deletePublisher(id) {
 }
 
 /**
+ * Update publisher details
+ * @param {number} id - Publisher ID
+ * @param {object} updates - Updates to apply
+ * @param {string} updates.name - Publisher name
+ * @param {string} updates.channel_name - Channel name
+ * @returns {object|null} Updated publisher object or null if not found
+ */
+export function updatePublisher(id, { name, channel_name }) {
+  const db = getDatabase();
+
+  const updates = [];
+  const values = [];
+
+  if (name !== undefined) {
+    updates.push('name = ?');
+    values.push(name);
+  }
+
+  if (channel_name !== undefined) {
+    updates.push('channel_name = ?');
+    values.push(channel_name);
+  }
+
+  if (updates.length === 0) {
+    return getPublisherById(id);
+  }
+
+  values.push(id);
+
+  const stmt = db.prepare(`UPDATE publishers SET ${updates.join(', ')} WHERE id = ?`);
+  stmt.run(...values);
+
+  return getPublisherById(id);
+}
+
+/**
  * Delete all publishers for a room
  * @param {number} room_id - Room ID
  * @returns {number} Number of publishers deleted

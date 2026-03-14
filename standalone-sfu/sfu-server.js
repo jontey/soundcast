@@ -126,6 +126,7 @@ function startWebSocketServer() {
       isPublisher: false,
       isListener: false,
       channelId: null,
+      publisherId: null,
       rtpCapabilities: null
     });
 
@@ -223,7 +224,7 @@ function pushStatsUpdate() {
   const stats = {};
   for (const [channelId, channel] of channels.entries()) {
     stats[channelId] = {
-      publishers: channel.producers ? channel.producers.size : 0,
+      publishers: countActivePublishers(channel),
       subscribers: channel.consumers ? channel.consumers.size : 0
     };
   }
@@ -236,6 +237,75 @@ function pushStatsUpdate() {
   } catch (error) {
     console.error('📊 Failed to push stats:', error.message);
   }
+}
+
+function countActivePublishers(channel) {
+  if (!channel?.producers) return 0;
+  let count = 0;
+  for (const [producerId, producerInfo] of channel.producers) {
+    const hasLiveClient = producerInfo.clientId && clients.has(producerInfo.clientId);
+    const isOpen = producerInfo.producer && !producerInfo.producer.closed;
+    if (hasLiveClient && isOpen) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Remove a producer and any linked consumers from a channel
+function removeChannelProducer(channel, producerId) {
+  const producerInfo = channel?.producers?.get(producerId);
+  if (!producerInfo) return false;
+
+  if (producerInfo.producer && !producerInfo.producer.closed) {
+    try {
+      producerInfo.producer.close();
+    } catch { }
+  }
+
+  channel.producers.delete(producerId);
+
+  for (const [consumerId, consumerInfo] of [...channel.consumers.entries()]) {
+    if (consumerInfo.producerId !== producerId) continue;
+
+    if (consumerInfo.consumer && !consumerInfo.consumer.closed) {
+      try {
+        consumerInfo.consumer.close();
+      } catch { }
+    }
+    channel.consumers.delete(consumerId);
+
+    if (consumerInfo.clientId && clients.has(consumerInfo.clientId)) {
+      const listenerClient = clients.get(consumerInfo.clientId);
+      listenerClient.consumers = listenerClient.consumers.filter(c => c.id !== consumerId);
+      try {
+        listenerClient.socket.send(JSON.stringify({
+          action: 'producer-stopped',
+          data: { producerId }
+        }));
+      } catch { }
+    }
+  }
+
+  return true;
+}
+
+// Remove producers for same publisher identity (or same websocket client)
+function removeProducersForPublisher(channel, { clientId, publisherId = null } = {}) {
+  if (!channel || !channel.producers) return 0;
+
+  let removed = 0;
+  for (const [producerId, producerInfo] of [...channel.producers.entries()]) {
+    const sameClient = producerInfo.clientId === clientId;
+    const samePublisher = publisherId && producerInfo.publisherId && producerInfo.publisherId === publisherId;
+    if (!sameClient && !samePublisher) continue;
+
+    if (removeChannelProducer(channel, producerId)) {
+      removed++;
+    }
+  }
+
+  return removed;
 }
 
 // Handle WebSocket messages
@@ -281,6 +351,7 @@ async function handleMessage(ws, clientId, payload) {
       clientInfo.transport = transport;
       clientInfo.isPublisher = true;
       clientInfo.channelId = data.channelId;
+      clientInfo.publisherId = data.publisherId || null;
 
       ws.send(JSON.stringify({
         action: 'publisher-transport-created',
@@ -327,12 +398,26 @@ async function handleMessage(ws, clientId, payload) {
       });
 
       const channel = channels.get(clientInfo.channelId);
+      if (!channel) {
+        throw new Error(`Channel ${clientInfo.channelId} does not exist`);
+      }
+
+      // De-duplicate stale producer(s) from refresh/reconnect for same publisher identity.
+      const removed = removeProducersForPublisher(channel, {
+        clientId,
+        publisherId: clientInfo.publisherId
+      });
+      if (removed > 0) {
+        console.log(`♻️  Removed ${removed} stale producer(s) before creating new producer`);
+      }
+
       const producerId = Math.random().toString(36).substring(7);
       clientInfo.producer = { id: producerId, producer };
       channel.producers.set(producerId, {
         transport: clientInfo.transport,
         producer,
-        clientId
+        clientId,
+        publisherId: clientInfo.publisherId
       });
 
       ws.send(JSON.stringify({
@@ -501,14 +586,14 @@ async function handleMessage(ws, clientId, payload) {
     }
 
     case 'stop-broadcasting': {
-      if (clientInfo.producer) {
-        clientInfo.producer.producer.close();
-        const channel = channels.get(clientInfo.channelId);
-        if (channel) {
-          channel.producers.delete(clientInfo.producer.id);
-        }
-        clientInfo.producer = null;
+      const channel = channels.get(clientInfo.channelId);
+      if (channel) {
+        removeProducersForPublisher(channel, {
+          clientId,
+          publisherId: clientInfo.publisherId
+        });
       }
+      clientInfo.producer = null;
       if (clientInfo.transport) {
         clientInfo.transport.close();
         clientInfo.transport = null;
@@ -608,13 +693,13 @@ function cleanup(clientId) {
   const clientInfo = clients.get(clientId);
   if (!clientInfo) return;
 
-  // Close producer and remove from channel
-  if (clientInfo.producer) {
-    clientInfo.producer.producer.close();
-    const channel = channels.get(clientInfo.channelId);
-    if (channel) {
-      channel.producers.delete(clientInfo.producer.id);
-    }
+  // Close producer(s) and remove from channel
+  const channel = channels.get(clientInfo.channelId);
+  if (channel) {
+    removeProducersForPublisher(channel, {
+      clientId,
+      publisherId: clientInfo.publisherId
+    });
   }
 
   // Close consumers
