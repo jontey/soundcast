@@ -75,12 +75,20 @@ export function initDatabase(dbPath = './soundcast.db') {
 
   const schema = readFileSync(schemaPath, 'utf8');
 
-  // Execute schema (split by semicolons and execute each statement)
+  // Execute schema (split by semicolons and execute each statement).
+  // vec0 table creation is skipped when sqlite-vec extension is unavailable.
   const statements = schema.split(';').filter(stmt => stmt.trim());
   for (const statement of statements) {
-    if (statement.trim()) {
-      db.exec(statement);
+    const trimmed = statement.trim();
+    if (!trimmed) continue;
+
+    const isVec0Statement = /CREATE\s+VIRTUAL\s+TABLE\s+IF\s+NOT\s+EXISTS\s+transcript_embeddings\s+USING\s+vec0/i.test(trimmed);
+    if (isVec0Statement && !extensionLoaded) {
+      console.warn('[Database] Skipping vec0 virtual table creation because sqlite-vec is unavailable.');
+      continue;
     }
+
+    db.exec(statement);
   }
 
   console.log('Database initialized successfully');

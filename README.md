@@ -9,6 +9,7 @@ Soundcast is a real-time audio broadcasting platform built with Node.js, Fastify
 - Publisher token authentication
 - Live publisher/listener status in tenant admin
 - Room recording with per-track output
+- Live room transcription (MLX sidecar on macOS Apple Silicon)
 - Embedded SFU signaling at `/ws` (client-derived `ws(s)://<host>/ws`)
 
 ## Architecture
@@ -53,12 +54,31 @@ npm start
 - `POST /api/rooms/:room_slug/recordings/stop`
 - `GET /api/rooms/:room_slug/recordings/status`
 - `GET /api/rooms/:room_slug/recordings`
+- `GET /api/rooms/:room_slug/transcriptions/current`
+- `GET /api/rooms/:room_slug/transcriptions/channels/:channel_name`
 
 ## Web UI
 
 - `http://localhost:3000/tenant-admin`
 - `http://localhost:3000/room/:slug/publish?token=...`
 - `http://localhost:3000/room/:slug/listen`
+
+## MLX Transcription Sidecar (Local)
+
+For live transcription, start the sidecar:
+
+```bash
+cd asr-sidecar
+./start.sh
+```
+
+Backend defaults:
+- `TRANSCRIPTION_SIDECAR_URL=http://127.0.0.1:8765`
+- `TRANSCRIPTION_MODEL=mlx-community/Qwen3-ASR-0.6B-8bit`
+
+Current scope:
+- transcription is enabled only on macOS Apple Silicon when sidecar health is ready
+- recording works cross-platform
 
 ## Ground-Up Rebuild Spec
 

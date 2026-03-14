@@ -131,18 +131,31 @@ class RecordingSession {
  * Track recorder class - manages a single producer's recording
  */
 class TrackRecorder {
-  constructor(producerId, channelName, producerName, segmentPattern, mergedFilePath, trackId) {
+  constructor(producerId, channelName, producerName, segmentPattern, mergedFilePath, trackId, publisherId = null) {
     this.producerId = producerId;
     this.channelName = channelName;
     this.producerName = producerName;
     this.segmentPattern = segmentPattern;
     this.mergedFilePath = mergedFilePath;
     this.trackId = trackId;
+    this.publisherId = publisherId;
     this.plainTransport = null;
     this.consumer = null;
     this.ffmpegProcess = null;
     this.rtpPort = null;
     this.sdpPath = null;
+  }
+
+  toMetadata() {
+    return {
+      trackId: this.trackId,
+      producerId: this.producerId,
+      producerName: this.producerName,
+      channelName: this.channelName,
+      segmentPattern: this.segmentPattern,
+      mergedFilePath: this.mergedFilePath,
+      publisherId: this.publisherId
+    };
   }
 
   async start(producer) {
@@ -405,6 +418,7 @@ export async function startRecording(roomSlug, roomId, tenantId) {
   // Find all active producers for this room and start recording them
   const roomChannelPrefix = `${roomSlug}:`;
   let tracksStarted = 0;
+  const tracks = [];
 
   for (const [channelId, channel] of channels) {
     // Check if this channel belongs to the room
@@ -414,7 +428,8 @@ export async function startRecording(roomSlug, roomId, tenantId) {
 
     for (const [producerId, producerInfo] of channel.producers) {
       try {
-        await addProducerToRecording(roomId, producerId, channelName, producerInfo, session);
+        const trackInfo = await addProducerToRecording(roomId, producerId, channelName, producerInfo, session);
+        if (trackInfo) tracks.push(trackInfo);
         tracksStarted++;
       } catch (err) {
         console.error(`Failed to start recording for producer ${producerId}: ${err.message}`);
@@ -431,7 +446,8 @@ export async function startRecording(roomSlug, roomId, tenantId) {
     recordingId: recording.id,
     folderName,
     startedAt: recording.started_at,
-    trackCount: tracksStarted
+    trackCount: tracksStarted,
+    tracks
   };
 
   // Notify about recording status change
@@ -458,7 +474,9 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   if (!session) return;
 
   // Skip if already recording this producer
-  if (session.tracks.has(producerId)) return;
+  if (session.tracks.has(producerId)) {
+    return session.tracks.get(producerId).toMetadata();
+  }
 
   const producer = producerInfo.producer;
   if (!producer || producer.closed) return;
@@ -491,7 +509,8 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
     producerName,
     segmentPattern,
     mergedFilePath,
-    track.id
+    track.id,
+    producerInfo.publisherId || null
   );
 
   try {
@@ -500,6 +519,7 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
 
     // Update metadata
     writeMetadata(session);
+    return trackRecorder.toMetadata();
   } catch (err) {
     updateRecordingTrackStatus(track.id, 'error', new Date().toISOString());
     throw err;

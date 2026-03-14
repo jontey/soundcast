@@ -284,6 +284,71 @@
       color: #c53030;
     }
 
+    .transcript-toggle {
+      margin-top: 8px;
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #667eea;
+      background: #edf2f7;
+      color: #2d3748;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .transcript-panel {
+      margin-top: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      background: #f8fafc;
+    }
+
+    .transcript-panel.hidden {
+      display: none;
+    }
+
+    .transcript-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+
+    .transcript-tab {
+      border: 1px solid #cbd5e0;
+      background: #edf2f7;
+      color: #2d3748;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-tab.active {
+      background: #667eea;
+      color: #fff;
+      border-color: #667eea;
+    }
+
+    .transcript-status {
+      font-size: 12px;
+      color: #4a5568;
+      margin-bottom: 6px;
+    }
+
+    .transcript-editor {
+      width: 100%;
+      min-height: 170px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      box-sizing: border-box;
+      resize: vertical;
+    }
+
   </style>
 </head>
 
@@ -334,10 +399,20 @@
     <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
       Stop Broadcasting
     </button>
+
+    <button id="toggleTranscriptBtn" class="transcript-toggle" onclick="toggleTranscriptPanel()">
+      Show Transcripts
+    </button>
+    <div id="transcriptPanel" class="transcript-panel hidden">
+      <div id="transcriptStatus" class="transcript-status">Transcripts hidden</div>
+      <div id="transcriptTabs" class="transcript-tabs"></div>
+      <textarea id="transcriptEditor" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
+    </div>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
   <script src="/js/common.js"></script>
+  <script src="/js/transcript-sync.js"></script>
   <script>
     // Extract room slug from URL path (/room/:slug/publish)
     const pathParts = window.location.pathname.split('/');
@@ -376,6 +451,8 @@
     let pubMeterUpdateInterval = null;
     let pubSyntheticAudioContext = null;
     let pubSyntheticOscillator = null;
+    let transcriptChannels = [];
+    let transcriptBinding = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -406,6 +483,105 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function escapeHtml(value) {
+      const div = document.createElement('div');
+      div.textContent = value || '';
+      return div.innerHTML;
+    }
+
+    async function waitForTranscriptLib(timeoutMs = 10000) {
+      const start = Date.now();
+      while (!window.SoundcastTranscript) {
+        if (Date.now() - start > timeoutMs) {
+          throw new Error('Transcript library failed to load');
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    function setTranscriptStatus(message) {
+      const statusEl = document.getElementById('transcriptStatus');
+      if (statusEl) statusEl.textContent = message;
+    }
+
+    function destroyTranscriptBinding() {
+      if (!transcriptBinding) return;
+      try {
+        transcriptBinding.destroy();
+      } catch (error) {
+        console.warn('Failed to destroy transcript binding:', error);
+      }
+      transcriptBinding = null;
+    }
+
+    function renderTranscriptTabs(activeChannel) {
+      const tabsEl = document.getElementById('transcriptTabs');
+      if (!tabsEl) return;
+      tabsEl.innerHTML = transcriptChannels.map(channel => {
+        const active = channel === activeChannel ? 'active' : '';
+        const encoded = encodeURIComponent(channel);
+        return `<button class="transcript-tab ${active}" onclick="openTranscriptChannel(decodeURIComponent('${encoded}'))">${escapeHtml(channel)}</button>`;
+      }).join('');
+    }
+
+    async function openTranscriptChannel(channelName) {
+      if (!channelName) return;
+      const editor = document.getElementById('transcriptEditor');
+      if (!editor) return;
+
+      destroyTranscriptBinding();
+      renderTranscriptTabs(channelName);
+      editor.value = '';
+      editor.placeholder = `Connecting to ${channelName}...`;
+
+      try {
+        await waitForTranscriptLib();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?token=${encodeURIComponent(publisherToken)}`;
+        transcriptBinding = await window.SoundcastTranscript.createBinding({
+          wsUrl,
+          textarea: editor,
+          onStatus: (status, message) => {
+            if (status === 'connected') {
+              setTranscriptStatus(`Channel: ${channelName} (live sync)`);
+            } else if (status === 'disconnected') {
+              setTranscriptStatus(`Channel: ${channelName} (disconnected)`);
+            } else if (status === 'error') {
+              setTranscriptStatus(message || `Channel: ${channelName} (error)`);
+            }
+          }
+        });
+      } catch (error) {
+        setTranscriptStatus(`Failed to connect transcript: ${error.message}`);
+      }
+    }
+
+    async function toggleTranscriptPanel() {
+      const panel = document.getElementById('transcriptPanel');
+      const btn = document.getElementById('toggleTranscriptBtn');
+      const hidden = panel.classList.contains('hidden');
+
+      if (!hidden) {
+        panel.classList.add('hidden');
+        btn.textContent = 'Show Transcripts';
+        setTranscriptStatus('Transcripts hidden');
+        destroyTranscriptBinding();
+        return;
+      }
+
+      panel.classList.remove('hidden');
+      btn.textContent = 'Hide Transcripts';
+
+      if (!transcriptChannels.length) {
+        setTranscriptStatus('No channels available for transcript view');
+        document.getElementById('transcriptTabs').innerHTML = '';
+        return;
+      }
+
+      setTranscriptStatus('Connecting transcript sync...');
+      await openTranscriptChannel(transcriptChannels[0]);
     }
 
     // Update listener count display
@@ -605,7 +781,7 @@
             showError(message.data.message);
             setStatus('Error: ' + message.data.message, 'disconnected');
           } else if (message.type === 'recording-status') {
-            handleRecordingStatus(message.isRecording);
+            handleRecordingStatus(message);
           }
         } catch (error) {
           console.error('Error handling message:', error);
@@ -630,6 +806,11 @@
     async function handleRoomConfig(config) {
       console.log('Room config received:', config);
       roomConfig = config;
+      transcriptChannels = Array.isArray(config.channels) ? config.channels : [];
+      if (transcriptChannels.length === 0 && config.channelName) {
+        transcriptChannels = [config.channelName];
+      }
+      renderTranscriptTabs(transcriptChannels[0] || null);
 
       // Display channel name
       if (config.channelName) {
@@ -651,7 +832,11 @@
 
       // Show recording indicator if recording is active
       if (config.isRecording) {
-        handleRecordingStatus(true);
+        handleRecordingStatus({
+          isRecording: true,
+          transcriptionActive: Boolean(config.transcriptionActive),
+          eventName: config.eventName || null
+        });
       }
 
       // Connect to SFU
@@ -659,11 +844,17 @@
     }
 
     // Handle recording status updates
-    function handleRecordingStatus(isRecording) {
+    function handleRecordingStatus(statusPayload) {
       const indicator = document.getElementById('recordingIndicator');
+      const textEl = indicator.querySelector('.recording-text');
+      const isRecording = Boolean(statusPayload?.isRecording);
       if (isRecording) {
+        const eventLabel = statusPayload?.eventName ? ` | ${statusPayload.eventName}` : '';
+        const transcriptionLabel = statusPayload?.transcriptionActive ? ' | transcription on' : '';
+        textEl.textContent = `Recording Active${transcriptionLabel}${eventLabel}`;
         indicator.classList.add('active');
       } else {
+        textEl.textContent = 'Recording Active';
         indicator.classList.remove('active');
       }
     }
@@ -1065,6 +1256,7 @@
 
     // Handle page unload
     window.addEventListener('beforeunload', () => {
+      destroyTranscriptBinding();
       stopBroadcast(true); // Intentional stop (user leaving page)
     });
 

@@ -1,8 +1,9 @@
-# Soundcast Ground-Up Rebuild Architecture (Post-Transcription Reset)
+# Soundcast Ground-Up Rebuild Architecture (Historical)
 
 ## Summary
 
-This document defines the target architecture for a future transcription subsystem after the full Whisper/Qwen teardown. It is implementation-ready as a planning artifact only; no runtime transcription code is currently active.
+This document captured the reset-stage target architecture after Whisper/Qwen teardown.  
+Runtime transcription has since been reintroduced in v1; see `docs/live-transcription-v1.md` for the current implementation.
 
 ## Goals
 

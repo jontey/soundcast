@@ -15,6 +15,7 @@ import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.j
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
 import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import TranscriptionRuntime from './transcription/runtime.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -43,6 +44,8 @@ function getPublicDir() {
 const fastify = Fastify({
   logger: true
 });
+
+let transcriptionRuntime = null;
 
 // Initialize database
 const dbPath = process.env.DB_PATH || './soundcast.db';
@@ -79,6 +82,15 @@ if (singleTenantMode) {
 
 // Room-level TURN/STUN settings were removed; use a single runtime default.
 const DEFAULT_ICE_SERVERS = [];
+
+// Transcription runtime (sidecar + Yjs) is shared across HTTP/HTTPS servers.
+transcriptionRuntime = new TranscriptionRuntime({
+  fastify,
+  verifyPublisherToken,
+  verifyTenantApiKey,
+  getRoomBySlug,
+  listRoomsByTenant
+});
 
 // Fastify setup - serve static files
 const publicDir = getPublicDir();
@@ -257,20 +269,33 @@ function getRecordingStatusForTenant(tenantId) {
 
   for (const room of rooms) {
     const status = getRecordingStatus(room.id);
+    const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
     if (status) {
-      recordingStats[room.slug] = status;
+      recordingStats[room.slug] = {
+        ...status,
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null,
+        modelName: transcriptionStatus?.modelName || null
+      };
     } else {
-      recordingStats[room.slug] = { isRecording: false };
+      recordingStats[room.slug] = {
+        isRecording: false,
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null,
+        modelName: transcriptionStatus?.modelName || null
+      };
     }
   }
   return recordingStats;
 }
 
 // Notify publishers in a room about recording status change
-function notifyPublishersRecordingStatus(roomSlug, isRecording) {
+function notifyPublishersRecordingStatus(roomSlug, payload) {
   const message = JSON.stringify({
     type: 'recording-status',
-    isRecording
+    ...payload
   });
 
   // Find all publishers in this room
@@ -290,10 +315,22 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
   const adminClients = tenantAdminClients.get(tenantId);
   if (!adminClients) return;
 
+  const room = getRoomBySlug(roomSlug);
+  const transcriptionStatus = room && transcriptionRuntime
+    ? transcriptionRuntime.getRoomTranscriptionStatus(room.id)
+    : null;
+  const normalizedStatus = {
+    ...status,
+    transcriptionActive: Boolean(transcriptionStatus),
+    transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+    eventName: transcriptionStatus?.eventName || null,
+    modelName: transcriptionStatus?.modelName || null
+  };
+
   const message = JSON.stringify({
     type: 'recording-status',
     roomSlug,
-    ...status
+    ...normalizedStatus
   });
 
   for (const socket of adminClients) {
@@ -305,7 +342,7 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
   }
 
   // Also notify publishers in the room
-  notifyPublishersRecordingStatus(roomSlug, status.isRecording || false);
+  notifyPublishersRecordingStatus(roomSlug, normalizedStatus);
 }
 
 // Find room and tenant for a channel name
@@ -420,6 +457,9 @@ function cleanupProducerSideEffects(channelId, removedProducers) {
         removeProducerFromRecording(room.id, removed.producerId).catch(err => {
           fastify.log.error(`Failed to remove stale producer from recording: ${err.message}`);
         });
+        if (transcriptionRuntime && transcriptionRuntime.getRoomSession(room.id)) {
+          transcriptionRuntime.unregisterProducerStream(room.id, removed.producerId);
+        }
       }
     }
   }
@@ -993,7 +1033,10 @@ async function registerMainWsRoutes(fastify) {
               const room = getRoomBySlug(roomSlug);
               if (room && isRecording(room.id)) {
                 try {
-                  await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  const trackInfo = await addProducerToRecording(room.id, producerId, channelName, producerInfo);
+                  if (transcriptionRuntime && trackInfo && transcriptionRuntime.getRoomSession(room.id)) {
+                    transcriptionRuntime.registerProducerStream(room.id, trackInfo);
+                  }
                   fastify.log.info(`Added producer ${producerId} to active recording for room ${roomSlug}`);
                 } catch (err) {
                   fastify.log.error(`Failed to add producer to recording: ${err.message}`);
@@ -1273,6 +1316,9 @@ async function registerMainWsRoutes(fastify) {
                   removeProducerFromRecording(stopRoom.id, prodId).catch(err => {
                     fastify.log.error(`Failed to remove producer from recording: ${err.message}`);
                   });
+                  if (transcriptionRuntime && transcriptionRuntime.getRoomSession(stopRoom.id)) {
+                    transcriptionRuntime.unregisterProducerStream(stopRoom.id, prodId);
+                  }
                 }
               }
 
@@ -1384,6 +1430,9 @@ async function registerMainWsRoutes(fastify) {
               removeProducerFromRecording(closeRoom.id, prodId).catch(err => {
                 fastify.log.error(`Failed to remove producer from recording on disconnect: ${err.message}`);
               });
+              if (transcriptionRuntime && transcriptionRuntime.getRoomSession(closeRoom.id)) {
+                transcriptionRuntime.unregisterProducerStream(closeRoom.id, prodId);
+              }
             }
 
           }
@@ -1551,15 +1600,22 @@ async function registerRoomWsRoutes(fastify) {
     }
 
     const iceServers = DEFAULT_ICE_SERVERS;
+    const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
+
+    const channelsForRoom = getChannelsByRoom(room.id);
 
     // Prepare configuration message with channel name
     const config = {
       type: 'config',
       data: {
         iceServers: iceServers,
+        channels: channelsForRoom,
         channelName: publisher.channel_name,
         publisherId: publisher.id,
-        isRecording: isRecording(room.id)
+        isRecording: isRecording(room.id),
+        transcriptionActive: Boolean(transcriptionStatus),
+        transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+        eventName: transcriptionStatus?.eventName || null
       }
     };
 
@@ -1680,6 +1736,9 @@ function registerAllWsRoutes(fastifyInstance) {
   fastifyInstance.register(registerMainWsRoutes);
   fastifyInstance.register(registerRoomWsRoutes);
   fastifyInstance.register(registerAdminWsRoutes);
+  if (transcriptionRuntime) {
+    transcriptionRuntime.registerWsRoute(fastifyInstance);
+  }
 }
 
 // Register WebSocket routes on HTTP server
@@ -1726,6 +1785,8 @@ function createHttpsServer() {
     }
   });
 
+  fastifyHttps.decorate('transcriptionRuntime', transcriptionRuntime);
+  fastifyHttps.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
   fastifyHttps.register(registerApiRoutes);
 
   // Register WebSocket routes on HTTPS server
@@ -1812,6 +1873,8 @@ async function main() {
   // Decorate fastify with router and channels for API routes
   fastify.decorate('mediasoupRouter', router);
   fastify.decorate('mediasoupChannels', channels);
+  fastify.decorate('transcriptionRuntime', transcriptionRuntime);
+  fastify.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
 
   // Start HTTP server
   try {

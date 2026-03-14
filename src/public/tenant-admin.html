@@ -531,6 +531,60 @@
       margin-top: 15px;
       border-width: 3px;
     }
+
+    .transcript-panel {
+      margin-top: 15px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .transcript-panel.hidden {
+      display: none;
+    }
+
+    .transcript-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .transcript-tab {
+      background: #edf2f7;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-tab.active {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .transcript-editor {
+      width: 100%;
+      min-height: 180px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    .transcript-status {
+      font-size: 12px;
+      color: #4a5568;
+      margin-bottom: 8px;
+    }
   </style>
 </head>
 
@@ -665,6 +719,7 @@
     </div>
   </div>
 
+  <script src="/js/transcript-sync.js"></script>
   <script>
     const API_BASE = window.location.origin + '/api';
     let currentApiKey = '';
@@ -672,6 +727,8 @@
     let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
     let recordingStatus = {}; // roomSlug -> { isRecording, startedAt, trackCount, ... }
     let recordingTimers = {}; // roomSlug -> intervalId for duration updates
+    let transcriptBindings = {}; // roomSlug -> { channelName, binding }
+    let transcriptChannels = {}; // roomSlug -> channelName[]
 
     // ========== Reactive State Management ==========
     // Lightweight state store with change notifications using Proxy
@@ -1007,6 +1064,12 @@
       // Cache rooms data for editing
       roomsData = rooms;
 
+      // Reset transcript bindings when room list is re-rendered.
+      for (const roomSlug of Object.keys(transcriptBindings)) {
+        destroyTranscriptBinding(roomSlug);
+      }
+      transcriptChannels = {};
+
       if (rooms.length === 0) {
         container.innerHTML = '<div class="loading">No rooms yet. Create one to get started!</div>';
         return;
@@ -1055,8 +1118,15 @@
           <!-- 2. SETTINGS (Collapsed) -->
           <div class="settings-row">
             <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-secondary btn-small">+ Add Publisher</button>
+            <button onclick="toggleRoomTranscripts('${room.slug}')" class="btn btn-primary btn-small">Transcripts</button>
             <button onclick="showEditRoomModal('${room.slug}')" class="btn-link">⚙️ Room Settings</button>
             <button onclick="deleteRoom('${room.slug}')" class="btn-link" style="color: #f56565;">🗑️ Delete Room</button>
+          </div>
+
+          <div id="transcript-panel-${room.slug}" class="transcript-panel hidden">
+            <div id="transcript-status-${room.slug}" class="transcript-status">Transcription panel hidden</div>
+            <div id="transcript-tabs-${room.slug}" class="transcript-tabs"></div>
+            <textarea id="transcript-editor-${room.slug}" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
           </div>
 
           <!-- Hidden publisher management panel -->
@@ -1652,18 +1722,61 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const status = recordingStatus[roomSlug];
       const isRecording = status?.isRecording;
       const endpoint = isRecording ? 'stop' : 'start';
+      let eventName = status?.eventName || '';
 
       const btn = document.getElementById(`record-btn-${roomSlug}`);
       btn.disabled = true;
       btn.textContent = isRecording ? 'Stopping...' : 'Starting...';
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/${endpoint}`, {
+        const requestInit = {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentApiKey}`
           }
-        });
+        };
+
+        if (!isRecording) {
+          eventName = prompt('Event name (required):', eventName || '');
+          if (eventName === null) {
+            btn.disabled = false;
+            btn.textContent = 'Record';
+            return;
+          }
+          eventName = eventName.trim();
+          if (!eventName) {
+            throw new Error('Event name is required');
+          }
+
+          requestInit.headers['Content-Type'] = 'application/json';
+          requestInit.body = JSON.stringify({
+            event_name: eventName,
+            enable_transcription: true
+          });
+        }
+
+        let response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/${endpoint}`, requestInit);
+
+        if (!isRecording && response.status === 503) {
+          const errorPayload = await response.json().catch(() => ({}));
+          const reason = errorPayload.message || 'Transcription is unavailable';
+          const continueRecordingOnly = confirm(`${reason}\n\nStart recording without transcription?`);
+          if (continueRecordingOnly) {
+            response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/start`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${currentApiKey}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                event_name: eventName,
+                enable_transcription: false
+              })
+            });
+          } else {
+            throw new Error(reason);
+          }
+        }
 
         if (!response.ok) {
           const error = await response.json();
@@ -1704,7 +1817,9 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         indicator.style.display = 'inline';
         duration.style.display = 'inline';
         tracks.style.display = 'inline';
-        tracks.textContent = `${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''}`;
+        const eventLabel = status.eventName ? ` | ${status.eventName}` : '';
+        const transcriptionLabel = status.transcriptionActive ? ' | transcription on' : '';
+        tracks.textContent = `${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''}${eventLabel}${transcriptionLabel}`;
 
         // Start duration timer
         if (recordingTimers[roomSlug]) {
@@ -1741,6 +1856,133 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       }
     }
 
+    async function waitForTranscriptLib(timeoutMs = 10000) {
+      const start = Date.now();
+      while (!window.SoundcastTranscript) {
+        if (Date.now() - start > timeoutMs) {
+          throw new Error('Transcript library failed to load');
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    function setTranscriptStatus(roomSlug, message) {
+      const statusEl = document.getElementById(`transcript-status-${roomSlug}`);
+      if (statusEl) statusEl.textContent = message;
+    }
+
+    function destroyTranscriptBinding(roomSlug) {
+      const existing = transcriptBindings[roomSlug];
+      if (!existing) return;
+      try {
+        existing.binding.destroy();
+      } catch (error) {
+        console.warn('Failed to destroy transcript binding:', error);
+      }
+      delete transcriptBindings[roomSlug];
+    }
+
+    async function toggleRoomTranscripts(roomSlug) {
+      const panel = document.getElementById(`transcript-panel-${roomSlug}`);
+      if (!panel) return;
+
+      const isHidden = panel.classList.contains('hidden');
+      if (!isHidden) {
+        panel.classList.add('hidden');
+        destroyTranscriptBinding(roomSlug);
+        setTranscriptStatus(roomSlug, 'Transcription panel hidden');
+        return;
+      }
+
+      panel.classList.remove('hidden');
+      setTranscriptStatus(roomSlug, 'Loading transcripts...');
+      await loadRoomTranscripts(roomSlug);
+    }
+
+    function renderTranscriptTabs(roomSlug, channels, activeChannel) {
+      const tabsEl = document.getElementById(`transcript-tabs-${roomSlug}`);
+      if (!tabsEl) return;
+      tabsEl.innerHTML = channels.map(channel => {
+        const active = channel === activeChannel ? 'active' : '';
+        return `<button class="transcript-tab ${active}" onclick="openTranscriptChannel('${roomSlug}', '${escapeAttr(channel)}')">${escapeHtml(channel)}</button>`;
+      }).join('');
+    }
+
+    async function loadRoomTranscripts(roomSlug) {
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/current`, {
+          headers: { 'Authorization': `Bearer ${currentApiKey}` }
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.message || 'No active transcription session');
+        }
+
+        const data = await response.json();
+        let channels = (data.docs || []).map(doc => doc.channelName);
+        if (channels.length === 0 && Array.isArray(state.publishers[roomSlug])) {
+          channels = [...new Set(state.publishers[roomSlug].map(p => p.channel_name))];
+        }
+        transcriptChannels[roomSlug] = channels;
+
+        if (channels.length === 0) {
+          setTranscriptStatus(roomSlug, 'Transcription active, waiting for channel text...');
+          renderTranscriptTabs(roomSlug, [], null);
+          const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+          if (editor) editor.value = '';
+          destroyTranscriptBinding(roomSlug);
+          return;
+        }
+
+        setTranscriptStatus(roomSlug, `Event: ${data.eventName || 'Untitled'} | Session ${data.transcriptionSessionId}`);
+        await openTranscriptChannel(roomSlug, channels[0]);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message);
+        renderTranscriptTabs(roomSlug, [], null);
+        const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+        if (editor) editor.value = '';
+        destroyTranscriptBinding(roomSlug);
+      }
+    }
+
+    async function openTranscriptChannel(roomSlug, channelName) {
+      const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+      if (!editor) return;
+
+      const channels = transcriptChannels[roomSlug] || [];
+      if (!channels.includes(channelName)) {
+        transcriptChannels[roomSlug] = [...channels, channelName];
+      }
+      renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug], channelName);
+
+      destroyTranscriptBinding(roomSlug);
+      editor.value = '';
+      editor.placeholder = `Connecting to ${channelName}...`;
+
+      try {
+        await waitForTranscriptLib();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?apiKey=${encodeURIComponent(currentApiKey)}`;
+        const binding = await window.SoundcastTranscript.createBinding({
+          wsUrl,
+          textarea: editor,
+          onStatus: (status, message) => {
+            if (status === 'connected') {
+              setTranscriptStatus(roomSlug, `Channel: ${channelName} (live sync)`);
+            } else if (status === 'disconnected') {
+              setTranscriptStatus(roomSlug, `Channel: ${channelName} (disconnected)`);
+            } else if (status === 'error') {
+              setTranscriptStatus(roomSlug, message || `Channel: ${channelName} (error)`);
+            }
+          }
+        });
+        transcriptBindings[roomSlug] = { channelName, binding };
+      } catch (error) {
+        setTranscriptStatus(roomSlug, `Failed to open ${channelName}: ${error.message}`);
+      }
+    }
+
     // Close modals on outside click
     window.onclick = function (event) {
       if (event.target.classList.contains('modal')) {
@@ -1774,6 +2016,12 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         console.log('Could not check single-tenant mode:', e);
       }
     }
+
+    window.addEventListener('beforeunload', () => {
+      for (const roomSlug of Object.keys(transcriptBindings)) {
+        destroyTranscriptBinding(roomSlug);
+      }
+    });
 
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', checkSingleTenantMode);

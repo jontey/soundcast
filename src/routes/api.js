@@ -454,6 +454,9 @@ export async function registerApiRoutes(fastify) {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug } = request.params;
+      const body = request.body || {};
+      const eventName = (body.event_name || '').trim();
+      const enableTranscription = body.enable_transcription !== false;
 
       try {
         // Check if room exists and belongs to tenant
@@ -481,11 +484,70 @@ export async function registerApiRoutes(fastify) {
           });
         }
 
+        if (!eventName) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Missing required field: event_name'
+          });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (enableTranscription) {
+          if (!transcriptionRuntime) {
+            return reply.code(503).send({
+              error: 'Service Unavailable',
+              message: 'Transcription runtime is not configured'
+            });
+          }
+          try {
+            await transcriptionRuntime.ensureAvailableOrThrow();
+          } catch (error) {
+            return reply.code(503).send({
+              error: 'Service Unavailable',
+              message: error.message
+            });
+          }
+        }
+
         const result = await startRecording(room_slug, room.id, request.tenant.id);
+        let transcriptionStatus = null;
+
+        if (enableTranscription && transcriptionRuntime) {
+          try {
+            transcriptionStatus = await transcriptionRuntime.startRoomSession({
+              roomId: room.id,
+              roomSlug: room.slug,
+              recordingId: result.recordingId,
+              folderName: result.folderName,
+              eventName,
+              initialTracks: result.tracks || []
+            });
+          } catch (error) {
+            await stopRecording(room_slug, room.id);
+            await transcriptionRuntime.stopRoomSession(room.id, 'error', error.message);
+            return reply.code(503).send({
+              error: 'Service Unavailable',
+              message: `Failed to start transcription: ${error.message}`
+            });
+          }
+        }
+
+        if (request.server.notifyRecordingStatusChange) {
+          request.server.notifyRecordingStatusChange(request.tenant.id, room.slug, {
+            isRecording: true,
+            recordingId: result.recordingId,
+            folderName: result.folderName,
+            startedAt: result.startedAt,
+            trackCount: result.trackCount
+          });
+        }
 
         return reply.code(200).send({
           message: 'Recording started',
-          ...result
+          ...result,
+          eventName,
+          transcriptionActive: Boolean(transcriptionStatus),
+          transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null
         });
       } catch (error) {
         console.error('Error starting recording:', error);
@@ -530,10 +592,27 @@ export async function registerApiRoutes(fastify) {
         }
 
         const result = await stopRecording(room_slug, room.id);
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        let transcriptionStatus = null;
+        if (transcriptionRuntime) {
+          transcriptionStatus = await transcriptionRuntime.stopRoomSession(room.id);
+        }
+
+        if (request.server.notifyRecordingStatusChange) {
+          request.server.notifyRecordingStatusChange(request.tenant.id, room.slug, {
+            isRecording: false,
+            recordingId: result.recordingId,
+            folderName: result.folderName,
+            startedAt: result.startedAt,
+            stoppedAt: result.stoppedAt,
+            trackCount: result.trackCount
+          });
+        }
 
         return reply.code(200).send({
           message: 'Recording stopped',
-          ...result
+          ...result,
+          transcription: transcriptionStatus
         });
       } catch (error) {
         console.error('Error stopping recording:', error);
@@ -570,14 +649,25 @@ export async function registerApiRoutes(fastify) {
         }
 
         const status = getRecordingStatus(room.id);
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
 
         if (!status) {
           return reply.code(200).send({
-            isRecording: false
+            isRecording: false,
+            transcriptionActive: false,
+            eventName: null,
+            transcriptionSessionId: null
           });
         }
 
-        return reply.code(200).send(status);
+        return reply.code(200).send({
+          ...status,
+          transcriptionActive: Boolean(transcriptionStatus),
+          eventName: transcriptionStatus?.eventName || null,
+          transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+          modelName: transcriptionStatus?.modelName || null
+        });
       } catch (error) {
         console.error('Error getting recording status:', error);
         return reply.code(500).send({
@@ -629,6 +719,69 @@ export async function registerApiRoutes(fastify) {
           error: 'Internal Server Error',
           message: 'Failed to list recordings'
         });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/transcriptions/current - Get active room transcription docs
+  fastify.get('/api/rooms/:room_slug/transcriptions/current', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug } = request.params;
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to view this room' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = transcriptionRuntime.getCurrentRoomDocs(room.id);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'No active transcription session for this room' });
+        }
+
+        return reply.code(200).send(payload);
+      } catch (error) {
+        console.error('Error getting current room transcriptions:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to get room transcriptions' });
+      }
+    }
+  });
+
+  // GET /api/rooms/:room_slug/transcriptions/channels/:channel_name - Get active transcript by channel
+  fastify.get('/api/rooms/:room_slug/transcriptions/channels/:channel_name', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, channel_name } = request.params;
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to view this room' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = transcriptionRuntime.getChannelDoc(room.id, channel_name);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'No active transcription session for this room' });
+        }
+        return reply.code(200).send(payload);
+      } catch (error) {
+        console.error('Error getting room channel transcript:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to get room channel transcript' });
       }
     }
   });
