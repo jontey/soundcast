@@ -55,13 +55,32 @@ async def health():
 
 def stream_transcription_lines(file_path: Path, language: str) -> Iterable[str]:
     model = get_model()
-    tokens: list[str] = []
-    for chunk in model.stream_transcribe(str(file_path), language=language):
-        token = str(chunk)
-        tokens.append(token)
-        yield json.dumps({"type": "partial", "text": token}) + "\n"
+    partial_tokens: list[str] = []
+    final_text: str = ""
 
-    final_text = "".join(tokens).strip()
+    for chunk in model.stream_transcribe(str(file_path), language=language):
+        # mlx-audio returns StreamingResult objects; keep only text payloads.
+        token_text = getattr(chunk, "text", None)
+        is_final = bool(getattr(chunk, "is_final", False))
+
+        if token_text is None and isinstance(chunk, dict):
+            token_text = chunk.get("text", "")
+            is_final = bool(chunk.get("is_final", is_final))
+
+        if token_text is None:
+            token_text = str(chunk)
+
+        token_text = str(token_text)
+        if token_text:
+            yield json.dumps({"type": "partial", "text": token_text}) + "\n"
+
+        if is_final:
+            final_text = token_text.strip() or "".join(partial_tokens).strip()
+        elif token_text:
+            partial_tokens.append(token_text)
+
+    if not final_text:
+        final_text = "".join(partial_tokens).strip()
     yield json.dumps({"type": "final", "text": final_text}) + "\n"
 
 
