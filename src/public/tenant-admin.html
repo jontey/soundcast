@@ -582,11 +582,8 @@
           <input type="text" id="roomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
         </div>
         <div class="form-group">
-          <label class="form-label">TURN/STUN Configuration (JSON)</label>
-          <textarea id="coturnConfig" class="form-input" rows="5"
-            required>[{"urls": "stun:stun.l.google.com:19302"}]</textarea>
+          <button type="submit" class="btn btn-primary">Create Room</button>
         </div>
-        <button type="submit" class="btn btn-primary">Create Room</button>
       </form>
     </div>
   </div>
@@ -662,10 +659,6 @@
           <label class="form-label">Room Slug (URL-friendly identifier)</label>
           <input type="text" id="editRoomSlug" class="form-input" required placeholder="e.g., annual-conference-2025"
             pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens allowed">
-        </div>
-        <div class="form-group">
-          <label class="form-label">TURN/STUN Configuration (JSON)</label>
-          <textarea id="editCoturnConfig" class="form-input" rows="5" required></textarea>
         </div>
         <button type="submit" class="btn btn-primary">Save Changes</button>
       </form>
@@ -1574,7 +1567,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       document.getElementById('editRoomOriginalSlug').value = room.slug;
       document.getElementById('editRoomName').value = room.name;
       document.getElementById('editRoomSlug').value = room.slug;
-      document.getElementById('editCoturnConfig').value = room.coturn_config_json || '[{"urls": "stun:stun.l.google.com:19302"}]';
 
       document.getElementById('editRoomModal').style.display = 'block';
     }
@@ -1585,14 +1577,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const originalSlug = document.getElementById('editRoomOriginalSlug').value;
       const name = document.getElementById('editRoomName').value;
       const slug = document.getElementById('editRoomSlug').value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-      const coturnConfig = document.getElementById('editCoturnConfig').value;
-
-      try {
-        JSON.parse(coturnConfig); // Validate JSON
-      } catch (error) {
-        showError('Invalid TURN/STUN configuration JSON');
-        return;
-      }
 
       try {
         const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
@@ -1603,8 +1587,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
           },
           body: JSON.stringify({
             name,
-            slug,
-            coturn_config_json: coturnConfig
+            slug
           })
         });
 
@@ -1625,14 +1608,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       event.preventDefault();
 
       const name = document.getElementById('roomName').value;
-      const coturnConfig = document.getElementById('coturnConfig').value;
-
-      try {
-        JSON.parse(coturnConfig); // Validate JSON
-      } catch (error) {
-        showError('Invalid TURN/STUN configuration JSON');
-        return;
-      }
 
       try {
         const response = await fetch(`${API_BASE}/rooms`, {
@@ -1642,8 +1617,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            name,
-            coturn_config_json: coturnConfig
+            name
           })
         });
 

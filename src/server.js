@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import path from 'path';
-import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
 import os from 'os';
@@ -72,52 +71,14 @@ if (singleTenantMode) {
     createRoom({
       tenant_id: defaultTenant.id,
       name: 'Main',
-      slug: 'main',
-      coturn_config_json: '[]'
+      slug: 'main'
     });
     console.log('Single-tenant mode: Created default "main" room');
   }
 }
 
-/**
- * Generate TURN credentials using coturn's static-auth-secret mechanism
- * @param {string} secret - The static-auth-secret from coturn config
- * @param {number} ttl - Time-to-live in seconds (default 24 hours)
- * @returns {{ username: string, credential: string }}
- */
-function generateTurnCredentials(secret, ttl = 86400) {
-  const timestamp = Math.floor(Date.now() / 1000) + ttl;
-  const username = `${timestamp}:soundcast`;
-  const credential = crypto.createHmac('sha1', secret).update(username).digest('base64');
-  return { username, credential };
-}
-
-/**
- * Process ICE servers array and generate dynamic TURN credentials where needed
- *
- * ICE servers with __turn_secret__ field will have credentials generated dynamically.
- * Format: { "urls": [...], "__turn_secret__": "secret", "__turn_ttl__": 86400 }
- *
- * @param {Array} iceServers - Array of ICE server configurations
- * @returns {Array} Processed ICE servers with generated credentials
- */
-function processIceServers(iceServers) {
-  return iceServers.map(server => {
-    if (server.__turn_secret__) {
-      const ttl = server.__turn_ttl__ || 86400;
-      const { username, credential } = generateTurnCredentials(server.__turn_secret__, ttl);
-
-      // Return new server object without the secret fields
-      const { __turn_secret__, __turn_ttl__, ...rest } = server;
-      return {
-        ...rest,
-        username,
-        credential
-      };
-    }
-    return server;
-  });
-}
+// Room-level TURN/STUN settings were removed; use a single runtime default.
+const DEFAULT_ICE_SERVERS = [];
 
 // Fastify setup - serve static files
 const publicDir = getPublicDir();
@@ -1495,22 +1456,7 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
-    // Parse ICE servers from JSON and generate dynamic TURN credentials
-    let iceServers;
-    try {
-      const parsed = JSON.parse(room.coturn_config_json);
-      // Handle both formats: array or object with servers property
-      const rawIceServers = Array.isArray(parsed) ? parsed : (parsed.servers || []);
-      iceServers = processIceServers(rawIceServers);
-    } catch (e) {
-      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid room configuration' }
-      }));
-      connection.close();
-      return;
-    }
+    const iceServers = DEFAULT_ICE_SERVERS;
 
     // Get available channels for this room
     const channels = getChannelsByRoom(room.id);
@@ -1604,22 +1550,7 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
-    // Parse ICE servers from JSON and generate dynamic TURN credentials
-    let iceServers;
-    try {
-      const parsed = JSON.parse(room.coturn_config_json);
-      // Handle both formats: array or object with servers property
-      const rawIceServers = Array.isArray(parsed) ? parsed : (parsed.servers || []);
-      iceServers = processIceServers(rawIceServers);
-    } catch (e) {
-      fastify.log.error(`Invalid coturn_config_json for room ${slug}: ${e.message}`);
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid room configuration' }
-      }));
-      connection.close();
-      return;
-    }
+    const iceServers = DEFAULT_ICE_SERVERS;
 
     // Prepare configuration message with channel name
     const config = {

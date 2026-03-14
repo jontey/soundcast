@@ -70,7 +70,6 @@ The admin UI will auto-login in single-tenant mode.
 1. Click "Create Room"
 2. Fill in:
    - **Name**: e.g., "Conference Room"
-   - **TURN/STUN Config**: For same-subnet LAN, use `[]` (empty array)
 
 3. Click "Create Room"
 

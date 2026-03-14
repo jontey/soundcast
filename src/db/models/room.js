@@ -20,22 +20,14 @@ function generateSlug(name, id) {
  * @param {object} roomData - Room data
  * @param {number} roomData.tenant_id - Tenant ID
  * @param {string} roomData.name - Room name
- * @param {string} roomData.coturn_config_json - COTURN config JSON string
  * @returns {object} Created room
  */
-export function createRoom({ tenant_id, name, slug, coturn_config_json }) {
+export function createRoom({ tenant_id, name, slug }) {
   const db = getDatabase();
-
-  // Validate coturn_config_json is valid JSON
-  try {
-    JSON.parse(coturn_config_json);
-  } catch (e) {
-    throw new Error('coturn_config_json must be valid JSON');
-  }
 
   // First insert without slug to get the ID
   const stmt = db.prepare(
-    'INSERT INTO rooms (tenant_id, name, slug, coturn_config_json) VALUES (?, ?, ?, ?)'
+    'INSERT INTO rooms (tenant_id, name, slug) VALUES (?, ?, ?)'
   );
 
   // Temporary slug (will be updated)
@@ -44,8 +36,7 @@ export function createRoom({ tenant_id, name, slug, coturn_config_json }) {
   const result = stmt.run(
     tenant_id,
     name,
-    tempSlug,
-    coturn_config_json
+    tempSlug
   );
 
   const roomId = result.lastInsertRowid;
@@ -69,7 +60,7 @@ export function createRoom({ tenant_id, name, slug, coturn_config_json }) {
 export function getRoomById(id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, coturn_config_json, created_at FROM rooms WHERE id = ?'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE id = ?'
   );
   return stmt.get(id);
 }
@@ -82,7 +73,7 @@ export function getRoomById(id) {
 export function getRoomBySlug(slug) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, coturn_config_json, created_at FROM rooms WHERE slug = ?'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE slug = ?'
   );
   return stmt.get(slug);
 }
@@ -101,20 +92,12 @@ export function updateRoom(slug, updates) {
     return null;
   }
 
-  const allowedFields = ['name', 'slug', 'coturn_config_json'];
+  const allowedFields = ['name', 'slug'];
   const updateFields = [];
   const values = [];
 
   for (const field of allowedFields) {
     if (updates[field] !== undefined) {
-      if (field === 'coturn_config_json') {
-        // Validate JSON
-        try {
-          JSON.parse(updates[field]);
-        } catch (e) {
-          throw new Error('coturn_config_json must be valid JSON');
-        }
-      }
       if (field === 'slug') {
         // Validate slug format
         const slugValue = updates[field].toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '');
@@ -157,7 +140,7 @@ export function updateRoom(slug, updates) {
 export function listRoomsByTenant(tenant_id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, coturn_config_json, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
+    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
   );
   return stmt.all(tenant_id);
 }

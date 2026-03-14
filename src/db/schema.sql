@@ -10,13 +10,11 @@ CREATE TABLE IF NOT EXISTS tenants (
 );
 
 -- 2.2. Room Model
--- CRITICAL field: coturn_config_json
 CREATE TABLE IF NOT EXISTS rooms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id INTEGER NOT NULL,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE, -- URL-friendly identifier
-    coturn_config_json TEXT NOT NULL, -- JSON array of WebRTC ICE servers
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id),
     UNIQUE (tenant_id, name)

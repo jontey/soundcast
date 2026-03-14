@@ -20,23 +20,13 @@ export async function registerApiRoutes(fastify) {
   fastify.post('/api/rooms', {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
-      const { name, slug, coturn_config_json } = request.body;
+      const { name, slug } = request.body;
 
       // Validate required fields
-      if (!name || !coturn_config_json) {
+      if (!name) {
         return reply.code(400).send({
           error: 'Bad Request',
-          message: 'Missing required fields: name, coturn_config_json'
-        });
-      }
-
-      // Validate coturn_config_json is valid JSON
-      try {
-        JSON.parse(coturn_config_json);
-      } catch (e) {
-        return reply.code(400).send({
-          error: 'Bad Request',
-          message: 'coturn_config_json must be valid JSON'
+          message: 'Missing required field: name'
         });
       }
 
@@ -44,8 +34,7 @@ export async function registerApiRoutes(fastify) {
         const room = createRoom({
           tenant_id: request.tenant.id,
           name,
-          slug,
-          coturn_config_json
+          slug
         });
 
         return reply.code(201).send({
@@ -76,26 +65,14 @@ export async function registerApiRoutes(fastify) {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug } = request.params;
-      const { name, slug, coturn_config_json } = request.body;
+      const { name, slug } = request.body;
 
       // Validate at least one field is provided
-      if (!name && !slug && !coturn_config_json) {
+      if (!name && !slug) {
         return reply.code(400).send({
           error: 'Bad Request',
           message: 'At least one field must be provided for update'
         });
-      }
-
-      // Validate coturn_config_json if provided
-      if (coturn_config_json) {
-        try {
-          JSON.parse(coturn_config_json);
-        } catch (e) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'coturn_config_json must be valid JSON'
-          });
-        }
       }
 
       try {
@@ -120,15 +97,13 @@ export async function registerApiRoutes(fastify) {
         const updates = {};
         if (name !== undefined) updates.name = name;
         if (slug !== undefined) updates.slug = slug;
-        if (coturn_config_json !== undefined) updates.coturn_config_json = coturn_config_json;
 
         const updatedRoom = updateRoom(room_slug, updates);
 
         return reply.code(200).send({
           id: updatedRoom.id,
           name: updatedRoom.name,
-          slug: updatedRoom.slug,
-          coturn_config_json: updatedRoom.coturn_config_json
+          slug: updatedRoom.slug
         });
       } catch (error) {
         console.error('Error updating room:', error);
@@ -152,7 +127,6 @@ export async function registerApiRoutes(fastify) {
             id: room.id,
             name: room.name,
             slug: room.slug,
-            coturn_config_json: room.coturn_config_json,
             created_at: room.created_at
           }))
         });
@@ -193,7 +167,6 @@ export async function registerApiRoutes(fastify) {
           id: room.id,
           name: room.name,
           slug: room.slug,
-          coturn_config_json: room.coturn_config_json,
           created_at: room.created_at
         });
       } catch (error) {
