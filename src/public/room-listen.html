@@ -325,7 +325,7 @@
       </div>
     </div>
 
-    <audio id="audioPlayer" autoplay></audio>
+    <audio id="audioPlayer" autoplay playsinline></audio>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
@@ -359,8 +359,11 @@
     let listenAudioMeter = null;
     let listenAudioGainNode = null;
     let listenMeterUpdateInterval = null;
+    let keepAliveInterval = null;
+    let activeWakeLock = null;
     let isMuted = false;
     let selectedChannel = null;
+    let rtpCapabilities = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -387,6 +390,143 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    async function requestScreenWakeLock() {
+      if (!('wakeLock' in navigator)) {
+        return;
+      }
+
+      try {
+        if (activeWakeLock) {
+          return;
+        }
+
+        activeWakeLock = await navigator.wakeLock.request('screen');
+        activeWakeLock.addEventListener('release', () => {
+          console.log('Screen wake lock released');
+          activeWakeLock = null;
+        });
+        console.log('Screen wake lock acquired');
+      } catch (err) {
+        console.warn('Failed to acquire screen wake lock:', err);
+      }
+    }
+
+    async function releaseScreenWakeLock() {
+      if (!activeWakeLock) {
+        return;
+      }
+
+      try {
+        await activeWakeLock.release();
+      } catch (err) {
+        console.warn('Failed to release wake lock:', err);
+      }
+      activeWakeLock = null;
+    }
+
+    function setMuteState(nextMuted) {
+      isMuted = nextMuted;
+
+      listenConsumers.forEach(c => {
+        if (isMuted) {
+          c.consumer.pause();
+        } else {
+          c.consumer.resume();
+        }
+      });
+
+      if (listenAudioGainNode) {
+        listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
+      }
+
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+      }
+
+      const muteBtn = document.getElementById('muteBtn');
+      if (muteBtn) {
+        muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+      }
+    }
+
+    function keepAudioPlaying() {
+      if (!audioElement || !audioElement.srcObject || isMuted) {
+        return;
+      }
+
+      if (audioElement.paused) {
+        audioElement.play().catch(err => {
+          console.warn('Audio resume attempt failed:', err);
+        });
+      }
+    }
+
+    function enableMediaSessionMetadata() {
+      if (!('mediaSession' in navigator)) {
+        return;
+      }
+
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: selectedChannel ? `${selectedChannel} (Live)` : 'Live Audio',
+        artist: roomSlug,
+        album: 'Soundcast'
+      });
+
+      navigator.mediaSession.setActionHandler('play', async () => {
+        try {
+          await audioElement.play();
+          setMuteState(false);
+        } catch (err) {
+          console.warn('Media Session play action failed:', err);
+        }
+      });
+
+      navigator.mediaSession.setActionHandler('pause', () => {
+        if (!isMuted) {
+          setMuteState(true);
+        }
+      });
+
+      navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+    }
+
+    function disableMediaSessionMetadata() {
+      if (!('mediaSession' in navigator)) {
+        return;
+      }
+
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+    }
+
+    function startKeepAlive() {
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+      }
+
+      keepAliveInterval = setInterval(async () => {
+        if (document.visibilityState === 'visible') {
+          await requestScreenWakeLock();
+        }
+
+        keepAudioPlaying();
+
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = isMuted ? 'paused' : 'playing';
+        }
+      }, 20000);
+    }
+
+    function stopKeepAlive() {
+      if (!keepAliveInterval) {
+        return;
+      }
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
     }
 
     // Attempt to reconnect to room WebSocket
@@ -774,6 +914,9 @@
         document.getElementById('audioMeter').style.display = 'block';
         document.getElementById('audioControls').style.display = 'block';
         document.getElementById('muteBtn').style.display = ''; // Show mute button when audio playing
+        await requestScreenWakeLock();
+        enableMediaSessionMetadata();
+        startKeepAlive();
 
         // Update speaker list (requires user gesture context)
         updateSpeakerList();
@@ -822,21 +965,7 @@
 
     // Toggle mute
     function toggleMute() {
-      isMuted = !isMuted;
-
-      listenConsumers.forEach(c => {
-        if (isMuted) {
-          c.consumer.pause();
-        } else {
-          c.consumer.resume();
-        }
-      });
-
-      if (listenAudioGainNode) {
-        listenAudioGainNode.gain.value = isMuted ? 0 : 1.0;
-      }
-
-      document.getElementById('muteBtn').textContent = isMuted ? 'Unmute' : 'Mute';
+      setMuteState(!isMuted);
     }
 
     // Leave room
@@ -885,6 +1014,9 @@
         clearInterval(listenMeterUpdateInterval);
         listenMeterUpdateInterval = null;
       }
+      stopKeepAlive();
+      releaseScreenWakeLock();
+      disableMediaSessionMetadata();
 
       // Update UI
       setStatus('Select a channel and click Start', 'connected');
@@ -972,6 +1104,17 @@
       leaveChannel();
     });
 
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible' && listenAudioStream) {
+        await requestScreenWakeLock();
+      }
+      keepAudioPlaying();
+    });
+
+    audioElement.addEventListener('pause', () => {
+      keepAudioPlaying();
+    });
+
     // Start listening - called when user clicks the button (user gesture)
     function startListening() {
       // Check if a channel is selected
@@ -994,6 +1137,7 @@
 
       // Pre-create AudioContext here (inside user gesture) to avoid autoplay issues
       listenAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      requestScreenWakeLock();
 
       // Now connect to SFU
       connectToSfu();
