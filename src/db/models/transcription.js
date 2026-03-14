@@ -66,6 +66,16 @@ export function getActiveTranscriptionSessionByRoomId(room_id) {
   `).get(room_id);
 }
 
+export function listActiveTranscriptionSessions() {
+  const db = getDatabase();
+  return db.prepare(`
+    SELECT id, room_id, recording_id, event_name, model_name, status, started_at, stopped_at, error_message
+    FROM transcription_sessions_v2
+    WHERE status = 'active'
+    ORDER BY started_at ASC
+  `).all();
+}
+
 export function stopTranscriptionSession(session_id, status = 'stopped', error_message = null) {
   const db = getDatabase();
   db.prepare(`
@@ -133,6 +143,15 @@ export function stopTranscriptionStream(session_id, producer_id, status = 'stopp
     SET status = ?, stopped_at = ?
     WHERE session_id = ? AND producer_id = ?
   `).run(status, nowIso(), session_id, producer_id);
+}
+
+export function stopAllTranscriptionStreamsBySession(session_id, status = 'stopped') {
+  const db = getDatabase();
+  db.prepare(`
+    UPDATE transcription_streams_v2
+    SET status = ?, stopped_at = ?
+    WHERE session_id = ? AND status = 'active'
+  `).run(status, nowIso(), session_id);
 }
 
 export function createTranscriptSegment({
@@ -289,11 +308,13 @@ export default {
   listTranscriptionSessionsByRoom,
   countTranscriptionSessionsByRoom,
   getActiveTranscriptionSessionByRoomId,
+  listActiveTranscriptionSessions,
   stopTranscriptionSession,
   upsertTranscriptionStream,
   getTranscriptionStreamById,
   getActiveTranscriptionStreamsBySession,
   stopTranscriptionStream,
+  stopAllTranscriptionStreamsBySession,
   createTranscriptSegment,
   listTranscriptDocsByRoom,
   listTranscriptDocsBySession,

@@ -877,6 +877,53 @@ export async function registerApiRoutes(fastify) {
     }
   });
 
+  // POST /api/rooms/:room_slug/transcriptions/sessions/:session_id/stop - Force stop a transcription session
+  fastify.post('/api/rooms/:room_slug/transcriptions/sessions/:session_id/stop', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, session_id } = request.params;
+      const reason = (request.body?.reason || 'Stopped by admin').toString().trim().slice(0, 500) || 'Stopped by admin';
+
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to update this room' });
+        }
+
+        const sessionId = parseInt(session_id, 10);
+        if (!Number.isFinite(sessionId) || sessionId <= 0) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid session_id' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = await transcriptionRuntime.forceStopSession(room.id, sessionId, reason);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Transcription session not found for this room' });
+        }
+
+        if (request.server.notifyRecordingStatusChange) {
+          const status = getRecordingStatus(room.id);
+          request.server.notifyRecordingStatusChange(request.tenant.id, room.slug, status || { isRecording: false });
+        }
+
+        return reply.code(200).send({
+          message: payload.status === 'stopped' ? 'Transcription session stopped' : `Session is already ${payload.status}`,
+          ...payload
+        });
+      } catch (error) {
+        console.error('Error forcing transcription session stop:', error);
+        return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to stop transcription session' });
+      }
+    }
+  });
+
   // GET /api/rooms/:room_slug/transcriptions/channels/:channel_name - Get active transcript by channel
   fastify.get('/api/rooms/:room_slug/transcriptions/channels/:channel_name', {
     preHandler: authenticateTenant,

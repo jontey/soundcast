@@ -1169,6 +1169,7 @@
                 <option value="">No sessions</option>
               </select>
               <div class="transcript-session-pager">
+                <button id="transcript-stop-${room.slug}" class="btn btn-secondary btn-small" onclick="stopSelectedTranscriptSession('${room.slug}')">Stop Session</button>
                 <button id="transcript-prev-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', -1)">Prev</button>
                 <button id="transcript-next-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', 1)">Next</button>
                 <span id="transcript-session-meta-${room.slug}" class="transcript-session-meta">0 sessions</span>
@@ -1953,6 +1954,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const select = document.getElementById(`transcript-session-select-${roomSlug}`);
       const prevBtn = document.getElementById(`transcript-prev-${roomSlug}`);
       const nextBtn = document.getElementById(`transcript-next-${roomSlug}`);
+      const stopBtn = document.getElementById(`transcript-stop-${roomSlug}`);
       const meta = document.getElementById(`transcript-session-meta-${roomSlug}`);
       if (!select || !prevBtn || !nextBtn || !meta) return;
 
@@ -1971,6 +1973,9 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       meta.textContent = `${pageStart}-${pageEnd} of ${state.total}`;
       prevBtn.disabled = state.offset <= 0;
       nextBtn.disabled = state.offset + state.limit >= state.total;
+      if (stopBtn) {
+        stopBtn.disabled = !state.selectedSession || state.selectedSession.status !== 'active';
+      }
     }
 
     function getSelectedTranscriptSession(roomSlug) {
@@ -2155,6 +2160,34 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       if (sessionState.followActive || !selectedId) {
         sessionState.followActive = true;
         await loadRoomTranscripts(roomSlug);
+      }
+    }
+
+    async function stopSelectedTranscriptSession(roomSlug) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const selectedSession = sessionState.selectedSession;
+      if (!selectedSession || selectedSession.status !== 'active') return;
+      if (!confirm(`Stop transcript session #${selectedSession.id} (${selectedSession.eventName || 'Untitled'})?`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${selectedSession.id}/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentApiKey}`
+          },
+          body: JSON.stringify({ reason: 'Stopped from tenant admin' })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || 'Failed to stop transcription session');
+        }
+        sessionState.followActive = false;
+        await loadRoomTranscripts(roomSlug);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message || 'Failed to stop transcription session');
       }
     }
 

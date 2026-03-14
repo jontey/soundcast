@@ -1870,6 +1870,13 @@ async function main() {
     onStatusChange: notifyRecordingStatusChange
   });
 
+  if (transcriptionRuntime) {
+    const reconciled = transcriptionRuntime.reconcileStaleSessions();
+    if (reconciled > 0) {
+      fastify.log.warn(`Reconciled ${reconciled} stale transcription session(s) left active from a previous process.`);
+    }
+  }
+
   // Decorate fastify with router and channels for API routes
   fastify.decorate('mediasoupRouter', router);
   fastify.decorate('mediasoupChannels', channels);

@@ -6,10 +6,12 @@ import {
   createTranscriptionSession,
   getTranscriptionSessionByRoomAndId,
   getActiveTranscriptionSessionByRoomId,
+  listActiveTranscriptionSessions,
   stopTranscriptionSession,
   upsertTranscriptionStream,
   getActiveTranscriptionStreamsBySession,
   stopTranscriptionStream,
+  stopAllTranscriptionStreamsBySession,
   createTranscriptSegment,
   listTranscriptDocsByRoom,
   listTranscriptDocsBySession,
@@ -192,6 +194,16 @@ export class TranscriptionRuntime {
     return this.sessions.get(roomId) || null;
   }
 
+  reconcileStaleSessions(reason = 'Transcription session stopped after server restart') {
+    const activeSessions = listActiveTranscriptionSessions();
+    if (!activeSessions.length) return 0;
+    for (const session of activeSessions) {
+      stopAllTranscriptionStreamsBySession(session.id, 'stopped');
+      stopTranscriptionSession(session.id, 'stopped', reason);
+    }
+    return activeSessions.length;
+  }
+
   getRoomTranscriptionStatus(roomId) {
     const activeSession = this.sessions.get(roomId);
     if (!activeSession) return null;
@@ -293,6 +305,40 @@ export class TranscriptionRuntime {
       startedAt: session.startedAt,
       stoppedAt: stopped?.stopped_at || nowIso(),
       streamCount: session.streams.size
+    };
+  }
+
+  async forceStopSession(roomId, sessionId, reason = 'Stopped by admin') {
+    const session = getTranscriptionSessionByRoomAndId(roomId, sessionId);
+    if (!session) return null;
+
+    const inMemory = this.sessions.get(roomId);
+    if (inMemory && inMemory.sessionId === sessionId) {
+      return this.stopRoomSession(roomId, 'stopped', reason);
+    }
+
+    if (session.status === 'active') {
+      stopAllTranscriptionStreamsBySession(sessionId, 'stopped');
+      const stopped = stopTranscriptionSession(sessionId, 'stopped', reason);
+      return {
+        transcriptionActive: false,
+        transcriptionSessionId: stopped?.id || sessionId,
+        eventName: stopped?.event_name || session.event_name,
+        modelName: stopped?.model_name || session.model_name,
+        startedAt: stopped?.started_at || session.started_at,
+        stoppedAt: stopped?.stopped_at || null,
+        status: stopped?.status || 'stopped'
+      };
+    }
+
+    return {
+      transcriptionActive: false,
+      transcriptionSessionId: session.id,
+      eventName: session.event_name,
+      modelName: session.model_name,
+      startedAt: session.started_at,
+      stoppedAt: session.stopped_at,
+      status: session.status
     };
   }
 
