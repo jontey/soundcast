@@ -72,6 +72,14 @@ cd asr-sidecar
 ./start.sh
 ```
 
+Auto-restart on crash (macOS `launchd`):
+
+```bash
+./scripts/manage-transcription-sidecar-launchd.sh install
+./scripts/manage-transcription-sidecar-launchd.sh status
+./scripts/manage-transcription-sidecar-launchd.sh logs
+```
+
 Backend defaults:
 - `TRANSCRIPTION_SIDECAR_URL=http://127.0.0.1:8765`
 - `TRANSCRIPTION_MODEL=mlx-community/Qwen3-ASR-0.6B-8bit`

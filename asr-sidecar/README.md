@@ -20,6 +20,23 @@ cd asr-sidecar
 
 By default it listens on `http://127.0.0.1:8765`.
 
+## Auto-Restart On Crash (macOS)
+
+From repo root:
+
+```bash
+./scripts/manage-transcription-sidecar-launchd.sh install
+```
+
+Useful commands:
+
+```bash
+./scripts/manage-transcription-sidecar-launchd.sh status
+./scripts/manage-transcription-sidecar-launchd.sh logs
+./scripts/manage-transcription-sidecar-launchd.sh restart
+./scripts/manage-transcription-sidecar-launchd.sh uninstall
+```
+
 ## Env
 
 - `ASR_MODEL_ID` (default `mlx-community/Qwen3-ASR-0.6B-8bit`)
