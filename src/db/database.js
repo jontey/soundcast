@@ -26,9 +26,9 @@ export function initDatabase(dbPath = './soundcast.db') {
 
   db = new Database(dbPath, dbOptions);
 
-  // Load sqlite-vec extension (REQUIRED for vector search)
-  const vectorExtensionPath = process.env.SQLITE_VEC_PATH || join(__dirname, '../../lib/vec0.so');
-  const vectorExtensionPathDylib = process.env.SQLITE_VEC_PATH || join(__dirname, '../../lib/vec0.dylib');
+  // Load sqlite-vec extension if available.
+  const vectorExtensionPath = join(__dirname, '../../lib/vec0.so');
+  const vectorExtensionPathDylib = join(__dirname, '../../lib/vec0.dylib');
 
   // Try both .so (Linux) and .dylib (macOS) extensions
   let extensionLoaded = false;
@@ -39,8 +39,8 @@ export function initDatabase(dbPath = './soundcast.db') {
       extensionLoaded = true;
       console.log('[Database] Vector extension loaded:', vectorExtensionPath);
     } catch (err) {
-      console.error('[Database] FATAL: Failed to load vector extension from', vectorExtensionPath);
-      console.error('[Database] Error:', err.message);
+      console.warn('[Database] Failed to load vector extension from', vectorExtensionPath);
+      console.warn('[Database] Error:', err.message);
     }
   } else if (existsSync(vectorExtensionPathDylib)) {
     try {
@@ -48,18 +48,13 @@ export function initDatabase(dbPath = './soundcast.db') {
       extensionLoaded = true;
       console.log('[Database] Vector extension loaded:', vectorExtensionPathDylib);
     } catch (err) {
-      console.error('[Database] FATAL: Failed to load vector extension from', vectorExtensionPathDylib);
-      console.error('[Database] Error:', err.message);
+      console.warn('[Database] Failed to load vector extension from', vectorExtensionPathDylib);
+      console.warn('[Database] Error:', err.message);
     }
   }
 
   if (!extensionLoaded) {
-    console.error('[Database] FATAL: sqlite-vec extension not found or failed to load');
-    console.error('[Database] Expected locations:');
-    console.error('[Database]   -', vectorExtensionPath);
-    console.error('[Database]   -', vectorExtensionPathDylib);
-    console.error('[Database] Run: chmod +x scripts/setup-sqlite-vec.sh && ./scripts/setup-sqlite-vec.sh');
-    process.exit(1);
+    console.warn('[Database] sqlite-vec extension not loaded (continuing without vector search support).');
   }
 
   // Enable foreign keys

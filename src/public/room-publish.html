@@ -243,42 +243,6 @@
       border-color: #667eea;
     }
 
-    /* Self-Transcription Display */
-    .self-transcription {
-      background: #f7fafc;
-      border-left: 4px solid #667eea;
-      padding: 15px;
-      border-radius: 8px;
-      margin-bottom: 20px;
-      display: none;
-      animation: fadeIn 0.3s;
-    }
-
-    .self-transcription.active {
-      display: block;
-    }
-
-    .self-transcription-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #718096;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-    }
-
-    .self-transcription-text {
-      font-size: 16px;
-      color: #2d3748;
-      line-height: 1.5;
-    }
-
-    .self-transcription-meta {
-      font-size: 12px;
-      color: #a0aec0;
-      margin-top: 8px;
-    }
-
     /* Recording Indicator */
     .recording-indicator {
       display: none;
@@ -320,41 +284,6 @@
       color: #c53030;
     }
 
-    /* Self-Transcription Toggle Button */
-    .transcript-toggle {
-      display: none;
-      margin-top: 10px;
-      padding: 10px 16px;
-      background: #e2e8f0;
-      color: #2d3748;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.3s;
-      width: 100%;
-    }
-
-    .transcript-toggle:hover {
-      background: #cbd5e0;
-      transform: translateY(-1px);
-    }
-
-    .transcript-toggle.active {
-      display: block;
-    }
-
-    /* Self-Transcription visibility states */
-    .self-transcription {
-      transition: opacity 0.3s ease, max-height 0.3s ease;
-      max-height: 200px;
-      overflow: hidden;
-    }
-
-    .self-transcription.hidden {
-      display: none !important;
-    }
   </style>
 </head>
 
@@ -395,18 +324,6 @@
         <option value="">Select audio source</option>
       </select>
     </div>
-
-    <!-- Self-Transcription Display -->
-    <div class="self-transcription" id="selfTranscription">
-      <div class="self-transcription-label">Your Speech</div>
-      <div class="self-transcription-text" id="selfTranscriptionText"></div>
-      <div class="self-transcription-meta" id="selfTranscriptionMeta"></div>
-    </div>
-
-    <!-- Self-Transcription Toggle Button -->
-    <button id="transcriptToggle" class="transcript-toggle" onclick="toggleSelfTranscript()">
-      Hide Self-Transcription
-    </button>
 
     <div class="audio-meter" id="audioMeter" style="display: none;">
       <div class="audio-meter-label">Audio Level</div>
@@ -689,8 +606,6 @@
           } else if (message.type === 'error') {
             showError(message.data.message);
             setStatus('Error: ' + message.data.message, 'disconnected');
-          } else if (message.type === 'transcription-self') {
-            handleSelfTranscription(message.data);
           } else if (message.type === 'recording-status') {
             handleRecordingStatus(message.isRecording);
           }
@@ -775,71 +690,6 @@
         indicator.classList.add('active');
       } else {
         indicator.classList.remove('active');
-      }
-    }
-
-    // Self-transcription state
-    let selfTranscriptionTimeout = null;
-    let selfTranscriptVisible = true;
-
-    // Handle self-transcription messages
-    function handleSelfTranscription(data) {
-      console.log('Self-transcription received:', data);
-
-      const container = document.getElementById('selfTranscription');
-      const textElement = document.getElementById('selfTranscriptionText');
-      const metaElement = document.getElementById('selfTranscriptionMeta');
-      const toggleBtn = document.getElementById('transcriptToggle');
-
-      textElement.textContent = data.text;
-      metaElement.textContent = data.confidence
-        ? `Confidence: ${Math.round(data.confidence * 100)}%`
-        : '';
-
-      // Show toggle button when transcriptions start arriving
-      toggleBtn.classList.add('active');
-
-      // Only show transcription if visible preference is enabled
-      if (selfTranscriptVisible) {
-        container.classList.add('active');
-      }
-
-      // Auto-hide after 6 seconds
-      if (selfTranscriptionTimeout) {
-        clearTimeout(selfTranscriptionTimeout);
-      }
-      selfTranscriptionTimeout = setTimeout(() => {
-        container.classList.remove('active');
-      }, 6000);
-    }
-
-    // Toggle self-transcription visibility
-    function toggleSelfTranscript() {
-      selfTranscriptVisible = !selfTranscriptVisible;
-      const container = document.getElementById('selfTranscription');
-      const toggleBtn = document.getElementById('transcriptToggle');
-
-      if (selfTranscriptVisible) {
-        container.classList.remove('hidden');
-        toggleBtn.textContent = 'Hide Self-Transcription';
-        localStorage.setItem('selfTranscriptVisible', 'true');
-      } else {
-        container.classList.add('hidden');
-        container.classList.remove('active');
-        toggleBtn.textContent = 'Show Self-Transcription';
-        localStorage.setItem('selfTranscriptVisible', 'false');
-      }
-    }
-
-    // Restore self-transcription visibility preference on page load
-    function restoreSelfTranscriptPreference() {
-      const saved = localStorage.getItem('selfTranscriptVisible');
-      if (saved === 'false') {
-        selfTranscriptVisible = false;
-        const container = document.getElementById('selfTranscription');
-        const toggleBtn = document.getElementById('transcriptToggle');
-        container.classList.add('hidden');
-        toggleBtn.textContent = 'Show Self-Transcription';
       }
     }
 
@@ -1205,9 +1055,6 @@
     window.addEventListener('beforeunload', () => {
       stopBroadcast(true); // Intentional stop (user leaving page)
     });
-
-    // Restore self-transcription preference on page load
-    restoreSelfTranscriptPreference();
 
     // Initialize
     connectToRoom();

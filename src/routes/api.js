@@ -3,8 +3,6 @@ import { createRoom, getRoomBySlug, updateRoom, listRoomsByTenant, deleteRoom } 
 import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherById, updatePublisher } from '../db/models/publisher.js';
 import { startRecording, stopRecording, getRecordingStatus, isRecording } from '../recording/recorder.js';
 import { listRecordingsByRoomId } from '../db/models/recording.js';
-import { registerTranscriptionRoutes } from './transcription-api.js';
-import { modelDownloader, AVAILABLE_MODELS } from '../transcription/model-downloader.js';
 
 /**
  * Register REST API routes
@@ -12,12 +10,9 @@ import { modelDownloader, AVAILABLE_MODELS } from '../transcription/model-downlo
 export async function registerApiRoutes(fastify) {
   // GET /api/config - Get public configuration (for single-tenant mode detection)
   fastify.get('/api/config', async (request, reply) => {
-    const transcriptionMode = process.env.TRANSCRIPTION_MODE || 'native';
     return {
       singleTenant: process.env.SINGLE_TENANT === 'true',
-      defaultApiKey: process.env.SINGLE_TENANT === 'true' ? (process.env.ADMIN_KEY || 'admin') : null,
-      transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
-      transcriptionMode
+      defaultApiKey: process.env.SINGLE_TENANT === 'true' ? (process.env.ADMIN_KEY || 'admin') : null
     };
   });
 
@@ -226,7 +221,7 @@ export async function registerApiRoutes(fastify) {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug } = request.params;
-      const { name, channel_name, transcription_language = 'en' } = request.body;
+      const { name, channel_name } = request.body;
 
       // Validate required fields
       if (!name || !channel_name) {
@@ -258,8 +253,7 @@ export async function registerApiRoutes(fastify) {
         const publisher = createPublisher({
           room_id: room.id,
           name,
-          channel_name,
-          transcription_language
+          channel_name
         });
 
         return reply.code(201).send({
@@ -267,8 +261,7 @@ export async function registerApiRoutes(fastify) {
           room_slug: room.slug,
           name: publisher.name,
           channel_name: publisher.channel_name,
-          join_token: publisher.join_token,
-          transcription_language: publisher.transcription_language
+          join_token: publisher.join_token
         });
       } catch (error) {
         console.error('Error creating publisher:', error);
@@ -329,7 +322,7 @@ export async function registerApiRoutes(fastify) {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug, id } = request.params;
-      const { name, channel_name, transcription_language } = request.body;
+      const { name, channel_name } = request.body;
 
       try {
         // Check if room exists and belongs to tenant
@@ -369,8 +362,7 @@ export async function registerApiRoutes(fastify) {
         // Update publisher
         const updatedPublisher = updatePublisher(parseInt(id), {
           name,
-          channel_name,
-          transcription_language
+          channel_name
         });
 
         return reply.code(200).send({
@@ -378,7 +370,6 @@ export async function registerApiRoutes(fastify) {
           room_slug: room.slug,
           name: updatedPublisher.name,
           channel_name: updatedPublisher.channel_name,
-          transcription_language: updatedPublisher.transcription_language,
           message: 'Publisher updated successfully'
         });
       } catch (error) {
@@ -679,152 +670,6 @@ export async function registerApiRoutes(fastify) {
     }
   });
 
-  // ============================================================================
-  // Model Management Routes
-  // ============================================================================
-
-  // GET /api/models - List available and installed models
-  fastify.get('/api/models', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      try {
-        const available = Object.values(AVAILABLE_MODELS).map(model => ({
-          id: model.name,
-          name: model.name.includes('.en') ? model.name.replace('.en', '').charAt(0).toUpperCase() + model.name.replace('.en', '').slice(1) : model.name.charAt(0).toUpperCase() + model.name.slice(1),
-          type: model.languages.includes('en') && model.languages.length === 1 ? 'English' : 'Multilingual',
-          size: modelDownloader.formatBytes(model.size * 1024 * 1024),
-          sizeFormatted: modelDownloader.formatBytes(model.size * 1024 * 1024),
-          description: model.description,
-          languages: model.languages
-        }));
-
-        const installed = modelDownloader.listInstalledModels();
-
-        return {
-          available,
-          installed,
-          modelDir: process.env.WHISPER_MODEL_DIR || './models'
-        };
-      } catch (err) {
-        console.error('[API] Failed to list models:', err.message);
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: 'Failed to list models'
-        });
-      }
-    }
-  });
-
-  // POST /api/models/download - Start model download
-  fastify.post('/api/models/download', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      const { modelName } = request.body;
-
-      if (!modelName) {
-        return reply.code(400).send({
-          error: 'Bad Request',
-          message: 'Missing required field: modelName'
-        });
-      }
-
-      if (!AVAILABLE_MODELS[modelName]) {
-        return reply.code(400).send({
-          error: 'Bad Request',
-          message: `Unknown model: ${modelName}`
-        });
-      }
-
-      try {
-        const downloadId = await modelDownloader.startDownload(modelName);
-        return {
-          downloadId,
-          modelName,
-          message: 'Download started'
-        };
-      } catch (err) {
-        console.error('[API] Failed to start download:', err.message);
-
-        if (err.message === 'Model already downloaded') {
-          return reply.code(409).send({
-            error: 'Conflict',
-            message: 'Model already downloaded'
-          });
-        }
-
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: 'Failed to start download'
-        });
-      }
-    }
-  });
-
-  // GET /api/models/download/:id - Get download progress
-  fastify.get('/api/models/download/:id', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      const { id } = request.params;
-
-      const progress = modelDownloader.getProgress(id);
-
-      if (!progress) {
-        return reply.code(404).send({
-          error: 'Not Found',
-          message: 'Download not found or already completed'
-        });
-      }
-
-      return progress;
-    }
-  });
-
-  // GET /api/models/downloads - List all active downloads
-  fastify.get('/api/models/downloads', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      const downloads = modelDownloader.listActiveDownloads();
-      return { downloads };
-    }
-  });
-
-  // DELETE /api/models/:filename - Delete installed model
-  fastify.delete('/api/models/:filename', {
-    preHandler: authenticateTenant,
-    handler: async (request, reply) => {
-      const { filename } = request.params;
-
-      // Safety check
-      if (!filename.endsWith('.bin')) {
-        return reply.code(400).send({
-          error: 'Bad Request',
-          message: 'Invalid filename'
-        });
-      }
-
-      try {
-        modelDownloader.deleteModel(filename);
-        return { message: 'Model deleted successfully' };
-      } catch (err) {
-        console.error('[API] Failed to delete model:', err.message);
-
-        if (err.message === 'Model not found') {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: 'Model not found'
-          });
-        }
-
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: 'Failed to delete model'
-        });
-      }
-    }
-  });
-
-  // Register transcription routes
-  registerTranscriptionRoutes(fastify, authenticateTenant);
 }
 
 export default registerApiRoutes;

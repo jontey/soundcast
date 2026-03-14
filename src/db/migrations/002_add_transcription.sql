@@ -1,11 +1,11 @@
--- Migration: Add Transcription Support
--- Run this manually on existing databases to add transcription features
--- For new databases, this is already included in schema.sql
+-- Migration: Legacy transcription schema
+-- Legacy only: retained for backward compatibility with existing databases.
+-- Runtime no longer reads/writes these objects.
 
--- Add transcription_language to publishers table
+-- Add transcription_language to publishers table (legacy, currently unused)
 ALTER TABLE publishers ADD COLUMN transcription_language TEXT DEFAULT 'en';
 
--- Create transcripts table
+-- Create legacy transcripts table
 CREATE TABLE IF NOT EXISTS transcripts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     room_id INTEGER NOT NULL,
@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_transcripts_producer_id ON transcripts(producer_i
 CREATE INDEX IF NOT EXISTS idx_transcripts_timestamp ON transcripts(timestamp_start);
 CREATE INDEX IF NOT EXISTS idx_transcripts_channel ON transcripts(channel_name);
 
--- Create embedding metadata table
+-- Create legacy embedding metadata table
 CREATE TABLE IF NOT EXISTS embedding_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transcript_id INTEGER NOT NULL UNIQUE,

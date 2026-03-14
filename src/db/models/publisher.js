@@ -19,10 +19,9 @@ function generateToken(length = 16) {
  * @param {number} publisherData.room_id - Room ID
  * @param {string} publisherData.name - Publisher name
  * @param {string} publisherData.channel_name - Channel to broadcast to
- * @param {string} [publisherData.transcription_language='en'] - Language for transcription
  * @returns {object} Created publisher with join_token
  */
-export function createPublisher({ room_id, name, channel_name, transcription_language = 'en' }) {
+export function createPublisher({ room_id, name, channel_name }) {
   const db = getDatabase();
 
   // Generate unique join token
@@ -30,10 +29,10 @@ export function createPublisher({ room_id, name, channel_name, transcription_lan
   const joinTokenHash = bcryptjs.hashSync(joinToken, SALT_ROUNDS);
 
   const stmt = db.prepare(
-    'INSERT INTO publishers (room_id, name, channel_name, join_token, join_token_hash, transcription_language) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO publishers (room_id, name, channel_name, join_token, join_token_hash) VALUES (?, ?, ?, ?, ?)'
   );
 
-  const result = stmt.run(room_id, name, channel_name, joinToken, joinTokenHash, transcription_language);
+  const result = stmt.run(room_id, name, channel_name, joinToken, joinTokenHash);
 
   return {
     id: result.lastInsertRowid,
@@ -41,7 +40,6 @@ export function createPublisher({ room_id, name, channel_name, transcription_lan
     name,
     channel_name,
     join_token: joinToken,
-    transcription_language,
     created_at: new Date().toISOString()
   };
 }
@@ -54,7 +52,7 @@ export function createPublisher({ room_id, name, channel_name, transcription_lan
 export function getPublisherById(id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, room_id, name, channel_name, join_token, transcription_language, created_at FROM publishers WHERE id = ?'
+    'SELECT id, room_id, name, channel_name, join_token, created_at FROM publishers WHERE id = ?'
   );
   return stmt.get(id);
 }
@@ -67,7 +65,7 @@ export function getPublisherById(id) {
 export function verifyPublisherToken(joinToken) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, room_id, name, channel_name, join_token_hash, transcription_language, created_at FROM publishers'
+    'SELECT id, room_id, name, channel_name, join_token_hash, created_at FROM publishers'
   );
   const publishers = stmt.all();
 
@@ -90,7 +88,7 @@ export function verifyPublisherToken(joinToken) {
 export function listPublishersByRoom(room_id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, room_id, name, channel_name, join_token, transcription_language, created_at FROM publishers WHERE room_id = ? ORDER BY created_at DESC'
+    'SELECT id, room_id, name, channel_name, join_token, created_at FROM publishers WHERE room_id = ? ORDER BY created_at DESC'
   );
   return stmt.all(room_id);
 }
@@ -113,10 +111,9 @@ export function deletePublisher(id) {
  * @param {object} updates - Updates to apply
  * @param {string} updates.name - Publisher name
  * @param {string} updates.channel_name - Channel name
- * @param {string} updates.transcription_language - Transcription language code
  * @returns {object|null} Updated publisher object or null if not found
  */
-export function updatePublisher(id, { name, channel_name, transcription_language }) {
+export function updatePublisher(id, { name, channel_name }) {
   const db = getDatabase();
 
   const updates = [];
@@ -130,11 +127,6 @@ export function updatePublisher(id, { name, channel_name, transcription_language
   if (channel_name !== undefined) {
     updates.push('channel_name = ?');
     values.push(channel_name);
-  }
-
-  if (transcription_language !== undefined) {
-    updates.push('transcription_language = ?');
-    values.push(transcription_language);
   }
 
   if (updates.length === 0) {

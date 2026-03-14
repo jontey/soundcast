@@ -192,13 +192,24 @@ export function deleteRoom(slug) {
     return false;
   }
 
-  // Delete related publishers first
-  deletePublishersByRoom(room.id);
+  // Delete related rows first (some legacy FKs are non-cascading).
+  const deleteTxn = db.transaction(() => {
+    // Publishers table has room_id FK without ON DELETE CASCADE.
+    deletePublishersByRoom(room.id);
 
-  // Now delete the room
-  const stmt = db.prepare('DELETE FROM rooms WHERE slug = ?');
-  const result = stmt.run(slug);
-  return result.changes > 0;
+    // Recordings table has room_id FK without ON DELETE CASCADE.
+    db.prepare(`
+      DELETE FROM recording_tracks
+      WHERE recording_id IN (SELECT id FROM recordings WHERE room_id = ?)
+    `).run(room.id);
+    db.prepare('DELETE FROM recordings WHERE room_id = ?').run(room.id);
+
+    // Finally delete the room.
+    const result = db.prepare('DELETE FROM rooms WHERE slug = ?').run(slug);
+    return result.changes > 0;
+  });
+
+  return deleteTxn();
 }
 
 export default {
