@@ -106,7 +106,13 @@ case "$cmd" in
     echo "Restarted: $LABEL"
     ;;
   status)
-    launchctl list | rg "$LABEL" || echo "No launchctl entry found for $LABEL"
+    if command -v rg >/dev/null 2>&1; then
+      launchctl list | rg "$LABEL" || echo "No launchctl entry found for $LABEL"
+    else
+      launchctl list | grep -F "$LABEL" || echo "No launchctl entry found for $LABEL"
+    fi
+    # More detailed status (newer launchctl format)
+    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 && launchctl print "gui/$(id -u)/$LABEL" | head -n 20 || true
     lsof -iTCP:8765 -sTCP:LISTEN -n -P || true
     ;;
   logs)
