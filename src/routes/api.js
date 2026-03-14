@@ -12,9 +12,12 @@ import { modelDownloader, AVAILABLE_MODELS } from '../transcription/model-downlo
 export async function registerApiRoutes(fastify) {
   // GET /api/config - Get public configuration (for single-tenant mode detection)
   fastify.get('/api/config', async (request, reply) => {
+    const transcriptionMode = process.env.TRANSCRIPTION_MODE || 'native';
     return {
       singleTenant: process.env.SINGLE_TENANT === 'true',
-      defaultApiKey: process.env.SINGLE_TENANT === 'true' ? (process.env.ADMIN_KEY || 'admin') : null
+      defaultApiKey: process.env.SINGLE_TENANT === 'true' ? (process.env.ADMIN_KEY || 'admin') : null,
+      transcriptionEnabled: process.env.TRANSCRIPTION_ENABLED === 'true',
+      transcriptionMode
     };
   });
 

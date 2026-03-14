@@ -705,7 +705,7 @@
         </div>
         <div style="display: flex; align-items: center; gap: 10px;">
           <button onclick="loadRooms()" class="btn btn-secondary">Refresh</button>
-          <button onclick="showModelModal()" class="btn btn-secondary">Manage Whisper Models</button>
+          <button id="manageModelsBtn" onclick="showModelModal()" class="btn btn-secondary">Manage Whisper Models</button>
           <button onclick="showCreateRoomModal()" class="btn btn-primary">+ Create Room</button>
         </div>
       </div>
@@ -935,6 +935,7 @@
   <script>
     const API_BASE = window.location.origin + '/api';
     let currentApiKey = '';
+    let transcriptionMode = 'native';
     let adminWs = null;
     let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
     let recordingStatus = {}; // roomSlug -> { isRecording, startedAt, trackCount, ... }
@@ -2340,6 +2341,8 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       try {
         const response = await fetch('/api/config');
         const config = await response.json();
+        transcriptionMode = (config.transcriptionMode || 'native').toLowerCase();
+        updateTranscriptionUiForMode();
 
         if (config.singleTenant && config.defaultApiKey) {
           // Auto-login with default API key
@@ -2359,6 +2362,23 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         }
       } catch (e) {
         console.log('Could not check single-tenant mode:', e);
+      }
+    }
+
+    function usesQwenTranscription() {
+      return transcriptionMode === 'qwen';
+    }
+
+    function updateTranscriptionUiForMode() {
+      const manageModelsBtn = document.getElementById('manageModelsBtn');
+      if (!manageModelsBtn) return;
+
+      if (usesQwenTranscription()) {
+        manageModelsBtn.textContent = 'Qwen ASR Active';
+        manageModelsBtn.title = 'Whisper model management is not required in qwen mode';
+      } else {
+        manageModelsBtn.textContent = 'Manage Whisper Models';
+        manageModelsBtn.title = '';
       }
     }
 
@@ -2723,7 +2743,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       if (stopBtn && startGroup) {
         if (isRunning && session) {
           stopBtn.style.display = 'inline-block';
-          stopBtn.setAttribute('onclick', `stopTranscriptionChannel('${roomSlug}', '${escapeAttr(session.producerId)}')`);
+          stopBtn.setAttribute('onclick', `stopTranscriptionChannel('${roomSlug}', '${escapeAttr(channelName)}', '${escapeAttr(session.producerId)}')`);
           startGroup.style.display = 'none';
         } else {
           stopBtn.style.display = 'none';
@@ -2793,19 +2813,27 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     }
 
     // Stop transcription for a specific channel
-    async function stopTranscriptionChannel(roomSlug, producerId) {
+    async function stopTranscriptionChannel(roomSlug, channelName, producerId) {
       if (!confirm('Stop transcription for this channel?')) {
         return;
       }
 
       try {
+        const body = {};
+        if (producerId) {
+          body.sessionId = producerId;
+        }
+        if (channelName) {
+          body.channelName = channelName;
+        }
+
         const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/stop`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentApiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ sessionId: producerId })
+          body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -2814,7 +2842,9 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         }
 
         showSuccess('Transcription stopped successfully!');
-        // WebSocket will push the session-update automatically
+        apiCache.invalidate(`transcription-status-${roomSlug}`);
+        apiCache.invalidate(`transcripts-${roomSlug}`);
+        setTimeout(() => refreshTranscriptionMonitor(roomSlug), 150);
       } catch (error) {
         showError(error.message);
       }
@@ -2833,24 +2863,30 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     // Start transcription for a specific channel
     async function startTranscriptionForChannel(roomSlug, channelName, language) {
       try {
-        // Get first available model
-        const modelsResponse = await fetch(`${API_BASE}/models`, {
-          headers: { 'Authorization': `Bearer ${currentApiKey}` }
-        });
+        const body = {
+          channelName,
+          language
+        };
 
-        if (!modelsResponse.ok) {
-          throw new Error('Failed to load models');
+        if (!usesQwenTranscription()) {
+          const modelsResponse = await fetch(`${API_BASE}/models`, {
+            headers: { 'Authorization': `Bearer ${currentApiKey}` }
+          });
+
+          if (!modelsResponse.ok) {
+            throw new Error('Failed to load models');
+          }
+
+          const modelsData = await modelsResponse.json();
+          const installedModels = modelsData.installed || [];
+
+          if (installedModels.length === 0) {
+            showError('No Whisper models installed. Please install a model first.');
+            return;
+          }
+
+          body.modelPath = installedModels[0].path;
         }
-
-        const modelsData = await modelsResponse.json();
-        const installedModels = modelsData.installed || [];
-
-        if (installedModels.length === 0) {
-          showError('No Whisper models installed. Please install a model first.');
-          return;
-        }
-
-        const modelPath = installedModels[0].path;
 
         const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/start`, {
           method: 'POST',
@@ -2858,11 +2894,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
             'Authorization': `Bearer ${currentApiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            channelName,
-            language,
-            modelPath
-          })
+          body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -2871,7 +2903,8 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         }
 
         showSuccess('Transcription started successfully!');
-        // WebSocket will push the session-update automatically
+        apiCache.invalidate(`transcription-status-${roomSlug}`);
+        setTimeout(() => refreshTranscriptionMonitor(roomSlug), 150);
       } catch (error) {
         showError(error.message);
       }
@@ -3000,23 +3033,27 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const language = document.getElementById(`transcription-language-${roomSlug}`).value;
       const modelPath = document.getElementById(`transcription-model-${roomSlug}`).value;
 
-      if (!modelPath) {
+      if (!usesQwenTranscription() && !modelPath) {
         showError('Please select a model');
         return;
       }
 
       try {
+        const body = {
+          channelName,
+          language
+        };
+        if (!usesQwenTranscription()) {
+          body.modelPath = modelPath;
+        }
+
         const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcription/start`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${currentApiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            channelName,
-            language,
-            modelPath
-          })
+          body: JSON.stringify(body)
         });
 
         if (!response.ok) {
@@ -3048,7 +3085,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
             'Authorization': `Bearer ${currentApiKey}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ producerId })
+          body: JSON.stringify({ sessionId: producerId, producerId })
         });
 
         if (!response.ok) {

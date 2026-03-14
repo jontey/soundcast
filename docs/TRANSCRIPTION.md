@@ -103,10 +103,11 @@ docker-compose up -d
 TRANSCRIPTION_ENABLED=true              # Enable transcription system
 TRANSCRIPTION_MODE=native              # native | http | qwen (default: native)
 TRANSCRIPTION_USE_NATIVE=true           # Use native addon (ignored when mode=qwen)
-TRANSCRIPTION_VLLMS_URL=http://127.0.0.1:11434/asr  # Qwen ASR endpoint when mode=qwen
-TRANSCRIPTION_CHUNK_SECONDS=5           # Chunk length (seconds) sent to vLLMs
+QWEN_ASR_BIN=./tmp/qwen-asr/qwen_asr    # qwen-asr executable path when mode=qwen
+QWEN_ASR_MODEL_DIR=./tmp/qwen-asr/qwen3-asr-0.6b   # Qwen model dir
+QWEN_ASR_TIMEOUT_MS=60000               # Timeout for local qwen_asr process
+TRANSCRIPTION_CHUNK_SECONDS=5           # Chunk length (seconds) sent to qwen_asr
 TRANSCRIPTION_CHUNK_OVERLAP_SECONDS=1   # Overlap between chunks (seconds)
-TRANSCRIPTION_REQUEST_TIMEOUT_MS=20000  # Timeout for vLLMs requests when mode=qwen
 WHISPER_MODEL_DIR=/app/models           # Model storage directory
 WHISPER_MODEL_SIZE=base                 # Default model (tiny/base/small/medium/large-v3)
 
@@ -114,28 +115,46 @@ WHISPER_MODEL_SIZE=base                 # Default model (tiny/base/small/medium/
 TRANSCRIPTION_RTP_PORT_MIN=51000
 TRANSCRIPTION_RTP_PORT_MAX=51999
 
-## Qwen ASR (vLLMs) mode
+## Qwen ASR (local) mode
 
-When `TRANSCRIPTION_MODE=qwen`, Soundcast streams buffered 16 kHz mono PCM chunks to the configured `TRANSCRIPTION_VLLMS_URL` (default: `http://127.0.0.1:11434/asr`). The endpoint is expected to return JSON segments like:
+When `TRANSCRIPTION_MODE=qwen`, Soundcast streams buffered 16 kHz mono PCM chunks to a local `qwen_asr` process (`QWEN_ASR_BIN`) with model dir `QWEN_ASR_MODEL_DIR`.
 
-```json
-{
-  "segments": [
-    { "text": "hello world", "start_time": 0.1, "end_time": 1.3, "confidence": 0.92 }
-  ]
-}
-```
+The transcription service runs asynchronously and handles per-chunk timeouts controlled by `QWEN_ASR_TIMEOUT_MS`, `TRANSCRIPTION_CHUNK_SECONDS`, and `TRANSCRIPTION_CHUNK_OVERLAP_SECONDS`.
 
-The transcription service runs asynchronously and handles retries/timeouts controlled by `TRANSCRIPTION_REQUEST_TIMEOUT_MS`, `TRANSCRIPTION_CHUNK_SECONDS`, and `TRANSCRIPTION_CHUNK_OVERLAP_SECONDS`.
-
-### Running the vLLMs server
+### Building qwen-asr
 
 ```bash
-pip install vllm
-vllms serve --model qwen-qwen3-asr --port 11434 --listen 0.0.0.0
+git clone https://github.com/antirez/qwen-asr.git tmp/qwen-asr
+cd tmp/qwen-asr
+make blas
+./download_model.sh --model small
 ```
 
-Set `TRANSCRIPTION_MODE=qwen` and point `TRANSCRIPTION_VLLMS_URL` to the server above. Soundcast will batch 5-second chunks (adjustable) and submit them to vLLMs for transcription, then store the text in SQLite and emit live captions to listeners.
+Set `TRANSCRIPTION_MODE=qwen` and configure `QWEN_ASR_BIN` + `QWEN_ASR_MODEL_DIR`. Soundcast will batch 5-second chunks (adjustable), transcribe with local `qwen_asr`, then store the text in SQLite and emit live captions to listeners.
+
+### Local E2E (Tenant Admin -> Live Transcript)
+
+For local browser automation, ensure `ANNOUNCED_IP` matches your actual local interface. If your server is accessed via `127.0.0.1`, set:
+
+```bash
+ANNOUNCED_IP=127.0.0.1
+```
+
+If `ANNOUNCED_IP` is stale (for example, old LAN IP), WebRTC may appear connected while RTP audio does not flow, resulting in no transcripts.
+
+With the server running, execute:
+
+```bash
+npm run e2e:qwen:injected
+```
+
+This opens publisher + tenant admin pages, starts transcription from tenant admin, and verifies transcript text appears in the frontend monitor.
+
+For a full one-command local regression (starts server with local-safe env, runs E2E, prints latest transcript rows, then stops server), use:
+
+```bash
+npm run e2e:qwen:local
+```
 
 # Embeddings
 EMBEDDING_ENABLED=true                  # Enable semantic search

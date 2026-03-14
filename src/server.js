@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
 import https from 'https';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import mediasoup from 'mediasoup';
@@ -222,6 +223,27 @@ console.log('mediasoup configuration:');
 console.log(`  Listen IP:    ${mediasoupConfig.listenIp}`);
 console.log(`  Announced IP: ${mediasoupConfig.announcedIp}`);
 console.log(`  RTC Ports:    ${mediasoupConfig.rtcMinPort}-${mediasoupConfig.rtcMaxPort}`);
+
+function getLocalInterfaceIps() {
+  const interfaces = os.networkInterfaces();
+  const ips = new Set(['127.0.0.1', '::1']);
+  for (const entries of Object.values(interfaces)) {
+    if (!entries) continue;
+    for (const entry of entries) {
+      if (!entry || !entry.address) continue;
+      ips.add(entry.address);
+    }
+  }
+  return ips;
+}
+
+const localIps = getLocalInterfaceIps();
+if (mediasoupConfig.announcedIp && !localIps.has(mediasoupConfig.announcedIp)) {
+  console.warn('WARNING: ANNOUNCED_IP is not assigned to this machine.');
+  console.warn(`         Configured: ${mediasoupConfig.announcedIp}`);
+  console.warn(`         Local IPs:  ${Array.from(localIps).join(', ')}`);
+  console.warn('         This can cause WebRTC to connect but not deliver RTP media.');
+}
 
 if (mediasoupConfig.announcedIp === '127.0.0.1') {
   console.warn('WARNING: ANNOUNCED_IP is set to 127.0.0.1 - remote clients will not be able to connect!');

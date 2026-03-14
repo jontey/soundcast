@@ -19,3 +19,6 @@ src/native/build/
 
 # Test artifacts
 test/
+
+tmp/
+output/

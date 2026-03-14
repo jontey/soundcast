@@ -233,13 +233,25 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
         const sessions = [];
         const errors = [];
         let alreadyRunningCount = 0;
+        let restartedCount = 0;
 
         for (const [producerId, producerInfo] of channel.producers) {
           const existingSession = getTranscriptionSession(producerId);
           if (existingSession) {
-            alreadyRunningCount++;
-            console.log(`[TranscriptionAPI] Transcription already running for producer ${producerId}`);
-            continue;
+            const requestedLanguage = (language || 'en').toLowerCase();
+            const activeLanguage = (existingSession.language || 'en').toLowerCase();
+
+            if (requestedLanguage === activeLanguage) {
+              alreadyRunningCount++;
+              console.log(`[TranscriptionAPI] Transcription already running for producer ${producerId}`);
+              continue;
+            }
+
+            console.log(
+              `[TranscriptionAPI] Restarting producer ${producerId} transcription to apply language ${requestedLanguage} (was ${activeLanguage})`
+            );
+            await stopTranscription(producerId);
+            restartedCount++;
           }
 
           try {
@@ -284,7 +296,9 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
 
         return {
           message: 'Transcription started',
-          sessions
+          sessions,
+          alreadyRunningCount,
+          restartedCount
         };
       } catch (err) {
         console.error('[TranscriptionAPI] Start transcription error:', err);
@@ -302,7 +316,8 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
     { preHandler: authenticateTenant },
     async (request, reply) => {
       const { slug } = request.params;
-      const { sessionId, channelName } = request.body;
+      const { sessionId, producerId, channelName } = request.body;
+      const targetSessionId = sessionId || producerId;
 
       const room = getRoomBySlug(slug);
       if (!room) {
@@ -323,19 +338,40 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
       try {
         const stopped = [];
 
-        if (sessionId) {
-          const session = getTranscriptionSession(sessionId);
+        if (targetSessionId) {
+          const session = getTranscriptionSession(targetSessionId);
           if (session) {
-            const startTime = session.startTime;
+            const startTime = session.startTime || session.startedAt || Date.now();
             const duration = (Date.now() - startTime) / 1000;
             const segmentsProcessed = session.audioChunkCount || 0;
 
-            await stopTranscription(sessionId);
+            await stopTranscription(targetSessionId);
             stopped.push({
-              sessionId,
+              sessionId: targetSessionId,
               duration,
               segmentsProcessed
             });
+          } else if (channelName) {
+            const fullChannelId = `${slug}:${channelName}`;
+            const channel = channels.get(fullChannelId);
+
+            if (channel && channel.producers) {
+              for (const [channelProducerId] of channel.producers) {
+                const channelSession = getTranscriptionSession(channelProducerId);
+                if (!channelSession) continue;
+
+                const startTime = channelSession.startTime || channelSession.startedAt || Date.now();
+                const duration = (Date.now() - startTime) / 1000;
+                const segmentsProcessed = channelSession.audioChunkCount || 0;
+
+                await stopTranscription(channelProducerId);
+                stopped.push({
+                  sessionId: channelProducerId,
+                  duration,
+                  segmentsProcessed
+                });
+              }
+            }
           }
         } else if (channelName) {
           const fullChannelId = `${slug}:${channelName}`;
@@ -345,7 +381,7 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
             for (const [producerId] of channel.producers) {
               const session = getTranscriptionSession(producerId);
               if (session) {
-                const startTime = session.startTime;
+                const startTime = session.startTime || session.startedAt || Date.now();
                 const duration = (Date.now() - startTime) / 1000;
                 const segmentsProcessed = session.audioChunkCount || 0;
 
@@ -359,7 +395,7 @@ export function registerTranscriptionRoutes(fastify, authenticateTenant) {
             }
           }
         } else {
-          return reply.status(400).send({ error: 'Either sessionId or channelName is required' });
+          return reply.status(400).send({ error: 'Either sessionId, producerId, or channelName is required' });
         }
 
         if (stopped.length === 0) {

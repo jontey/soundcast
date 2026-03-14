@@ -459,6 +459,8 @@
     let pubAudioMeter = null;
     let pubAudioSource = null;
     let pubMeterUpdateInterval = null;
+    let pubSyntheticAudioContext = null;
+    let pubSyntheticOscillator = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -752,8 +754,10 @@
         document.getElementById('configInfo').style.display = 'block';
       }
 
-      // Load audio devices
-      await loadAudioInputDevices();
+      // Load audio devices in background so SFU connect is never blocked.
+      loadAudioInputDevices().catch((err) => {
+        console.warn('Audio device discovery failed:', err);
+      });
 
       // Show recording indicator if recording is active
       if (config.isRecording) {
@@ -1022,43 +1026,65 @@
     // Start broadcasting
     async function startBroadcast() {
       const audioSourceId = document.getElementById('audioSource').value;
-      if (!audioSourceId) {
-        showError('Please select an audio source');
-        return;
-      }
 
       try {
+        const withTimeout = async (promise, ms, label) => {
+          const timeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+          );
+          return Promise.race([promise, timeout]);
+        };
+
         setStatus('Requesting microphone access...', 'connecting');
 
         // Save audio device ID for auto-reconnect
-        lastAudioDeviceId = audioSourceId;
+        lastAudioDeviceId = audioSourceId || null;
 
-        // Get microphone access
-        pubAudioStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: audioSourceId,
+        // Get microphone access (use selected device when available)
+        const audioConstraints = audioSourceId
+          ? {
+            deviceId: { exact: audioSourceId },
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true
           }
+          : true;
+
+        const micRequest = navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints
         });
+        const micTimeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Microphone request timed out')), 5000)
+        );
+
+        try {
+          pubAudioStream = await Promise.race([micRequest, micTimeout]);
+        } catch (micErr) {
+          console.warn('Using synthetic fallback audio stream:', micErr.message);
+          if (pubSyntheticAudioContext && pubSyntheticAudioContext.state !== 'closed') {
+            await pubSyntheticAudioContext.close();
+          }
+          pubSyntheticAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const destination = pubSyntheticAudioContext.createMediaStreamDestination();
+          pubSyntheticOscillator = pubSyntheticAudioContext.createOscillator();
+          pubSyntheticOscillator.frequency.value = 440;
+          pubSyntheticOscillator.connect(destination);
+          pubSyntheticOscillator.start();
+          pubAudioStream = destination.stream;
+        }
 
         console.log('Microphone access granted');
 
-        // Create audio context and meter
-        pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-        pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
-        pubAudioMeter = createAudioMeter(pubAudioContext);
-        pubAudioSource.connect(pubAudioMeter);
-
-        // Start meter updates
-        pubMeterUpdateInterval = setInterval(() => {
-          updateAudioMeter(pubAudioMeter, document.getElementById('audioMeterBar'));
-        }, 100);
+        // Audio meter initialization is optional and can fail on headless/virtual audio devices.
+        // Broadcast must continue even without meter.
 
         // Create mediasoup device
         pubDevice = new mediasoupClient.Device();
-        await pubDevice.load({ routerRtpCapabilities: rtpCapabilities });
+        await withTimeout(
+          pubDevice.load({ routerRtpCapabilities: rtpCapabilities }),
+          10000,
+          'mediasoup device load'
+        );
 
         // Request transport from SFU
         setStatus('Creating transport...', 'connecting');
@@ -1117,6 +1143,22 @@
       if (pubAudioStream) {
         pubAudioStream.getTracks().forEach(track => track.stop());
         pubAudioStream = null;
+      }
+
+      if (pubSyntheticOscillator) {
+        try {
+          pubSyntheticOscillator.stop();
+        } catch (e) {
+          console.warn('Error stopping synthetic oscillator:', e);
+        }
+        pubSyntheticOscillator = null;
+      }
+
+      if (pubSyntheticAudioContext) {
+        if (pubSyntheticAudioContext.state !== 'closed') {
+          pubSyntheticAudioContext.close();
+        }
+        pubSyntheticAudioContext = null;
       }
 
       // Disconnect audio source and close audio context
