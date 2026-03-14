@@ -45,6 +45,40 @@ function parseTimestampStartMs(filename) {
   return parseInt(match[1], 10) * 1000;
 }
 
+function parseTranscriptWsRequest(req) {
+  const params = req?.params || {};
+  const query = req?.query || {};
+
+  let roomSlug = params.room_slug;
+  let channelName = params.channel_name;
+  let apiKey = query.apiKey;
+  let token = query.token;
+
+  if (!roomSlug || !channelName || (!apiKey && !token)) {
+    const host = req?.headers?.host || 'localhost';
+    const protocol = req?.socket?.encrypted ? 'https' : 'http';
+    const parsed = new URL(req?.url || '/', `${protocol}://${host}`);
+
+    if (!roomSlug || !channelName) {
+      const match = parsed.pathname.match(/^\/ws\/transcripts\/([^/]+)\/([^/]+)$/);
+      if (match) {
+        roomSlug = roomSlug || decodeURIComponent(match[1]);
+        channelName = channelName || decodeURIComponent(match[2]);
+      }
+    }
+
+    apiKey = apiKey || parsed.searchParams.get('apiKey') || undefined;
+    token = token || parsed.searchParams.get('token') || undefined;
+  }
+
+  return {
+    roomSlug,
+    channelName,
+    apiKey,
+    token
+  };
+}
+
 class TranscriptDocState {
   constructor({ roomId, roomSlug, channelName, sessionId, initialText = '', initialRevision = 0 }) {
     this.roomId = roomId;
@@ -507,67 +541,79 @@ export class TranscriptionRuntime {
   }
 
   registerWsRoute(fastifyInstance) {
-    fastifyInstance.get('/ws/transcripts/:room_slug/:channel_name', { websocket: true }, async (connection, req) => {
-      const { room_slug: roomSlug, channel_name: channelName } = req.params;
-      const { apiKey, token } = req.query || {};
-      const auth = await this.authenticateTranscriptSocket(roomSlug, apiKey, token);
-      if (!auth.ok) {
-        connection.send(JSON.stringify({ type: 'error', message: auth.message }));
-        connection.close();
-        return;
-      }
-
-      const room = auth.room;
-      const session = this.getRoomSession(room.id) || (() => {
-        const active = getActiveTranscriptionSessionByRoomId(room.id);
-        if (!active) return null;
-        return {
-          roomId: room.id,
-          roomSlug,
-          recordingId: active.recording_id,
-          folderName: null,
-          recordingFolderPath: null,
-          sessionId: active.id,
-          eventName: active.event_name,
-          modelName: active.model_name,
-          startedAt: active.started_at,
-          pollTimer: null,
-          polling: false,
-          streams: new Map()
-        };
-      })();
-
-      if (!session) {
-        connection.send(JSON.stringify({ type: 'error', message: 'No active transcription session' }));
-        connection.close();
-        return;
-      }
-
-      const docState = await this.getOrCreateDoc(room.id, roomSlug, session.sessionId, channelName);
-      docState.clients.add(connection);
-
-      const fullUpdate = Y.encodeStateAsUpdate(docState.ydoc);
-      connection.send(Buffer.from(fullUpdate), { binary: true });
-
-      connection.on('message', (message) => {
-        try {
-          if (typeof message === 'string') {
-            const payload = JSON.parse(message);
-            if (payload?.type === 'ping') {
-              connection.send(JSON.stringify({ type: 'pong' }));
-            }
-            return;
-          }
-
-          const update = new Uint8Array(message);
-          Y.applyUpdate(docState.ydoc, update, connection);
-        } catch (error) {
-          this.fastify.log.error(`Invalid transcript websocket message: ${error.message}`);
+    fastifyInstance.register(async (app) => {
+      app.get('/ws/transcripts/:room_slug/:channel_name', { websocket: true }, async (connection, req) => {
+        const socket = connection?.socket || connection;
+        if (!socket || typeof socket.send !== 'function' || typeof socket.on !== 'function') {
+          this.fastify.log.error('Transcript websocket connection is not a valid socket');
+          return;
         }
-      });
 
-      connection.on('close', () => {
-        docState.clients.delete(connection);
+        const { roomSlug, channelName, apiKey, token } = parseTranscriptWsRequest(req);
+        if (!roomSlug || !channelName) {
+          socket.send(JSON.stringify({ type: 'error', message: 'Invalid transcript websocket path' }));
+          socket.close();
+          return;
+        }
+        const auth = await this.authenticateTranscriptSocket(roomSlug, apiKey, token);
+        if (!auth.ok) {
+          socket.send(JSON.stringify({ type: 'error', message: auth.message }));
+          socket.close();
+          return;
+        }
+
+        const room = auth.room;
+        const session = this.getRoomSession(room.id) || (() => {
+          const active = getActiveTranscriptionSessionByRoomId(room.id);
+          if (!active) return null;
+          return {
+            roomId: room.id,
+            roomSlug,
+            recordingId: active.recording_id,
+            folderName: null,
+            recordingFolderPath: null,
+            sessionId: active.id,
+            eventName: active.event_name,
+            modelName: active.model_name,
+            startedAt: active.started_at,
+            pollTimer: null,
+            polling: false,
+            streams: new Map()
+          };
+        })();
+
+        if (!session) {
+          socket.send(JSON.stringify({ type: 'error', message: 'No active transcription session' }));
+          socket.close();
+          return;
+        }
+
+        const docState = await this.getOrCreateDoc(room.id, roomSlug, session.sessionId, channelName);
+        docState.clients.add(socket);
+
+        const fullUpdate = Y.encodeStateAsUpdate(docState.ydoc);
+        socket.send(Buffer.from(fullUpdate), { binary: true });
+
+        socket.on('message', (message) => {
+          try {
+            if (typeof message === 'string') {
+              const payload = JSON.parse(message);
+              if (payload?.type === 'ping') {
+                socket.send(JSON.stringify({ type: 'pong' }));
+              }
+              return;
+            }
+
+            const update = new Uint8Array(message);
+            Y.applyUpdate(docState.ydoc, update, socket);
+          } catch (error) {
+            this.fastify.log.error(`Invalid transcript websocket message: ${error.message}`);
+          }
+        });
+
+        socket.on('close', () => {
+          docState.clients.delete(socket);
+        });
       });
     });
   }
