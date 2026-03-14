@@ -18,5 +18,14 @@
     "titleBar.inactiveBackground": "#e31cbe99",
     "titleBar.inactiveForeground": "#e7e7e799"
   },
-  "peacock.color": "#e31cbe"
+  "peacock.color": "#e31cbe",
+  "sqltools.connections": [
+    {
+      "previewLimit": 50,
+      "driver": "SQLite",
+      "name": "Soundcast",
+      "database": "${workspaceFolder:soundcast}/soundcast.db"
+    }
+  ],
+  "sqltools.useNodeRuntime": true
 }
