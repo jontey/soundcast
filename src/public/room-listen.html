@@ -363,7 +363,7 @@
     let activeWakeLock = null;
     let isMuted = false;
     let selectedChannel = null;
-    let rtpCapabilities = null;
+    let listenRtpCapabilities = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -711,7 +711,7 @@
 
       switch (action) {
         case 'rtpCapabilities':
-          rtpCapabilities = payload;
+          listenRtpCapabilities = payload;
           await joinRoom();
           break;
 
@@ -774,7 +774,7 @@
 
         // Create mediasoup device
         listenDevice = new mediasoupClient.Device();
-        await listenDevice.load({ routerRtpCapabilities: rtpCapabilities });
+        await listenDevice.load({ routerRtpCapabilities: listenRtpCapabilities });
 
         // Request transport creation
         setStatus('Creating transport...', 'connecting');
