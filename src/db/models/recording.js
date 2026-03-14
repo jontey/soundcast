@@ -43,6 +43,17 @@ export function getActiveRecordingByRoomId(roomId) {
 }
 
 /**
+ * List all active recordings
+ * @returns {array} Active recordings
+ */
+export function listActiveRecordings() {
+  const db = getDatabase();
+  return db.prepare(
+    'SELECT id, room_id, folder_name, status, started_at, stopped_at FROM recordings WHERE status = ? ORDER BY started_at ASC'
+  ).all('recording');
+}
+
+/**
  * Update recording status
  * @param {number} id - Recording ID
  * @param {string} status - New status (recording, stopped, error)
@@ -183,6 +194,7 @@ export default {
   createRecording,
   getRecordingById,
   getActiveRecordingByRoomId,
+  listActiveRecordings,
   updateRecordingStatus,
   listRecordingsByRoomId,
   markActiveRecordingsAsError,

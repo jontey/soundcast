@@ -20,6 +20,7 @@ import {
   getLatestTranscriptDocByRoomEventChannel,
   upsertTranscriptDoc
 } from '../db/models/transcription.js';
+import { getRecordingById } from '../db/models/recording.js';
 
 const DEFAULT_MODEL = process.env.TRANSCRIPTION_MODEL || 'mlx-community/Qwen3-ASR-0.6B-8bit';
 const SIDECAR_URL = process.env.TRANSCRIPTION_SIDECAR_URL || 'http://127.0.0.1:8765';
@@ -28,6 +29,8 @@ const MIN_SEGMENT_AGE_MS = parseInt(process.env.TRANSCRIPTION_MIN_SEGMENT_AGE_MS
 const SNAPSHOT_DEBOUNCE_MS = parseInt(process.env.TRANSCRIPTION_SNAPSHOT_DEBOUNCE_MS || '300', 10);
 const RECORDING_DIR = process.env.RECORDING_DIR || path.join(process.cwd(), 'recordings');
 const AVAILABILITY_CACHE_MS = 15000;
+const TRANSCRIPTION_LOCK_VERSION = 1;
+const TRANSCRIPTION_LOCK_FILENAME = 'transcription.lock.json';
 
 function nowIso() {
   return new Date().toISOString();
@@ -96,6 +99,31 @@ function parseTranscriptWsRequest(req) {
   };
 }
 
+function isPidAlive(pid) {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function atomicWriteJson(filePath, data) {
+  const tmpPath = `${filePath}.tmp-${process.pid}`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
 class TranscriptDocState {
   constructor({ roomId, roomSlug, channelName, sessionId, initialText = '', initialRevision = 0 }) {
     this.roomId = roomId;
@@ -116,14 +144,16 @@ class TranscriptDocState {
 }
 
 export class TranscriptionRuntime {
-  constructor({ fastify, verifyPublisherToken, verifyTenantApiKey, getRoomBySlug, listRoomsByTenant }) {
+  constructor({ fastify, verifyPublisherToken, verifyTenantApiKey, getRoomBySlug, getRoomById, listRoomsByTenant }) {
     this.fastify = fastify;
     this.verifyPublisherToken = verifyPublisherToken;
     this.verifyTenantApiKey = verifyTenantApiKey;
     this.getRoomBySlug = getRoomBySlug;
+    this.getRoomById = getRoomById;
     this.listRoomsByTenant = listRoomsByTenant;
 
     this.sessions = new Map(); // roomId -> sessionState
+    this.blockedSessions = new Map(); // roomId -> blocked session metadata
     this.docs = new Map(); // key(sessionId:roomSlug:channel) -> TranscriptDocState
 
     this.lastAvailabilityCheckAt = 0;
@@ -136,6 +166,65 @@ export class TranscriptionRuntime {
 
   makeDocKey(roomSlug, channelName, sessionId) {
     return `${sessionId}::${roomSlug}::${channelName}`;
+  }
+
+  getLockPathFromFolder(recordingFolderPath) {
+    return path.join(recordingFolderPath, TRANSCRIPTION_LOCK_FILENAME);
+  }
+
+  serializeSessionLock(session, status = 'active') {
+    const streams = {};
+    for (const [producerId, stream] of session.streams.entries()) {
+      streams[producerId] = {
+        channelName: stream.channelName,
+        publisherId: stream.publisherId || null,
+        producerName: stream.producerName || null,
+        segmentPattern: stream.segmentPattern || null,
+        processedFiles: Array.from(stream.processedFiles || [])
+      };
+    }
+    return {
+      version: TRANSCRIPTION_LOCK_VERSION,
+      pid: process.pid,
+      updatedAt: nowIso(),
+      roomId: session.roomId,
+      roomSlug: session.roomSlug,
+      recordingId: session.recordingId,
+      transcriptionSessionId: session.sessionId,
+      eventName: session.eventName,
+      modelName: session.modelName,
+      status,
+      streams
+    };
+  }
+
+  persistSessionLock(session, status = 'active') {
+    if (!session?.recordingFolderPath) return;
+    const lockPath = this.getLockPathFromFolder(session.recordingFolderPath);
+    atomicWriteJson(lockPath, this.serializeSessionLock(session, status));
+  }
+
+  scheduleSessionLockPersist(session, status = 'active') {
+    if (!session) return;
+    if (session.lockPersistTimer) {
+      clearTimeout(session.lockPersistTimer);
+      session.lockPersistTimer = null;
+    }
+    session.lockPersistTimer = setTimeout(() => {
+      try {
+        this.persistSessionLock(session, status);
+      } catch (error) {
+        this.fastify.log.error(`Failed to persist transcription lock for room ${session.roomSlug}: ${error.message}`);
+      }
+    }, SNAPSHOT_DEBOUNCE_MS);
+  }
+
+  removeSessionLockByFolder(recordingFolderPath) {
+    if (!recordingFolderPath) return;
+    const lockPath = this.getLockPathFromFolder(recordingFolderPath);
+    if (fs.existsSync(lockPath)) {
+      fs.unlinkSync(lockPath);
+    }
   }
 
   async checkAvailability() {
@@ -194,17 +283,120 @@ export class TranscriptionRuntime {
     return this.sessions.get(roomId) || null;
   }
 
-  reconcileStaleSessions(reason = 'Transcription session stopped after server restart') {
+  recoverTranscriptionSessions() {
     const activeSessions = listActiveTranscriptionSessions();
-    if (!activeSessions.length) return 0;
-    for (const session of activeSessions) {
-      stopAllTranscriptionStreamsBySession(session.id, 'stopped');
-      stopTranscriptionSession(session.id, 'stopped', reason);
+    const result = { recovered: 0, failed: 0, blocked: 0 };
+    for (const dbSession of activeSessions) {
+      const room = this.getRoomById(dbSession.room_id);
+      const recording = getRecordingById(dbSession.recording_id);
+
+      if (!room || !recording || recording.status !== 'recording') {
+        stopAllTranscriptionStreamsBySession(dbSession.id, 'error');
+        stopTranscriptionSession(dbSession.id, 'error', 'recording_not_active');
+        result.failed += 1;
+        this.fastify.log.warn({ transcriptionSessionId: dbSession.id, roomId: dbSession.room_id, reason: 'recording_not_active' }, 'Transcription recovery failed');
+        continue;
+      }
+
+      const recordingFolderPath = path.join(RECORDING_DIR, recording.folder_name);
+      const lockPath = this.getLockPathFromFolder(recordingFolderPath);
+      const lock = readJsonFile(lockPath);
+      if (!lock || lock.version !== TRANSCRIPTION_LOCK_VERSION || lock.transcriptionSessionId !== dbSession.id || lock.roomId !== room.id || lock.recordingId !== recording.id) {
+        stopAllTranscriptionStreamsBySession(dbSession.id, 'error');
+        stopTranscriptionSession(dbSession.id, 'error', 'resume_state_missing');
+        result.failed += 1;
+        this.fastify.log.warn({ transcriptionSessionId: dbSession.id, roomId: room.id, reason: 'resume_state_missing' }, 'Transcription recovery failed');
+        continue;
+      }
+
+      const lockPid = parseInt(lock.pid, 10);
+      if (lockPid && lockPid !== process.pid && isPidAlive(lockPid)) {
+        this.blockedSessions.set(room.id, {
+          transcriptionSessionId: dbSession.id,
+          roomId: room.id,
+          roomSlug: room.slug,
+          eventName: dbSession.event_name,
+          modelName: dbSession.model_name,
+          startedAt: dbSession.started_at,
+          reason: 'session_in_use'
+        });
+        result.blocked += 1;
+        this.fastify.log.warn({ transcriptionSessionId: dbSession.id, roomId: room.id, pid: lockPid, reason: 'session_in_use' }, 'Transcription recovery blocked');
+        continue;
+      }
+
+      const sessionState = {
+        roomId: room.id,
+        roomSlug: room.slug,
+        recordingId: dbSession.recording_id,
+        folderName: recording.folder_name,
+        recordingFolderPath,
+        sessionId: dbSession.id,
+        eventName: dbSession.event_name,
+        modelName: dbSession.model_name,
+        startedAt: dbSession.started_at,
+        pollTimer: null,
+        polling: false,
+        recovered: true,
+        lockPersistTimer: null,
+        streams: new Map()
+      };
+
+      for (const [producerId, streamState] of Object.entries(lock.streams || {})) {
+        const streamRow = upsertTranscriptionStream({
+          session_id: dbSession.id,
+          room_id: room.id,
+          channel_name: streamState.channelName || 'English',
+          producer_id: producerId,
+          publisher_id: streamState.publisherId || null,
+          producer_name: streamState.producerName || null
+        });
+        sessionState.streams.set(producerId, {
+          streamId: streamRow.id,
+          producerId,
+          publisherId: streamState.publisherId || null,
+          producerName: streamState.producerName || null,
+          channelName: streamState.channelName || 'English',
+          segmentPattern: streamState.segmentPattern || null,
+          matcher: buildSegmentMatcher(streamState.segmentPattern || null),
+          processedFiles: new Set(Array.isArray(streamState.processedFiles) ? streamState.processedFiles : [])
+        });
+      }
+
+      this.sessions.set(room.id, sessionState);
+      this.persistSessionLock(sessionState, 'active');
+      sessionState.pollTimer = setInterval(() => {
+        this.pollRoomSession(sessionState).catch((error) => {
+          this.fastify.log.error(`Transcription poll failed for room ${room.slug}: ${error.message}`);
+        });
+      }, POLL_INTERVAL_MS);
+      result.recovered += 1;
+      this.fastify.log.info({ transcriptionSessionId: dbSession.id, roomId: room.id, recovered: true }, 'Transcription session recovered');
     }
-    return activeSessions.length;
+    return result;
   }
 
   getRoomTranscriptionStatus(roomId) {
+    const blocked = this.blockedSessions.get(roomId);
+    if (blocked) {
+      const session = getTranscriptionSessionByRoomAndId(roomId, blocked.transcriptionSessionId);
+      if (!session || session.status !== 'active') {
+        this.blockedSessions.delete(roomId);
+      } else {
+        return {
+          transcriptionActive: true,
+          transcriptionSessionId: blocked.transcriptionSessionId,
+          eventName: blocked.eventName,
+          modelName: blocked.modelName,
+          startedAt: blocked.startedAt,
+          streamCount: 0,
+          recovered: false,
+          unavailable: true,
+          unavailableReason: blocked.reason
+        };
+      }
+    }
+
     const activeSession = this.sessions.get(roomId);
     if (!activeSession) return null;
 
@@ -214,7 +406,9 @@ export class TranscriptionRuntime {
       eventName: activeSession.eventName,
       modelName: activeSession.modelName,
       startedAt: activeSession.startedAt,
-      streamCount: activeSession.streams.size
+      streamCount: activeSession.streams.size,
+      recovered: Boolean(activeSession.recovered),
+      unavailable: false
     };
   }
 
@@ -230,6 +424,7 @@ export class TranscriptionRuntime {
     if (this.sessions.has(roomId)) {
       return this.getRoomTranscriptionStatus(roomId);
     }
+    this.blockedSessions.delete(roomId);
 
     const created = createTranscriptionSession({
       room_id: roomId,
@@ -250,10 +445,13 @@ export class TranscriptionRuntime {
       startedAt: created.started_at,
       pollTimer: null,
       polling: false,
+      recovered: false,
+      lockPersistTimer: null,
       streams: new Map() // producerId -> streamState
     };
 
     this.sessions.set(roomId, sessionState);
+    this.persistSessionLock(sessionState, 'active');
 
     for (const track of initialTracks) {
       this.registerProducerStream(roomId, track);
@@ -272,10 +470,15 @@ export class TranscriptionRuntime {
   async stopRoomSession(roomId, status = 'stopped', errorMessage = null) {
     const session = this.sessions.get(roomId);
     if (!session) return null;
+    this.blockedSessions.delete(roomId);
 
     if (session.pollTimer) {
       clearInterval(session.pollTimer);
       session.pollTimer = null;
+    }
+    if (session.lockPersistTimer) {
+      clearTimeout(session.lockPersistTimer);
+      session.lockPersistTimer = null;
     }
 
     for (const [producerId] of session.streams) {
@@ -296,6 +499,8 @@ export class TranscriptionRuntime {
       }
       this.docs.delete(docKey);
     }
+    this.persistSessionLock(session, status);
+    this.removeSessionLockByFolder(session.recordingFolderPath);
 
     return {
       transcriptionActive: false,
@@ -304,13 +509,16 @@ export class TranscriptionRuntime {
       modelName: session.modelName,
       startedAt: session.startedAt,
       stoppedAt: stopped?.stopped_at || nowIso(),
-      streamCount: session.streams.size
+      streamCount: session.streams.size,
+      recovered: Boolean(session.recovered),
+      status: stopped?.status || status
     };
   }
 
   async forceStopSession(roomId, sessionId, reason = 'Stopped by admin') {
     const session = getTranscriptionSessionByRoomAndId(roomId, sessionId);
     if (!session) return null;
+    this.blockedSessions.delete(roomId);
 
     const inMemory = this.sessions.get(roomId);
     if (inMemory && inMemory.sessionId === sessionId) {
@@ -320,6 +528,10 @@ export class TranscriptionRuntime {
     if (session.status === 'active') {
       stopAllTranscriptionStreamsBySession(sessionId, 'stopped');
       const stopped = stopTranscriptionSession(sessionId, 'stopped', reason);
+      const recording = getRecordingById(session.recording_id);
+      if (recording?.folder_name) {
+        this.removeSessionLockByFolder(path.join(RECORDING_DIR, recording.folder_name));
+      }
       return {
         transcriptionActive: false,
         transcriptionSessionId: stopped?.id || sessionId,
@@ -367,6 +579,7 @@ export class TranscriptionRuntime {
       processedFiles: new Set()
     };
     session.streams.set(trackInfo.producerId, state);
+    this.scheduleSessionLockPersist(session, 'active');
     return state;
   }
 
@@ -376,6 +589,7 @@ export class TranscriptionRuntime {
     if (session.streams.has(producerId)) {
       stopTranscriptionStream(session.sessionId, producerId, 'stopped');
       session.streams.delete(producerId);
+      this.scheduleSessionLockPersist(session, 'active');
     }
   }
 
@@ -412,6 +626,7 @@ export class TranscriptionRuntime {
       try {
         const finalText = await this.transcribeFile(filePath, 'English');
         streamState.processedFiles.add(filename);
+        this.scheduleSessionLockPersist(session, 'active');
 
         if (!finalText || !finalText.trim()) continue;
 

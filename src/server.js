@@ -11,10 +11,10 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase, getDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
-import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.js';
+import { getRoomBySlug, getRoomById, listRoomsByTenant, createRoom } from './db/models/room.js';
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
-import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
 import TranscriptionRuntime from './transcription/runtime.js';
 
 // ES module equivalent for __dirname
@@ -89,6 +89,7 @@ transcriptionRuntime = new TranscriptionRuntime({
   verifyPublisherToken,
   verifyTenantApiKey,
   getRoomBySlug,
+  getRoomById,
   listRoomsByTenant
 });
 
@@ -1870,12 +1871,10 @@ async function main() {
     onStatusChange: notifyRecordingStatusChange
   });
 
-  if (transcriptionRuntime) {
-    const reconciled = transcriptionRuntime.reconcileStaleSessions();
-    if (reconciled > 0) {
-      fastify.log.warn(`Reconciled ${reconciled} stale transcription session(s) left active from a previous process.`);
-    }
-  }
+  const recoveredRecordings = recoverRecordingSessions({ getRoomById });
+  fastify.log.info({ ...recoveredRecordings }, 'Recording recovery summary');
+  const recoveredTranscriptions = transcriptionRuntime.recoverTranscriptionSessions();
+  fastify.log.info({ ...recoveredTranscriptions }, 'Transcription recovery summary');
 
   // Decorate fastify with router and channels for API routes
   fastify.decorate('mediasoupRouter', router);
