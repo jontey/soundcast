@@ -314,8 +314,6 @@
     <div id="configInfo" class="info-box" style="display: none;">
       <div class="info-label">SFU Configuration</div>
       <div class="info-value" id="sfuUrl"></div>
-      <div class="info-label" style="margin-top: 10px;">Network Type</div>
-      <div class="info-value" id="networkType"></div>
     </div>
 
     <div id="audioSourceContainer" style="display: none;">
@@ -391,6 +389,11 @@
     let wasBroadcasting = false;
     let lastAudioDeviceId = null;
 
+    function getSfuWsUrl() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${protocol}//${window.location.host}/ws`;
+    }
+
     // Status management
     function setStatus(message, className) {
       const statusEl = document.getElementById('status');
@@ -450,18 +453,13 @@
         return;
       }
 
-      if (!roomConfig || !roomConfig.sfuUrl) {
-        console.log('No SFU URL available for reconnect');
-        return;
-      }
-
       sfuReconnectAttempts++;
       const delay = Math.min(pubBaseReconnectInterval * Math.pow(1.5, sfuReconnectAttempts - 1), 30000);
 
       setStatus(`Reconnecting to SFU in ${Math.round(delay / 1000)}s... (${sfuReconnectAttempts}/${pubMaxReconnectAttempts})`, 'connecting');
 
       sfuReconnectTimer = setTimeout(() => {
-        connectToSfu(roomConfig.sfuUrl);
+        connectToSfu();
       }, delay);
     }
 
@@ -633,28 +631,6 @@
       console.log('Room config received:', config);
       roomConfig = config;
 
-      // Check for local-only room accessed via HTTPS
-      if (config.isLocalOnly && window.location.protocol === 'https:') {
-        // Extract local IP from SFU URL to suggest correct access URL
-        let localAccessUrl = '';
-        try {
-          const sfuUrlObj = new URL(config.sfuUrl);
-          const localIp = sfuUrlObj.hostname;
-          // Suggest accessing via the local server (assuming same network)
-          localAccessUrl = `http://${localIp}:3000${window.location.pathname}${window.location.search}`;
-        } catch (e) {
-          console.error('Could not parse SFU URL:', e);
-        }
-
-        const message = localAccessUrl
-          ? `This room uses a local SFU and must be accessed from the local network.\n\nPlease access via:\n${localAccessUrl}`
-          : 'This room uses a local SFU and cannot be accessed over HTTPS. Please access via the local network.';
-
-        showError(message);
-        setStatus('Local network access required', 'disconnected');
-        return;
-      }
-
       // Display channel name
       if (config.channelName) {
         const channelEl = document.getElementById('channelName');
@@ -664,8 +640,7 @@
 
       // Display config info (only in debug mode)
       if (debugMode) {
-        document.getElementById('sfuUrl').textContent = config.sfuUrl;
-        document.getElementById('networkType').textContent = config.isLocalOnly ? 'Local Network' : 'Public Network';
+        document.getElementById('sfuUrl').textContent = getSfuWsUrl();
         document.getElementById('configInfo').style.display = 'block';
       }
 
@@ -680,7 +655,7 @@
       }
 
       // Connect to SFU
-      connectToSfu(config.sfuUrl);
+      connectToSfu();
     }
 
     // Handle recording status updates
@@ -694,7 +669,8 @@
     }
 
     // Connect to SFU WebSocket
-    function connectToSfu(sfuUrl) {
+    function connectToSfu() {
+      const sfuUrl = getSfuWsUrl();
       console.log('Connecting to SFU:', sfuUrl);
       setStatus('Connecting to SFU...', 'connecting');
 

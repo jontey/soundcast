@@ -12,11 +12,9 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase, getDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
-import { registerSfuRoutes } from './routes/sfu-api.js';
 import { getRoomBySlug, listRoomsByTenant, createRoom } from './db/models/room.js';
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
-import { verifySfuSecretKey, listSfus } from './db/models/sfu.js';
 import { initRecorder, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
 
 // ES module equivalent for __dirname
@@ -71,52 +69,14 @@ if (singleTenantMode) {
   // Auto-create default "main" room if it doesn't exist
   const existingRoom = getRoomBySlug('main');
   if (!existingRoom) {
-    const defaultSfuUrl = `ws://localhost:${process.env.PORT || 3000}/ws`;
     createRoom({
       tenant_id: defaultTenant.id,
       name: 'Main',
       slug: 'main',
-      is_local_only: false,
-      sfu_url: defaultSfuUrl,
       coturn_config_json: '[]'
     });
     console.log('Single-tenant mode: Created default "main" room');
   }
-}
-
-/**
- * Rewrite SFU URL protocol and port based on connection security
- * If client connected via wss://, rewrite ws:// to wss:// and update port
- * @param {string} sfuUrl - The original SFU URL
- * @param {object} req - The request object to check connection security
- * @returns {string} The potentially rewritten URL
- */
-function getSecureSfuUrl(sfuUrl, req) {
-  if (!sfuUrl) return sfuUrl;
-
-  // Check if the incoming connection is secure
-  // req.headers['x-forwarded-proto'] for reverse proxy scenarios
-  // req.socket.encrypted for direct TLS connections
-  const isSecure = req.socket?.encrypted ||
-    req.headers?.['x-forwarded-proto'] === 'https' ||
-    req.protocol === 'https';
-
-  if (isSecure && sfuUrl.startsWith('ws://')) {
-    const httpPort = process.env.PORT || '3000';
-    const httpsPort = process.env.HTTPS_PORT || '3001';
-
-    // Replace protocol
-    let secureUrl = sfuUrl.replace(/^ws:\/\//, 'wss://');
-
-    // Replace port if it matches the HTTP port
-    // Matches :3000/ or :3000 at end of string
-    const portRegex = new RegExp(`:${httpPort}(\\/|$)`);
-    secureUrl = secureUrl.replace(portRegex, `:${httpsPort}$1`);
-
-    return secureUrl;
-  }
-
-  return sfuUrl;
 }
 
 /**
@@ -176,9 +136,6 @@ fastify.register(fastifyWebsocket, {
 
 // Register REST API routes
 fastify.register(registerApiRoutes);
-
-// Register SFU management routes
-fastify.register(registerSfuRoutes);
 
 // Room-specific HTML routes
 fastify.get('/room/:slug/publish', async (request, reply) => {
@@ -271,12 +228,6 @@ const clients = new Map();
 // Tenant admin WebSocket connections: tenantId -> Set<socket>
 const tenantAdminClients = new Map();
 
-// SFU stats WebSocket connections: sfuId -> socket
-const sfuStatsClients = new Map();
-
-// Local SFU stats: sfuId -> { channels: { channelName: { publishers, subscribers } } }
-const localSfuStats = new Map();
-
 // Broadcast updated channel list to all clients
 function broadcastChannelList() {
   const list = Array.from(channels.keys());
@@ -289,19 +240,7 @@ function broadcastChannelList() {
   }
 }
 
-// Get SFU ID for a room by matching sfu_url
-function getSfuIdForRoom(room) {
-  if (!room.sfu_url) return null;
-  const sfus = listSfus();
-  for (const sfu of sfus) {
-    if (sfu.url === room.sfu_url) {
-      return sfu.id;
-    }
-  }
-  return null;
-}
-
-// Get channel stats for a specific tenant (combines main SFU and local SFU data)
+// Get channel stats for a specific tenant.
 function getChannelStatsForTenant(tenantId) {
   const stats = {};
   const rooms = listRoomsByTenant(tenantId);
@@ -328,7 +267,7 @@ function getChannelStatsForTenant(tenantId) {
         return uniqueListeners.size;
       }
 
-      // Check main SFU's channels Map (try both formats)
+      // Check channels Map (try both full and legacy formats)
       if (channels.has(fullChannelId)) {
         const ch = channels.get(fullChannelId);
         stats[room.slug][channelName] = {
@@ -342,20 +281,6 @@ function getChannelStatsForTenant(tenantId) {
           publishers: countActivePublishers(ch),
           subscribers: countUniqueListeners(ch)
         };
-      }
-      // Check local SFU stats (if room uses local SFU)
-      else if (room.is_local_only) {
-        const sfuId = getSfuIdForRoom(room);
-        const sfuStats = sfuId ? localSfuStats.get(sfuId) : null;
-        // Local SFU uses full channel ID format
-        if (sfuStats?.channels?.[fullChannelId]) {
-          stats[room.slug][channelName] = sfuStats.channels[fullChannelId];
-        } else if (sfuStats?.channels?.[channelName]) {
-          // Fallback to legacy format
-          stats[room.slug][channelName] = sfuStats.channels[channelName];
-        } else {
-          stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
-        }
       } else {
         stats[room.slug][channelName] = { publishers: 0, subscribers: 0 };
       }
@@ -629,56 +554,6 @@ function notifyPublishersListenerCount(channelId) {
       } catch (e) {
         // Client may have disconnected
       }
-    }
-  }
-}
-
-// Notify tenant admins with stats from local SFU
-function notifyTenantAdminsFromSfu(sfuId, channelId, stats) {
-  // Find which rooms use this SFU
-  const allSfus = listSfus();
-  const sfu = allSfus.find(s => s.id === sfuId);
-  if (!sfu) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: SFU ${sfuId} not found`);
-    return;
-  }
-
-  const tenantId = sfu.tenant_id;
-  const adminSockets = tenantAdminClients.get(tenantId);
-  if (!adminSockets || adminSockets.size === 0) {
-    fastify.log.info(`notifyTenantAdminsFromSfu: No admin sockets for tenant ${tenantId}`);
-    return;
-  }
-
-  // Find the room for this channel
-  const roomInfo = findRoomForChannel(channelId);
-  if (!roomInfo) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: Room not found for channel "${channelId}"`);
-    return;
-  }
-  if (roomInfo.tenant_id !== tenantId) {
-    fastify.log.warn(`notifyTenantAdminsFromSfu: Channel "${channelId}" belongs to tenant ${roomInfo.tenant_id}, not ${tenantId}`);
-    return;
-  }
-
-  // Use short channel name for the update (frontend expects "English", not "sjh2:English")
-  const shortChannelName = getShortChannelName(channelId);
-
-  const update = {
-    type: 'channel-update',
-    roomSlug: roomInfo.slug,
-    channelName: shortChannelName,
-    publishers: stats.publishers,
-    subscribers: stats.subscribers
-  };
-
-  fastify.log.info(`Sending channel update to ${adminSockets.size} admin(s): ${JSON.stringify(update)}`);
-
-  for (const socket of adminSockets) {
-    try {
-      socket.send(JSON.stringify(update));
-    } catch (e) {
-      fastify.log.error(`Failed to send SFU update to tenant admin: ${e.message}`);
     }
   }
 }
@@ -1640,16 +1515,11 @@ async function registerRoomWsRoutes(fastify) {
     // Get available channels for this room
     const channels = getChannelsByRoom(room.id);
 
-    // Rewrite SFU URL to wss:// if client connected securely
-    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
-
     // Prepare configuration message with channels
     const config = {
       type: 'config',
       data: {
-        sfuUrl: sfuUrl,
         iceServers: iceServers,
-        isLocalOnly: room.is_local_only,
         channels: channels,
         roomSlug: slug
       }
@@ -1663,7 +1533,7 @@ async function registerRoomWsRoutes(fastify) {
         if (payload.type === 'get-config') {
           // Client requests config after handlers are ready (fixes iOS Safari timing issue)
           connection.send(JSON.stringify(config));
-          fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, sfuUrl: ${sfuUrl}, channels: ${channels.join(', ')}`);
+          fastify.log.info(`Config sent to listener ${clientId} for room ${slug}, channels: ${channels.join(', ')}`);
         } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
@@ -1751,16 +1621,11 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
-    // Rewrite SFU URL to wss:// if client connected securely
-    const sfuUrl = getSecureSfuUrl(room.sfu_url, req);
-
     // Prepare configuration message with channel name
     const config = {
       type: 'config',
       data: {
-        sfuUrl: sfuUrl,
         iceServers: iceServers,
-        isLocalOnly: room.is_local_only,
         channelName: publisher.channel_name,
         publisherId: publisher.id,
         isRecording: isRecording(room.id)
@@ -1775,7 +1640,7 @@ async function registerRoomWsRoutes(fastify) {
         if (payload.type === 'get-config') {
           // Client requests config after handlers are ready (fixes iOS Safari timing issue)
           connection.send(JSON.stringify(config));
-          fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, sfuUrl: ${sfuUrl}, channel: ${publisher.channel_name}`);
+          fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
         } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
@@ -1877,97 +1742,6 @@ async function registerAdminWsRoutes(fastify) {
     });
   });
 
-  // SFU Stats endpoint: /ws/sfu-stats?secretKey=xxx
-  fastify.get('/ws/sfu-stats', { websocket: true }, (connection, req) => {
-    const secretKey = req.query.secretKey;
-
-    // Verify secret key
-    if (!secretKey) {
-      fastify.log.warn('Missing secret key for SFU stats WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Missing secret key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    const sfu = verifySfuSecretKey(secretKey);
-    if (!sfu) {
-      fastify.log.warn('Invalid secret key for SFU stats WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid secret key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    fastify.log.info(`SFU stats connected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
-
-    // Store connection
-    sfuStatsClients.set(sfu.id, connection);
-
-    // Initialize empty stats for this SFU
-    localSfuStats.set(sfu.id, { channels: {} });
-
-    // Send acknowledgment
-    connection.send(JSON.stringify({
-      type: 'connected',
-      sfuId: sfu.id
-    }));
-
-    connection.on('message', async (message) => {
-      try {
-        const payload = JSON.parse(message.toString());
-
-        if (payload.type === 'stats-update') {
-          fastify.log.info(`Received stats-update from SFU ${sfu.id}: ${JSON.stringify(payload.channels)}`);
-
-          // Update local SFU stats
-          const previousStats = localSfuStats.get(sfu.id) || { channels: {} };
-          localSfuStats.set(sfu.id, { channels: payload.channels || {} });
-
-          // Notify tenant admins for each channel that changed
-          for (const channelName in payload.channels) {
-            const newStats = payload.channels[channelName];
-            const oldStats = previousStats.channels?.[channelName];
-
-            // Only notify if stats changed
-            if (!oldStats ||
-              oldStats.publishers !== newStats.publishers ||
-              oldStats.subscribers !== newStats.subscribers) {
-              fastify.log.info(`Stats changed for channel ${channelName}, notifying tenant admins...`);
-              notifyTenantAdminsFromSfu(sfu.id, channelName, newStats);
-            }
-          }
-
-          // Check for removed channels
-          for (const channelName in previousStats.channels) {
-            if (!(channelName in (payload.channels || {}))) {
-              notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
-            }
-          }
-        }
-      } catch (e) {
-        fastify.log.error(`Invalid message from SFU ${sfu.id}: ${e.message}`);
-      }
-    });
-
-    connection.on('close', () => {
-      fastify.log.info(`SFU stats disconnected: ${sfu.name || 'unnamed'} (ID: ${sfu.id})`);
-      sfuStatsClients.delete(sfu.id);
-
-      // Clear stats and notify admins about offline channels
-      const oldStats = localSfuStats.get(sfu.id);
-      if (oldStats?.channels) {
-        for (const channelName in oldStats.channels) {
-          notifyTenantAdminsFromSfu(sfu.id, channelName, { publishers: 0, subscribers: 0 });
-        }
-      }
-      localSfuStats.delete(sfu.id);
-    });
-  });
 }
 
 // Register all WebSocket routes on a Fastify instance
@@ -2022,7 +1796,6 @@ function createHttpsServer() {
   });
 
   fastifyHttps.register(registerApiRoutes);
-  fastifyHttps.register(registerSfuRoutes);
 
   // Register WebSocket routes on HTTPS server
   registerAllWsRoutes(fastifyHttps);

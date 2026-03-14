@@ -70,8 +70,6 @@ The admin UI will auto-login in single-tenant mode.
 1. Click "Create Room"
 2. Fill in:
    - **Name**: e.g., "Conference Room"
-   - **Use Local SFU Only**: Leave unchecked (uses embedded SFU)
-   - **SFU URL**: Auto-filled to `ws://<your-ip>:3000/ws`
    - **TURN/STUN Config**: For same-subnet LAN, use `[]` (empty array)
 
 3. Click "Create Room"

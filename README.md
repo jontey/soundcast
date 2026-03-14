@@ -9,7 +9,7 @@ Soundcast is a real-time audio broadcasting platform built with Node.js, Fastify
 - Publisher token authentication
 - Live publisher/listener status in tenant admin
 - Room recording with per-track output
-- Local/public SFU routing modes
+- Embedded SFU signaling at `/ws` (client-derived `ws(s)://<host>/ws`)
 
 ## Architecture
 

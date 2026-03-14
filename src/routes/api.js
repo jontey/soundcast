@@ -20,13 +20,13 @@ export async function registerApiRoutes(fastify) {
   fastify.post('/api/rooms', {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
-      const { name, is_local_only, sfu_url, coturn_config_json } = request.body;
+      const { name, slug, coturn_config_json } = request.body;
 
       // Validate required fields
-      if (!name || is_local_only === undefined || !sfu_url || !coturn_config_json) {
+      if (!name || !coturn_config_json) {
         return reply.code(400).send({
           error: 'Bad Request',
-          message: 'Missing required fields: name, is_local_only, sfu_url, coturn_config_json'
+          message: 'Missing required fields: name, coturn_config_json'
         });
       }
 
@@ -44,16 +44,14 @@ export async function registerApiRoutes(fastify) {
         const room = createRoom({
           tenant_id: request.tenant.id,
           name,
-          is_local_only,
-          sfu_url,
+          slug,
           coturn_config_json
         });
 
         return reply.code(201).send({
           id: room.id,
           name: room.name,
-          slug: room.slug,
-          is_local_only: room.is_local_only
+          slug: room.slug
         });
       } catch (error) {
         // Check for unique constraint violation
@@ -78,10 +76,10 @@ export async function registerApiRoutes(fastify) {
     preHandler: authenticateTenant,
     handler: async (request, reply) => {
       const { room_slug } = request.params;
-      const { name, slug, is_local_only, sfu_url, coturn_config_json } = request.body;
+      const { name, slug, coturn_config_json } = request.body;
 
       // Validate at least one field is provided
-      if (!name && !slug && is_local_only === undefined && !sfu_url && !coturn_config_json) {
+      if (!name && !slug && !coturn_config_json) {
         return reply.code(400).send({
           error: 'Bad Request',
           message: 'At least one field must be provided for update'
@@ -122,8 +120,6 @@ export async function registerApiRoutes(fastify) {
         const updates = {};
         if (name !== undefined) updates.name = name;
         if (slug !== undefined) updates.slug = slug;
-        if (is_local_only !== undefined) updates.is_local_only = is_local_only;
-        if (sfu_url !== undefined) updates.sfu_url = sfu_url;
         if (coturn_config_json !== undefined) updates.coturn_config_json = coturn_config_json;
 
         const updatedRoom = updateRoom(room_slug, updates);
@@ -132,8 +128,6 @@ export async function registerApiRoutes(fastify) {
           id: updatedRoom.id,
           name: updatedRoom.name,
           slug: updatedRoom.slug,
-          is_local_only: updatedRoom.is_local_only,
-          sfu_url: updatedRoom.sfu_url,
           coturn_config_json: updatedRoom.coturn_config_json
         });
       } catch (error) {
@@ -158,8 +152,6 @@ export async function registerApiRoutes(fastify) {
             id: room.id,
             name: room.name,
             slug: room.slug,
-            is_local_only: room.is_local_only,
-            sfu_url: room.sfu_url,
             coturn_config_json: room.coturn_config_json,
             created_at: room.created_at
           }))
@@ -201,8 +193,6 @@ export async function registerApiRoutes(fastify) {
           id: room.id,
           name: room.name,
           slug: room.slug,
-          is_local_only: room.is_local_only,
-          sfu_url: room.sfu_url,
           coturn_config_json: room.coturn_config_json,
           created_at: room.created_at
         });
