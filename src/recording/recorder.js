@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getPublisherById } from '../db/models/publisher.js';
 import {
   createRecording,
   getActiveRecordingByRoomId,
@@ -198,9 +199,13 @@ export function recoverRecordingSessions({ getRoomById }) {
  * @returns {number} Available port
  */
 function allocatePort() {
-  for (let port = RTP_PORT_MIN; port <= RTP_PORT_MAX; port++) {
-    if (!usedPorts.has(port)) {
+  // Reserve RTP/RTCP as a pair (port + 1) to avoid collisions between
+  // concurrent FFmpeg inputs that may bind both sockets.
+  const start = RTP_PORT_MIN % 2 === 0 ? RTP_PORT_MIN : RTP_PORT_MIN + 1;
+  for (let port = start; port <= RTP_PORT_MAX - 1; port += 2) {
+    if (!usedPorts.has(port) && !usedPorts.has(port + 1)) {
       usedPorts.add(port);
+      usedPorts.add(port + 1);
       return port;
     }
   }
@@ -471,7 +476,16 @@ class TrackRecorder {
     const segmentRegex = new RegExp(`^${baseName}_(\\d{3})\\.ogg$`);
     const entries = fs.readdirSync(outputDir)
       .filter(name => segmentRegex.test(name))
-      .sort();
+      .sort()
+      .filter(name => {
+        const filePath = path.join(outputDir, name);
+        try {
+          const stat = fs.statSync(filePath);
+          return stat.isFile() && stat.size > 0;
+        } catch {
+          return false;
+        }
+      });
 
     if (entries.length === 0) {
       console.warn(`No segments found for ${this.producerName}, skip merge`);
@@ -504,11 +518,16 @@ class TrackRecorder {
       });
     });
 
-    fs.unlinkSync(listPath);
+    if (fs.existsSync(listPath)) {
+      fs.unlinkSync(listPath);
+    }
 
     if (RECORDING_DELETE_SEGMENTS_AFTER_MERGE) {
       for (const name of entries) {
-        fs.unlinkSync(path.join(outputDir, name));
+        const segmentPath = path.join(outputDir, name);
+        if (fs.existsSync(segmentPath)) {
+          fs.unlinkSync(segmentPath);
+        }
       }
     }
 
@@ -621,10 +640,20 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   const producer = producerInfo.producer;
   if (!producer || producer.closed) return;
 
+  // Use publisher's configured channel as the source of truth when available.
+  // This prevents misrouting if a client sends an incorrect channelId during signaling.
+  let resolvedChannelName = channelName;
+  if (producerInfo.publisherId) {
+    const publisher = getPublisherById(producerInfo.publisherId);
+    if (publisher?.channel_name) {
+      resolvedChannelName = publisher.channel_name;
+    }
+  }
+
   // Get producer name from client info or use generic name
   const producerName = producerInfo.name || `producer_${Date.now()}`;
   const sanitizedName = sanitizeName(producerName);
-  const sanitizedChannel = sanitizeName(channelName);
+  const sanitizedChannel = sanitizeName(resolvedChannelName);
 
   // Create output path
   const baseName = `${sanitizedName}_${Date.now()}`;
@@ -636,7 +665,7 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   // Create track in database
   const track = createRecordingTrack(
     session.recordingId,
-    channelName,
+    resolvedChannelName,
     producerId,
     producerName,
     relativePath
@@ -645,7 +674,7 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
   // Create and start track recorder
   const trackRecorder = new TrackRecorder(
     producerId,
-    channelName,
+    resolvedChannelName,
     producerName,
     segmentPattern,
     mergedFilePath,

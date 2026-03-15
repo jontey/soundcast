@@ -1208,10 +1208,8 @@
           return response.json();
         });
 
-        // Store in state
-        if (!state.publishers[slug]) {
-          state.publishers[slug] = data.publishers;
-        }
+        // Keep publisher channel cache current for transcript tab resolution.
+        state.publishers[slug] = data.publishers;
 
         const stats = state.channelStats[slug] || channelStats[slug] || {};
 
@@ -2115,10 +2113,12 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
           sessionState.followActive = true;
         }
 
-        let channels = (payload.docs || []).map((doc) => doc.channelName);
-        if (channels.length === 0 && Array.isArray(state.publishers[roomSlug])) {
-          channels = [...new Set(state.publishers[roomSlug].map((publisher) => publisher.channel_name))];
-        }
+        const channels = [...new Set([
+          ...(payload.docs || []).map((doc) => doc.channelName).filter(Boolean),
+          ...(Array.isArray(state.publishers[roomSlug])
+            ? state.publishers[roomSlug].map((publisher) => publisher.channel_name).filter(Boolean)
+            : [])
+        ])];
         transcriptChannels[roomSlug] = channels;
         renderTranscriptSessionControls(roomSlug);
 

@@ -277,7 +277,11 @@ function getRecordingStatusForTenant(tenantId) {
         transcriptionActive: Boolean(transcriptionStatus),
         transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
         eventName: transcriptionStatus?.eventName || null,
-        modelName: transcriptionStatus?.modelName || null
+        modelName: transcriptionStatus?.modelName || null,
+        sidecarMode: transcriptionStatus?.sidecarMode || null,
+        sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+        sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+        sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
       };
     } else {
       recordingStats[room.slug] = {
@@ -285,7 +289,11 @@ function getRecordingStatusForTenant(tenantId) {
         transcriptionActive: Boolean(transcriptionStatus),
         transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
         eventName: transcriptionStatus?.eventName || null,
-        modelName: transcriptionStatus?.modelName || null
+        modelName: transcriptionStatus?.modelName || null,
+        sidecarMode: transcriptionStatus?.sidecarMode || null,
+        sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+        sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+        sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
       };
     }
   }
@@ -325,7 +333,11 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
     transcriptionActive: Boolean(transcriptionStatus),
     transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
     eventName: transcriptionStatus?.eventName || null,
-    modelName: transcriptionStatus?.modelName || null
+    modelName: transcriptionStatus?.modelName || null,
+    sidecarMode: transcriptionStatus?.sidecarMode || null,
+    sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+    sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+    sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
   };
 
   const message = JSON.stringify({
@@ -1036,7 +1048,7 @@ async function registerMainWsRoutes(fastify) {
                 try {
                   const trackInfo = await addProducerToRecording(room.id, producerId, channelName, producerInfo);
                   if (transcriptionRuntime && trackInfo && transcriptionRuntime.getRoomSession(room.id)) {
-                    transcriptionRuntime.registerProducerStream(room.id, trackInfo);
+                    await transcriptionRuntime.registerProducerStream(room.id, trackInfo);
                   }
                   fastify.log.info(`Added producer ${producerId} to active recording for room ${roomSlug}`);
                 } catch (err) {
@@ -1616,7 +1628,11 @@ async function registerRoomWsRoutes(fastify) {
         isRecording: isRecording(room.id),
         transcriptionActive: Boolean(transcriptionStatus),
         transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
-        eventName: transcriptionStatus?.eventName || null
+        eventName: transcriptionStatus?.eventName || null,
+        sidecarMode: transcriptionStatus?.sidecarMode || null,
+        sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+        sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+        sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
       }
     };
 
@@ -1848,6 +1864,40 @@ function getRecordingContextForProducer(roomId, producerId) {
 
 // Main async entry point
 async function main() {
+  let shuttingDown = false;
+  let httpsServer = null;
+  const gracefulShutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    fastify.log.info({ signal }, 'Shutting down server');
+    try {
+      if (httpsServer) {
+        await httpsServer.close();
+      }
+    } catch (error) {
+      fastify.log.warn({ err: error }, 'Failed closing HTTPS server');
+    }
+    try {
+      await fastify.close();
+    } catch (error) {
+      fastify.log.warn({ err: error }, 'Failed closing HTTP server');
+    }
+    process.exit(0);
+  };
+
+  process.once('SIGINT', () => {
+    gracefulShutdown('SIGINT').catch((error) => {
+      fastify.log.error({ err: error }, 'Shutdown failed');
+      process.exit(1);
+    });
+  });
+  process.once('SIGTERM', () => {
+    gracefulShutdown('SIGTERM').catch((error) => {
+      fastify.log.error({ err: error }, 'Shutdown failed');
+      process.exit(1);
+    });
+  });
+
   // Create mediasoup Worker
   worker = await mediasoup.createWorker({
     rtcMinPort: mediasoupConfig.rtcMinPort,
@@ -1873,7 +1923,7 @@ async function main() {
 
   const recoveredRecordings = recoverRecordingSessions({ getRoomById });
   fastify.log.info({ ...recoveredRecordings }, 'Recording recovery summary');
-  const recoveredTranscriptions = transcriptionRuntime.recoverTranscriptionSessions();
+  const recoveredTranscriptions = await transcriptionRuntime.recoverTranscriptionSessions();
   fastify.log.info({ ...recoveredTranscriptions }, 'Transcription recovery summary');
 
   // Decorate fastify with router and channels for API routes
@@ -1881,6 +1931,11 @@ async function main() {
   fastify.decorate('mediasoupChannels', channels);
   fastify.decorate('transcriptionRuntime', transcriptionRuntime);
   fastify.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
+  fastify.addHook('onClose', async () => {
+    if (transcriptionRuntime) {
+      await transcriptionRuntime.shutdown();
+    }
+  });
 
   // Start HTTP server
   try {
@@ -1892,7 +1947,7 @@ async function main() {
   }
 
   // Start HTTPS server if certificates are available
-  const httpsServer = createHttpsServer();
+  httpsServer = createHttpsServer();
   if (httpsServer) {
     try {
       await httpsServer.listen({ port: HTTPS_PORT, host: HOST });

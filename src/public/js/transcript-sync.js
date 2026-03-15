@@ -1,6 +1,11 @@
 (async function initTranscriptSync() {
   const Y = await import('https://esm.sh/yjs@13.6.27');
 
+  function isNearBottom(textarea, threshold = 24) {
+    const remaining = textarea.scrollHeight - textarea.scrollTop - textarea.clientHeight;
+    return remaining <= threshold;
+  }
+
   function applyTextDiff(ydoc, ytext, oldText, newText) {
     if (oldText === newText) return;
 
@@ -28,12 +33,14 @@
     const ytext = ydoc.getText('transcript');
     let socket = null;
     let applyingRemote = false;
+    let followTail = true;
 
     function renderFromY() {
       const next = ytext.toString();
       if (textarea.value === next) return;
 
       const hadFocus = document.activeElement === textarea;
+      const shouldFollow = followTail || isNearBottom(textarea);
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       applyingRemote = true;
@@ -43,6 +50,10 @@
       if (hadFocus) {
         const max = textarea.value.length;
         textarea.setSelectionRange(Math.min(start, max), Math.min(end, max));
+      }
+
+       if (shouldFollow) {
+        textarea.scrollTop = textarea.scrollHeight;
       }
     }
 
@@ -54,7 +65,11 @@
       if (applyingRemote) return;
       applyTextDiff(ydoc, ytext, ytext.toString(), textarea.value);
     };
+    const onScroll = () => {
+      followTail = isNearBottom(textarea);
+    };
     textarea.addEventListener('input', onInput);
+    textarea.addEventListener('scroll', onScroll);
 
     ydoc.on('update', (update, origin) => {
       if (origin === 'remote') return;
@@ -111,6 +126,7 @@
       ytext,
       destroy() {
         textarea.removeEventListener('input', onInput);
+        textarea.removeEventListener('scroll', onScroll);
         try {
           socket?.close();
         } catch { }

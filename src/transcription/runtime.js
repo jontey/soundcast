@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { spawn } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
 import * as Y from 'yjs';
 import {
@@ -23,14 +24,27 @@ import {
 import { getRecordingById } from '../db/models/recording.js';
 
 const DEFAULT_MODEL = process.env.TRANSCRIPTION_MODEL || 'mlx-community/Qwen3-ASR-0.6B-8bit';
-const SIDECAR_URL = process.env.TRANSCRIPTION_SIDECAR_URL || 'http://127.0.0.1:8765';
+const SIDECAR_HOST = process.env.TRANSCRIPTION_SIDECAR_HOST || '127.0.0.1';
+const SIDECAR_PORT_START = parseInt(process.env.TRANSCRIPTION_SIDECAR_PORT_START || '8765', 10);
+const MAX_SIDECAR_INSTANCES = parseInt(process.env.TRANSCRIPTION_MAX_SIDECAR_INSTANCES || '4', 10);
+const SIDECAR_START_SCRIPT = process.env.TRANSCRIPTION_SIDECAR_START_SCRIPT
+  || path.join(process.cwd(), 'scripts', 'start-transcription-sidecar.sh');
+const SIDECAR_LOG_PREFIX = process.env.TRANSCRIPTION_SIDECAR_LOG_PREFIX || '/tmp/soundcast-asr';
+const SIDECAR_HEALTH_TIMEOUT_MS = parseInt(process.env.TRANSCRIPTION_SIDECAR_HEALTH_TIMEOUT_MS || '45000', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.TRANSCRIPTION_POLL_INTERVAL_MS || '5000', 10);
 const MIN_SEGMENT_AGE_MS = parseInt(process.env.TRANSCRIPTION_MIN_SEGMENT_AGE_MS || '1500', 10);
+const RECORDING_SEGMENT_SECONDS = parseInt(process.env.RECORDING_SEGMENT_SECONDS || '5', 10);
+const FINALIZED_SEGMENT_MIN_AGE_MS = parseInt(
+  process.env.TRANSCRIPTION_FINALIZED_SEGMENT_MIN_AGE_MS || String((RECORDING_SEGMENT_SECONDS + 1) * 1000),
+  10
+);
 const SNAPSHOT_DEBOUNCE_MS = parseInt(process.env.TRANSCRIPTION_SNAPSHOT_DEBOUNCE_MS || '300', 10);
 const RECORDING_DIR = process.env.RECORDING_DIR || path.join(process.cwd(), 'recordings');
 const AVAILABILITY_CACHE_MS = 15000;
 const TRANSCRIPTION_LOCK_VERSION = 1;
 const TRANSCRIPTION_LOCK_FILENAME = 'transcription.lock.json';
+const TRANSCRIPTION_LANGUAGE = (process.env.TRANSCRIPTION_LANGUAGE || '').trim();
+const SIDECAR_MODE = 'per-channel';
 
 function nowIso() {
   return new Date().toISOString();
@@ -52,6 +66,22 @@ function parseTimestampStartMs(filename) {
   const match = filename.match(/_(\d{3})\.ogg$/);
   if (!match) return null;
   return parseInt(match[1], 10) * 1000;
+}
+
+function sanitizeTranscriptText(input) {
+  if (!input) return '';
+  return String(input)
+    .replace(/<asr_text>/gi, '')
+    .replace(/\uFFFD/g, '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+
+function sanitizeLabel(input, fallback = 'unknown') {
+  const value = String(input || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  if (!value) return fallback;
+  return value.slice(0, 80);
 }
 
 function parseTranscriptWsRequest(req) {
@@ -155,6 +185,10 @@ export class TranscriptionRuntime {
     this.sessions = new Map(); // roomId -> sessionState
     this.blockedSessions = new Map(); // roomId -> blocked session metadata
     this.docs = new Map(); // key(sessionId:roomSlug:channel) -> TranscriptDocState
+    this.sidecarInstances = new Map(); // instanceId -> instance state
+    this.channelAssignments = new Map(); // roomId::channelName -> instanceId
+    this.channelUsageCounts = new Map(); // roomId::channelName -> active stream count
+    this.nextInstanceId = 1;
 
     this.lastAvailabilityCheckAt = 0;
     this.lastAvailability = null;
@@ -166,6 +200,19 @@ export class TranscriptionRuntime {
 
   makeDocKey(roomSlug, channelName, sessionId) {
     return `${sessionId}::${roomSlug}::${channelName}`;
+  }
+
+  makeChannelKey(roomId, channelName) {
+    return `${roomId}::${channelName}`;
+  }
+
+  countRoomSidecars(roomId) {
+    let count = 0;
+    const prefix = `${roomId}::`;
+    for (const key of this.channelAssignments.keys()) {
+      if (key.startsWith(prefix)) count += 1;
+    }
+    return count;
   }
 
   getLockPathFromFolder(recordingFolderPath) {
@@ -180,7 +227,10 @@ export class TranscriptionRuntime {
         publisherId: stream.publisherId || null,
         producerName: stream.producerName || null,
         segmentPattern: stream.segmentPattern || null,
-        processedFiles: Array.from(stream.processedFiles || [])
+        processedFiles: Array.from(stream.processedFiles || []),
+        sidecarInstanceId: stream.sidecarInstanceId || null,
+        sidecarPort: stream.sidecarPort || null,
+        sidecarUrl: stream.sidecarUrl || null
       };
     }
     return {
@@ -243,16 +293,11 @@ export class TranscriptionRuntime {
     }
 
     try {
-      const response = await fetch(`${SIDECAR_URL}/health`, { method: 'GET' });
-      if (!response.ok) {
-        this.lastAvailability = { ok: false, reason: `ASR sidecar health check failed (${response.status}).` };
-        this.lastAvailabilityCheckAt = now;
-        return this.lastAvailability;
-      }
-
-      const data = await response.json();
-      if (!data?.ready) {
-        this.lastAvailability = { ok: false, reason: data?.reason || 'ASR sidecar is not ready.' };
+      if (!fs.existsSync(SIDECAR_START_SCRIPT)) {
+        this.lastAvailability = {
+          ok: false,
+          reason: `ASR sidecar start script is missing: ${SIDECAR_START_SCRIPT}`
+        };
         this.lastAvailabilityCheckAt = now;
         return this.lastAvailability;
       }
@@ -279,11 +324,268 @@ export class TranscriptionRuntime {
     }
   }
 
+  waitForSidecarReady(url) {
+    const timeoutAt = Date.now() + SIDECAR_HEALTH_TIMEOUT_MS;
+    return new Promise((resolve, reject) => {
+      const check = async () => {
+        if (Date.now() > timeoutAt) {
+          reject(new Error(`ASR sidecar health timeout (${url})`));
+          return;
+        }
+
+        try {
+          const response = await fetch(`${url}/health`, { method: 'GET' });
+          if (!response.ok) {
+            setTimeout(check, 500);
+            return;
+          }
+          const data = await response.json();
+          if (data?.ready) {
+            resolve(data);
+            return;
+          }
+        } catch { }
+        setTimeout(check, 500);
+      };
+      check().catch(reject);
+    });
+  }
+
+  findFreePort(preferredPort = null) {
+    const tryPort = (port) => {
+      if (!Number.isFinite(port) || port <= 0) return false;
+      if (this.sidecarInstances.size >= MAX_SIDECAR_INSTANCES) return false;
+      for (const instance of this.sidecarInstances.values()) {
+        if (instance.port === port) return false;
+      }
+      return true;
+    };
+
+    if (tryPort(preferredPort)) return preferredPort;
+
+    for (let offset = 0; offset < 100; offset += 1) {
+      const candidate = SIDECAR_PORT_START + offset;
+      if (tryPort(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  async spawnSidecarInstance({ roomId, roomSlug, channelName, modelName, preferredPort = null }) {
+    const port = this.findFreePort(preferredPort);
+    if (!port) {
+      const error = new Error('ASR sidecar capacity exceeded');
+      error.code = 'SIDECAR_CAPACITY_EXCEEDED';
+      throw error;
+    }
+
+    const instanceId = `asr-${this.nextInstanceId++}`;
+    const roomLabel = sanitizeLabel(roomSlug || `room-${roomId}`, `room-${roomId}`);
+    const channelLabel = sanitizeLabel(channelName, 'channel');
+    const logBase = `${SIDECAR_LOG_PREFIX}-${roomLabel}-${channelLabel}-${port}`;
+    const outPath = `${logBase}.out.log`;
+    const errPath = `${logBase}.err.log`;
+    const outFd = fs.openSync(outPath, 'a');
+    const errFd = fs.openSync(errPath, 'a');
+    const url = `http://${SIDECAR_HOST}:${port}`;
+
+    const child = spawn('bash', [SIDECAR_START_SCRIPT], {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        ASR_MODEL_ID: modelName || DEFAULT_MODEL,
+        ...(process.env.TRANSCRIPTION_PYTHON_BIN ? { PYTHON_BIN: process.env.TRANSCRIPTION_PYTHON_BIN } : {})
+      },
+      stdio: ['ignore', outFd, errFd]
+    });
+    fs.closeSync(outFd);
+    fs.closeSync(errFd);
+
+    const instance = {
+      id: instanceId,
+      roomId,
+      roomSlug,
+      channelName,
+      modelName: modelName || DEFAULT_MODEL,
+      port,
+      url,
+      process: child,
+      refs: 0,
+      outPath,
+      errPath
+    };
+
+    this.sidecarInstances.set(instanceId, instance);
+
+    child.on('exit', (code, signal) => {
+      const stillTracked = this.sidecarInstances.get(instanceId);
+      if (!stillTracked) return;
+      this.fastify.log.error({
+        instanceId,
+        roomId,
+        roomSlug,
+        channelName,
+        port,
+        code,
+        signal
+      }, 'ASR sidecar instance exited');
+      this.handleSidecarCrash(stillTracked);
+    });
+
+    try {
+      await this.waitForSidecarReady(url);
+    } catch (error) {
+      this.shutdownSidecarInstance(instanceId, { force: true, removeAssignment: true });
+      throw error;
+    }
+
+    this.fastify.log.info({
+      instanceId,
+      roomId,
+      roomSlug,
+      channelName,
+      port,
+      mode: SIDECAR_MODE
+    }, 'ASR sidecar instance ready');
+
+    return instance;
+  }
+
+  async ensureChannelSidecar({ roomId, roomSlug, channelName, modelName, preferredPort = null }) {
+    const channelKey = this.makeChannelKey(roomId, channelName);
+    const existingId = this.channelAssignments.get(channelKey);
+    if (existingId) {
+      const existing = this.sidecarInstances.get(existingId);
+      if (existing) return existing;
+      this.channelAssignments.delete(channelKey);
+    }
+
+    if (this.sidecarInstances.size >= MAX_SIDECAR_INSTANCES) {
+      const error = new Error('ASR sidecar capacity exceeded');
+      error.code = 'SIDECAR_CAPACITY_EXCEEDED';
+      throw error;
+    }
+
+    const instance = await this.spawnSidecarInstance({
+      roomId,
+      roomSlug,
+      channelName,
+      modelName,
+      preferredPort
+    });
+    this.channelAssignments.set(channelKey, instance.id);
+    this.fastify.log.info({
+      roomId,
+      roomSlug,
+      channelName,
+      instanceId: instance.id,
+      port: instance.port
+    }, 'Assigned ASR sidecar to channel');
+    return instance;
+  }
+
+  async acquireChannelAssignment(session, channelName, options = {}) {
+    const channelKey = this.makeChannelKey(session.roomId, channelName);
+    const instance = await this.ensureChannelSidecar({
+      roomId: session.roomId,
+      roomSlug: session.roomSlug,
+      channelName,
+      modelName: session.modelName,
+      preferredPort: options.preferredPort || null
+    });
+
+    const currentCount = this.channelUsageCounts.get(channelKey) || 0;
+    this.channelUsageCounts.set(channelKey, currentCount + 1);
+    instance.refs += 1;
+
+    return {
+      instanceId: instance.id,
+      sidecarUrl: instance.url,
+      sidecarPort: instance.port
+    };
+  }
+
+  releaseChannelAssignment(roomId, channelName) {
+    const channelKey = this.makeChannelKey(roomId, channelName);
+    const currentCount = this.channelUsageCounts.get(channelKey) || 0;
+    const instanceId = this.channelAssignments.get(channelKey);
+    if (!instanceId) {
+      this.channelUsageCounts.delete(channelKey);
+      this.channelAssignments.delete(channelKey);
+      return;
+    }
+
+    const instance = this.sidecarInstances.get(instanceId);
+    if (instance) {
+      instance.refs = Math.max(0, instance.refs - 1);
+    }
+
+    if (currentCount <= 1) {
+      this.channelUsageCounts.delete(channelKey);
+      this.shutdownSidecarInstance(instanceId, { force: true, removeAssignment: true });
+      return;
+    }
+
+    this.channelUsageCounts.set(channelKey, currentCount - 1);
+  }
+
+  shutdownSidecarInstance(instanceId, { force = false, removeAssignment = false } = {}) {
+    const instance = this.sidecarInstances.get(instanceId);
+    if (!instance) return;
+
+    if (!force && instance.refs > 0) return;
+
+    this.sidecarInstances.delete(instanceId);
+    if (removeAssignment) {
+      const channelKey = this.makeChannelKey(instance.roomId, instance.channelName);
+      const mappedInstanceId = this.channelAssignments.get(channelKey);
+      if (mappedInstanceId === instanceId) {
+        this.channelAssignments.delete(channelKey);
+      }
+      this.channelUsageCounts.delete(channelKey);
+    }
+
+    if (instance.process && !instance.process.killed) {
+      try {
+        instance.process.kill('SIGTERM');
+      } catch { }
+    }
+
+    this.fastify.log.info({
+      instanceId,
+      roomId: instance.roomId,
+      roomSlug: instance.roomSlug,
+      channelName: instance.channelName,
+      port: instance.port
+    }, 'ASR sidecar instance stopped');
+  }
+
+  handleSidecarCrash(instance) {
+    const channelKey = this.makeChannelKey(instance.roomId, instance.channelName);
+    const mappedInstance = this.channelAssignments.get(channelKey);
+    if (mappedInstance === instance.id) {
+      this.channelAssignments.delete(channelKey);
+      this.channelUsageCounts.delete(channelKey);
+    }
+    this.sidecarInstances.delete(instance.id);
+
+    const session = this.sessions.get(instance.roomId);
+    if (!session) return;
+    if (session.stopping) return;
+
+    const hasAffectedStream = Array.from(session.streams.values())
+      .some((stream) => stream.channelName === instance.channelName);
+    if (!hasAffectedStream) return;
+
+    this.stopRoomSession(instance.roomId, 'error', 'sidecar_instance_crashed').catch((error) => {
+      this.fastify.log.error(`Failed to stop transcription session after sidecar crash: ${error.message}`);
+    });
+  }
+
   getRoomSession(roomId) {
     return this.sessions.get(roomId) || null;
   }
 
-  recoverTranscriptionSessions() {
+  async recoverTranscriptionSessions() {
     const activeSessions = listActiveTranscriptionSessions();
     const result = { recovered: 0, failed: 0, blocked: 0 };
     for (const dbSession of activeSessions) {
@@ -337,30 +639,46 @@ export class TranscriptionRuntime {
         startedAt: dbSession.started_at,
         pollTimer: null,
         polling: false,
+        stopping: false,
         recovered: true,
         lockPersistTimer: null,
+        sidecarOverflow: false,
         streams: new Map()
       };
 
-      for (const [producerId, streamState] of Object.entries(lock.streams || {})) {
-        const streamRow = upsertTranscriptionStream({
-          session_id: dbSession.id,
-          room_id: room.id,
-          channel_name: streamState.channelName || 'English',
-          producer_id: producerId,
-          publisher_id: streamState.publisherId || null,
-          producer_name: streamState.producerName || null
-        });
-        sessionState.streams.set(producerId, {
-          streamId: streamRow.id,
-          producerId,
-          publisherId: streamState.publisherId || null,
-          producerName: streamState.producerName || null,
-          channelName: streamState.channelName || 'English',
-          segmentPattern: streamState.segmentPattern || null,
-          matcher: buildSegmentMatcher(streamState.segmentPattern || null),
-          processedFiles: new Set(Array.isArray(streamState.processedFiles) ? streamState.processedFiles : [])
-        });
+      let recoverFailed = false;
+      const recoveredStreamEntries = Object.entries(lock.streams || {});
+      for (const [producerId, streamState] of recoveredStreamEntries) {
+        try {
+          await this.registerProducerStream(room.id, {
+            producerId,
+            publisherId: streamState.publisherId || null,
+            producerName: streamState.producerName || null,
+            channelName: streamState.channelName || 'English',
+            segmentPattern: streamState.segmentPattern || null,
+            processedFiles: Array.isArray(streamState.processedFiles) ? streamState.processedFiles : [],
+            preferredSidecarPort: Number.isFinite(parseInt(streamState.sidecarPort, 10))
+              ? parseInt(streamState.sidecarPort, 10)
+              : null
+          }, sessionState);
+        } catch (error) {
+          recoverFailed = true;
+          this.fastify.log.error({
+            transcriptionSessionId: dbSession.id,
+            roomId: room.id,
+            producerId,
+            reason: error.message
+          }, 'Failed recovering transcription stream');
+          break;
+        }
+      }
+
+      if (recoverFailed) {
+        this.releaseSessionChannels(sessionState);
+        stopAllTranscriptionStreamsBySession(dbSession.id, 'error');
+        stopTranscriptionSession(dbSession.id, 'error', 'resume_sidecar_unavailable');
+        result.failed += 1;
+        continue;
       }
 
       this.sessions.set(room.id, sessionState);
@@ -391,6 +709,10 @@ export class TranscriptionRuntime {
           startedAt: blocked.startedAt,
           streamCount: 0,
           recovered: false,
+          sidecarMode: SIDECAR_MODE,
+          sidecarInstanceCount: this.countRoomSidecars(roomId),
+          sidecarCapacity: MAX_SIDECAR_INSTANCES,
+          sidecarOverflow: false,
           unavailable: true,
           unavailableReason: blocked.reason
         };
@@ -408,6 +730,10 @@ export class TranscriptionRuntime {
       startedAt: activeSession.startedAt,
       streamCount: activeSession.streams.size,
       recovered: Boolean(activeSession.recovered),
+      sidecarMode: SIDECAR_MODE,
+      sidecarInstanceCount: this.countRoomSidecars(roomId),
+      sidecarCapacity: MAX_SIDECAR_INSTANCES,
+      sidecarOverflow: Boolean(activeSession.sidecarOverflow),
       unavailable: false
     };
   }
@@ -425,6 +751,17 @@ export class TranscriptionRuntime {
       return this.getRoomTranscriptionStatus(roomId);
     }
     this.blockedSessions.delete(roomId);
+
+    const channelSet = new Set();
+    for (const track of initialTracks) {
+      if (track?.channelName) channelSet.add(track.channelName);
+    }
+    const availableSlots = Math.max(0, MAX_SIDECAR_INSTANCES - this.sidecarInstances.size);
+    if (channelSet.size > availableSlots) {
+      const error = new Error(`sidecar_capacity_exceeded: requires ${channelSet.size} channels, available ${availableSlots}, capacity ${MAX_SIDECAR_INSTANCES}`);
+      error.code = 'SIDECAR_CAPACITY_EXCEEDED';
+      throw error;
+    }
 
     const created = createTranscriptionSession({
       room_id: roomId,
@@ -445,16 +782,25 @@ export class TranscriptionRuntime {
       startedAt: created.started_at,
       pollTimer: null,
       polling: false,
+      stopping: false,
       recovered: false,
       lockPersistTimer: null,
+      sidecarOverflow: false,
       streams: new Map() // producerId -> streamState
     };
 
     this.sessions.set(roomId, sessionState);
-    this.persistSessionLock(sessionState, 'active');
-
-    for (const track of initialTracks) {
-      this.registerProducerStream(roomId, track);
+    try {
+      for (const track of initialTracks) {
+        await this.registerProducerStream(roomId, track, sessionState);
+      }
+      this.persistSessionLock(sessionState, 'active');
+    } catch (error) {
+      this.releaseSessionChannels(sessionState);
+      this.sessions.delete(roomId);
+      stopAllTranscriptionStreamsBySession(sessionState.sessionId, 'error');
+      stopTranscriptionSession(sessionState.sessionId, 'error', error.code === 'SIDECAR_CAPACITY_EXCEEDED' ? 'sidecar_capacity_exceeded' : error.message);
+      throw error;
     }
 
     sessionState.pollTimer = setInterval(() => {
@@ -470,6 +816,7 @@ export class TranscriptionRuntime {
   async stopRoomSession(roomId, status = 'stopped', errorMessage = null) {
     const session = this.sessions.get(roomId);
     if (!session) return null;
+    session.stopping = true;
     this.blockedSessions.delete(roomId);
 
     if (session.pollTimer) {
@@ -484,6 +831,7 @@ export class TranscriptionRuntime {
     for (const [producerId] of session.streams) {
       stopTranscriptionStream(session.sessionId, producerId, status);
     }
+    this.releaseSessionChannels(session);
 
     const stopped = stopTranscriptionSession(session.sessionId, status, errorMessage);
     this.sessions.delete(roomId);
@@ -554,9 +902,41 @@ export class TranscriptionRuntime {
     };
   }
 
-  registerProducerStream(roomId, trackInfo) {
-    const session = this.sessions.get(roomId);
+  releaseSessionChannels(session) {
+    if (!session) return;
+    for (const stream of session.streams.values()) {
+      if (stream?.channelName) {
+        this.releaseChannelAssignment(session.roomId, stream.channelName);
+      }
+    }
+  }
+
+  async registerProducerStream(roomId, trackInfo, explicitSession = null) {
+    const session = explicitSession || this.sessions.get(roomId);
     if (!session || !trackInfo) return null;
+
+    const existingStream = session.streams.get(trackInfo.producerId);
+    if (existingStream) {
+      if (existingStream.channelName) {
+        this.releaseChannelAssignment(session.roomId, existingStream.channelName);
+      }
+      stopTranscriptionStream(session.sessionId, trackInfo.producerId, 'stopped');
+    }
+
+    let sidecarAssignment;
+    try {
+      sidecarAssignment = await this.acquireChannelAssignment(session, trackInfo.channelName, {
+        preferredPort: trackInfo.preferredSidecarPort || null
+      });
+    } catch (error) {
+      if (error.code === 'SIDECAR_CAPACITY_EXCEEDED' && !explicitSession) {
+        session.sidecarOverflow = true;
+        this.stopRoomSession(roomId, 'error', 'sidecar_capacity_exceeded').catch((stopError) => {
+          this.fastify.log.error(`Failed to stop overflowed transcription session for room ${session.roomSlug}: ${stopError.message}`);
+        });
+      }
+      throw error;
+    }
 
     const streamRow = upsertTranscriptionStream({
       session_id: session.sessionId,
@@ -576,7 +956,10 @@ export class TranscriptionRuntime {
       channelName: trackInfo.channelName,
       segmentPattern: trackInfo.segmentPattern || null,
       matcher,
-      processedFiles: new Set()
+      processedFiles: new Set(Array.isArray(trackInfo.processedFiles) ? trackInfo.processedFiles : []),
+      sidecarInstanceId: sidecarAssignment.instanceId,
+      sidecarPort: sidecarAssignment.sidecarPort,
+      sidecarUrl: sidecarAssignment.sidecarUrl
     };
     session.streams.set(trackInfo.producerId, state);
     this.scheduleSessionLockPersist(session, 'active');
@@ -587,8 +970,12 @@ export class TranscriptionRuntime {
     const session = this.sessions.get(roomId);
     if (!session) return;
     if (session.streams.has(producerId)) {
+      const stream = session.streams.get(producerId);
       stopTranscriptionStream(session.sessionId, producerId, 'stopped');
       session.streams.delete(producerId);
+      if (stream?.channelName) {
+        this.releaseChannelAssignment(session.roomId, stream.channelName);
+      }
       this.scheduleSessionLockPersist(session, 'active');
     }
   }
@@ -621,14 +1008,31 @@ export class TranscriptionRuntime {
       const filePath = path.join(dir, filename);
       const stat = fs.statSync(filePath);
       const ageMs = Date.now() - stat.mtimeMs;
-      if (ageMs < MIN_SEGMENT_AGE_MS) continue;
+      const requiredAgeMs = Math.max(MIN_SEGMENT_AGE_MS, FINALIZED_SEGMENT_MIN_AGE_MS);
+      if (ageMs < requiredAgeMs) continue;
+
+      // Avoid prematurely marking still-open segment files as processed.
+      if (stat.size <= 0) {
+        if (ageMs < requiredAgeMs * 3) {
+          continue;
+        }
+        streamState.processedFiles.add(filename);
+        this.scheduleSessionLockPersist(session, 'active');
+        this.fastify.log.warn(`Skipping stale empty segment ${filePath} (ageMs=${ageMs})`);
+        continue;
+      }
 
       try {
-        const finalText = await this.transcribeFile(filePath, 'English');
+        const finalText = sanitizeTranscriptText(
+          await this.transcribeFile(filePath, {
+            language: TRANSCRIPTION_LANGUAGE || null,
+            sidecarUrl: streamState.sidecarUrl
+          })
+        );
         streamState.processedFiles.add(filename);
         this.scheduleSessionLockPersist(session, 'active');
 
-        if (!finalText || !finalText.trim()) continue;
+        if (!finalText) continue;
 
         const timestampStart = parseTimestampStartMs(filename);
         const timestampEnd = timestampStart === null ? null : timestampStart + POLL_INTERVAL_MS;
@@ -640,11 +1044,11 @@ export class TranscriptionRuntime {
           producer_id: streamState.producerId,
           publisher_id: streamState.publisherId,
           segment_file: path.relative(session.recordingFolderPath, filePath),
-          text_content: finalText.trim(),
+          text_content: finalText,
           timestamp_start_ms: timestampStart,
           timestamp_end_ms: timestampEnd,
           confidence_score: null,
-          language: 'English'
+          language: TRANSCRIPTION_LANGUAGE || null
         });
 
         const docState = await this.getOrCreateDoc(
@@ -654,29 +1058,41 @@ export class TranscriptionRuntime {
           streamState.channelName,
           session.eventName
         );
-        this.appendAsrText(docState, finalText.trim());
+        this.appendAsrText(docState, finalText);
       } catch (error) {
-        this.fastify.log.error(`Failed to transcribe segment ${filePath}: ${error.message}`);
+        // No retry policy: mark the segment as processed after first failed send.
+        streamState.processedFiles.add(filename);
+        this.scheduleSessionLockPersist(session, 'active');
+        this.fastify.log.warn(`Skipping segment ${filePath} after failed transcription attempt: ${error.message}`);
         await sleep(100);
       }
     }
   }
 
-  async transcribeFile(filePath, language = 'English') {
+  async transcribeFile(filePath, { language = TRANSCRIPTION_LANGUAGE || null, sidecarUrl = null } = {}) {
+    if (!sidecarUrl) {
+      throw new Error('Missing sidecar assignment for transcription stream');
+    }
     const payload = fs.readFileSync(filePath);
     const formData = new FormData();
-    formData.append('language', language);
+    if (language) {
+      formData.append('language', language);
+    }
     formData.append('model', DEFAULT_MODEL);
     formData.append('audio', new Blob([payload], { type: 'audio/ogg' }), path.basename(filePath));
 
-    const response = await fetch(`${SIDECAR_URL}/api/v1/transcribe/stream`, {
+    const response = await fetch(`${sidecarUrl}/api/v1/transcribe/stream`, {
       method: 'POST',
       body: formData
     });
 
     if (!response.ok) {
       const message = await response.text();
-      throw new Error(`Sidecar response ${response.status}: ${message}`);
+      const error = new Error(`Sidecar response ${response.status}: ${message}`);
+      if (response.status === 400 && message.includes('Empty audio payload')) {
+        error.code = 'EMPTY_AUDIO';
+      }
+      throw error;
     }
 
     const contentType = response.headers.get('content-type') || '';
@@ -1068,6 +1484,23 @@ export class TranscriptionRuntime {
       revision: doc.revision,
       updatedAt: doc.updated_at
     };
+  }
+
+  async shutdown() {
+    for (const session of this.sessions.values()) {
+      if (session.pollTimer) {
+        clearInterval(session.pollTimer);
+        session.pollTimer = null;
+      }
+      if (session.lockPersistTimer) {
+        clearTimeout(session.lockPersistTimer);
+        session.lockPersistTimer = null;
+      }
+    }
+
+    for (const instanceId of [...this.sidecarInstances.keys()]) {
+      this.shutdownSidecarInstance(instanceId, { force: true, removeAssignment: true });
+    }
   }
 }
 

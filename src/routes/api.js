@@ -526,9 +526,13 @@ export async function registerApiRoutes(fastify) {
           } catch (error) {
             await stopRecording(room_slug, room.id);
             await transcriptionRuntime.stopRoomSession(room.id, 'error', error.message);
+            const overflow = error.code === 'SIDECAR_CAPACITY_EXCEEDED';
             return reply.code(503).send({
               error: 'Service Unavailable',
-              message: `Failed to start transcription: ${error.message}`
+              message: overflow
+                ? 'sidecar_capacity_exceeded'
+                : `Failed to start transcription: ${error.message}`,
+              code: overflow ? 'sidecar_capacity_exceeded' : 'transcription_start_failed'
             });
           }
         }
@@ -548,7 +552,11 @@ export async function registerApiRoutes(fastify) {
           ...result,
           eventName,
           transcriptionActive: Boolean(transcriptionStatus),
-          transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null
+          transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
+          sidecarMode: transcriptionStatus?.sidecarMode || null,
+          sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+          sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+          sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
         });
       } catch (error) {
         console.error('Error starting recording:', error);
@@ -667,7 +675,11 @@ export async function registerApiRoutes(fastify) {
           transcriptionActive: Boolean(transcriptionStatus),
           eventName: transcriptionStatus?.eventName || null,
           transcriptionSessionId: transcriptionStatus?.transcriptionSessionId || null,
-          modelName: transcriptionStatus?.modelName || null
+          modelName: transcriptionStatus?.modelName || null,
+          sidecarMode: transcriptionStatus?.sidecarMode || null,
+          sidecarInstanceCount: transcriptionStatus?.sidecarInstanceCount || 0,
+          sidecarCapacity: transcriptionStatus?.sidecarCapacity || null,
+          sidecarOverflow: Boolean(transcriptionStatus?.sidecarOverflow)
         });
       } catch (error) {
         console.error('Error getting recording status:', error);

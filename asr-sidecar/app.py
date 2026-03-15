@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from threading import Lock
@@ -22,6 +23,7 @@ app = FastAPI(title=APP_TITLE)
 _model = None
 _model_error: str | None = None
 _model_lock = Lock()
+_inference_lock = Lock()
 
 
 def get_model():
@@ -41,6 +43,17 @@ def get_model():
             raise
 
 
+def sanitize_asr_text(text: str | None) -> str:
+    if not text:
+        return ""
+    cleaned = str(text)
+    cleaned = re.sub(r"<asr_text>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.replace("\ufffd", "")
+    cleaned = cleaned.replace("\r", "")
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return cleaned.strip()
+
+
 @app.get("/health")
 async def health():
     try:
@@ -53,41 +66,45 @@ async def health():
         )
 
 
-def stream_transcription_lines(file_path: Path, language: str) -> Iterable[str]:
+def stream_transcription_lines(file_path: Path, language: str | None) -> Iterable[str]:
     model = get_model()
     partial_tokens: list[str] = []
     final_text: str = ""
 
-    for chunk in model.stream_transcribe(str(file_path), language=language):
-        # mlx-audio returns StreamingResult objects; keep only text payloads.
-        token_text = getattr(chunk, "text", None)
-        is_final = bool(getattr(chunk, "is_final", False))
+    kwargs = {"language": language} if language else {}
+    # NOTE: mlx-audio inference can segfault under concurrent stream_transcribe calls
+    # on the same model instance. Serialize inference requests for stability.
+    with _inference_lock:
+        for chunk in model.stream_transcribe(str(file_path), **kwargs):
+            # mlx-audio returns StreamingResult objects; keep only text payloads.
+            token_text = getattr(chunk, "text", None)
+            is_final = bool(getattr(chunk, "is_final", False))
 
-        if token_text is None and isinstance(chunk, dict):
-            token_text = chunk.get("text", "")
-            is_final = bool(chunk.get("is_final", is_final))
+            if token_text is None and isinstance(chunk, dict):
+                token_text = chunk.get("text", "")
+                is_final = bool(chunk.get("is_final", is_final))
 
-        if token_text is None:
-            token_text = str(chunk)
+            if token_text is None:
+                token_text = str(chunk)
 
-        token_text = str(token_text)
-        if token_text:
-            yield json.dumps({"type": "partial", "text": token_text}) + "\n"
+            token_text = str(token_text)
+            if token_text:
+                yield json.dumps({"type": "partial", "text": token_text}) + "\n"
 
-        if is_final:
-            final_text = token_text.strip() or "".join(partial_tokens).strip()
-        elif token_text:
-            partial_tokens.append(token_text)
+            if is_final:
+                final_text = sanitize_asr_text(token_text) or sanitize_asr_text("".join(partial_tokens))
+            elif token_text:
+                partial_tokens.append(token_text)
 
     if not final_text:
-        final_text = "".join(partial_tokens).strip()
+        final_text = sanitize_asr_text("".join(partial_tokens))
     yield json.dumps({"type": "final", "text": final_text}) + "\n"
 
 
 @app.post("/api/v1/transcribe/stream")
 async def transcribe_stream(
     audio: UploadFile = File(...),
-    language: str = Form("English"),
+    language: str | None = Form(None),
     model: str = Form(MODEL_ID),
 ):
     if model != MODEL_ID:
@@ -107,7 +124,8 @@ async def transcribe_stream(
 
     def _generator():
         try:
-            for line in stream_transcription_lines(tmp_path, language):
+            selected_language = language.strip() if isinstance(language, str) else None
+            for line in stream_transcription_lines(tmp_path, selected_language or None):
                 yield line
         finally:
             try:
