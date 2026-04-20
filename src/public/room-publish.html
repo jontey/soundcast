@@ -349,6 +349,47 @@
       resize: vertical;
     }
 
+    .chat-box {
+      margin-top: 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      background: #f8fafc;
+    }
+
+    .chat-log {
+      max-height: 150px;
+      overflow-y: auto;
+      border: 1px solid #e2e8f0;
+      background: white;
+      border-radius: 6px;
+      padding: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+
+    .chat-msg {
+      margin-bottom: 6px;
+    }
+
+    .chat-msg strong {
+      color: #4a5568;
+    }
+
+    .monitor-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 6px;
+    }
+
+    .monitor-row button {
+      margin: 0;
+      width: auto;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
   </style>
 </head>
 
@@ -399,6 +440,27 @@
     <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
       Stop Broadcasting
     </button>
+
+    <div class="chat-box">
+      <div class="info-label">Monitor Another Channel</div>
+      <select id="monitorChannelSelect" class="audio-source-select">
+        <option value="">Select channel to monitor</option>
+      </select>
+      <div class="monitor-row">
+        <button id="startMonitorBtn" class="btn btn-primary" onclick="startMonitorChannel()">Start Monitor</button>
+        <button id="stopMonitorBtn" class="btn btn-danger" onclick="stopMonitorChannel()" style="display:none;">Stop Monitor</button>
+      </div>
+      <audio id="monitorAudioPlayer" autoplay playsinline></audio>
+    </div>
+
+    <div class="chat-box">
+      <div class="info-label">Admin Chat</div>
+      <div id="publisherChatLog" class="chat-log">No messages yet.</div>
+      <div class="monitor-row">
+        <input id="publisherChatInput" class="audio-source-select" type="text" placeholder="Message admin..." style="margin:0;">
+        <button class="btn btn-primary" onclick="sendPublisherChat()">Send</button>
+      </div>
+    </div>
 
     <button id="toggleTranscriptBtn" class="transcript-toggle" onclick="toggleTranscriptPanel()">
       Show Transcripts
@@ -453,6 +515,12 @@
     let pubSyntheticOscillator = null;
     let transcriptChannels = [];
     let transcriptBinding = null;
+    let monitorWs = null;
+    let monitorDevice = null;
+    let monitorTransport = null;
+    let monitorConsumers = [];
+    let monitorRtpCapabilities = null;
+    let monitorChannel = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -782,6 +850,11 @@
             setStatus('Error: ' + message.data.message, 'disconnected');
           } else if (message.type === 'recording-status') {
             handleRecordingStatus(message);
+          } else if (message.type === 'publisher-chat-message') {
+            appendPublisherChat(message.data);
+          } else if (message.type === 'publisher-chat-history') {
+            const messages = Array.isArray(message?.data?.messages) ? message.data.messages : [];
+            renderPublisherChat(messages);
           }
         } catch (error) {
           console.error('Error handling message:', error);
@@ -811,6 +884,7 @@
         transcriptChannels = [config.channelName];
       }
       renderTranscriptTabs(transcriptChannels[0] || null);
+      populateMonitorChannels(transcriptChannels);
 
       // Display channel name
       if (config.channelName) {
@@ -841,6 +915,64 @@
 
       // Connect to SFU
       connectToSfu();
+      ws.send(JSON.stringify({ type: 'publisher-chat-history-request' }));
+    }
+
+    function populateMonitorChannels(channels) {
+      const selectEl = document.getElementById('monitorChannelSelect');
+      selectEl.innerHTML = '<option value="">Select channel to monitor</option>';
+      channels.forEach((channelName) => {
+        const option = document.createElement('option');
+        option.value = channelName;
+        option.textContent = channelName;
+        selectEl.appendChild(option);
+      });
+    }
+
+    function formatChatTimestamp(ts) {
+      try {
+        return new Date(ts).toLocaleTimeString();
+      } catch {
+        return '';
+      }
+    }
+
+    function renderPublisherChat(messages) {
+      const logEl = document.getElementById('publisherChatLog');
+      if (!messages.length) {
+        logEl.textContent = 'No messages yet.';
+        return;
+      }
+      logEl.innerHTML = messages.map(msg => {
+        const senderLabel = msg.sender === 'admin' ? 'Admin' : 'You';
+        return `<div class="chat-msg"><strong>${senderLabel}</strong> <small>${formatChatTimestamp(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
+      }).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function appendPublisherChat(message) {
+      const logEl = document.getElementById('publisherChatLog');
+      if (!message || !message.text) return;
+      if (logEl.textContent === 'No messages yet.') {
+        logEl.textContent = '';
+      }
+      const senderLabel = message.sender === 'admin' ? 'Admin' : 'You';
+      const row = document.createElement('div');
+      row.className = 'chat-msg';
+      row.innerHTML = `<strong>${senderLabel}</strong> <small>${formatChatTimestamp(message.timestamp)}</small><br>${escapeHtml(message.text)}`;
+      logEl.appendChild(row);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function sendPublisherChat() {
+      const inputEl = document.getElementById('publisherChatInput');
+      const text = inputEl.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({
+        type: 'publisher-chat-send',
+        data: { text }
+      }));
+      inputEl.value = '';
     }
 
     // Handle recording status updates
@@ -960,6 +1092,115 @@
         default:
           console.log('Unknown SFU action:', action);
       }
+    }
+
+    function connectMonitorWs() {
+      if (monitorWs && monitorWs.readyState === WebSocket.OPEN) return;
+      const sfuUrl = getSfuWsUrl();
+      monitorWs = new WebSocket(sfuUrl);
+      monitorWs.onopen = () => {
+        monitorWs.send(JSON.stringify({ action: 'get-rtpCapabilities' }));
+      };
+      monitorWs.onmessage = async (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        const { action, data: payload } = data;
+        if (action === 'rtpCapabilities') {
+          monitorRtpCapabilities = payload;
+          await joinMonitorChannel();
+        } else if (action === 'listener-transport-created') {
+          await handleMonitorTransport(payload);
+        } else if (action === 'consumer-created') {
+          await handleMonitorConsumer(payload);
+        }
+      };
+    }
+
+    async function startMonitorChannel() {
+      const selected = document.getElementById('monitorChannelSelect').value;
+      if (!selected) {
+        showError('Select a monitor channel first');
+        return;
+      }
+      if (monitorChannel === selected && monitorTransport) return;
+      stopMonitorChannel();
+      monitorChannel = selected;
+      connectMonitorWs();
+      document.getElementById('startMonitorBtn').style.display = 'none';
+      document.getElementById('stopMonitorBtn').style.display = 'inline-block';
+    }
+
+    async function joinMonitorChannel() {
+      if (!monitorChannel || !monitorWs || monitorWs.readyState !== WebSocket.OPEN) return;
+      monitorDevice = new mediasoupClient.Device();
+      await monitorDevice.load({ routerRtpCapabilities: monitorRtpCapabilities });
+      monitorWs.send(JSON.stringify({
+        action: 'create-listener-transport',
+        data: {
+          channelId: `${roomSlug}:${monitorChannel}`,
+          displayName: 'Publisher monitor'
+        }
+      }));
+    }
+
+    async function handleMonitorTransport(transportParams) {
+      const iceServers = getIceServersFromConfig(roomConfig);
+      transportParams.iceServers = iceServers;
+      monitorTransport = monitorDevice.createRecvTransport(transportParams);
+      monitorTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+        try {
+          monitorWs.send(JSON.stringify({
+            action: 'connect-listener-transport',
+            data: { dtlsParameters }
+          }));
+          callback();
+        } catch (error) {
+          errback(error);
+        }
+      });
+      monitorWs.send(JSON.stringify({
+        action: 'consume-audio',
+        data: { rtpCapabilities: monitorDevice.rtpCapabilities }
+      }));
+    }
+
+    async function handleMonitorConsumer(payload) {
+      const entries = Array.isArray(payload) ? payload : [payload];
+      const stream = new MediaStream();
+      for (const item of entries) {
+        const consumer = await monitorTransport.consume({
+          id: item.id,
+          producerId: item.producerId,
+          kind: item.kind,
+          rtpParameters: item.rtpParameters
+        });
+        monitorConsumers.push(consumer);
+        stream.addTrack(consumer.track);
+      }
+      document.getElementById('monitorAudioPlayer').srcObject = stream;
+    }
+
+    function stopMonitorChannel() {
+      if (monitorWs && monitorWs.readyState === WebSocket.OPEN) {
+        monitorWs.send(JSON.stringify({ action: 'leave-channel', data: {} }));
+      }
+      monitorConsumers.forEach((consumer) => {
+        try { consumer.close(); } catch { }
+      });
+      monitorConsumers = [];
+      if (monitorTransport) {
+        try { monitorTransport.close(); } catch { }
+      }
+      monitorTransport = null;
+      monitorDevice = null;
+      monitorChannel = null;
+      document.getElementById('monitorAudioPlayer').srcObject = null;
+      document.getElementById('startMonitorBtn').style.display = 'inline-block';
+      document.getElementById('stopMonitorBtn').style.display = 'none';
     }
 
     // Handle transport created
@@ -1258,6 +1499,14 @@
     window.addEventListener('beforeunload', () => {
       destroyTranscriptBinding();
       stopBroadcast(true); // Intentional stop (user leaving page)
+      stopMonitorChannel();
+    });
+
+    document.getElementById('publisherChatInput').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        sendPublisherChat();
+      }
     });
 
     // Initialize

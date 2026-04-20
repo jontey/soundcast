@@ -618,6 +618,35 @@
       min-width: 120px;
       text-align: right;
     }
+
+    .chat-panel {
+      margin-top: 16px;
+      border: 1px solid #cbd5e0;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+      display: none;
+    }
+
+    .chat-log {
+      max-height: 220px;
+      overflow-y: auto;
+      background: white;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 10px;
+      margin: 8px 0;
+      font-size: 13px;
+    }
+
+    .chat-row {
+      margin-bottom: 8px;
+    }
+
+    .chat-composer {
+      display: flex;
+      gap: 8px;
+    }
   </style>
 </head>
 
@@ -653,6 +682,14 @@
       </div>
       <div id="roomsList">
         <div class="loading">Loading rooms...</div>
+      </div>
+      <div id="adminChatPanel" class="chat-panel">
+        <div id="adminChatTitle" style="font-weight: bold;">Publisher Chat</div>
+        <div id="adminChatLog" class="chat-log">Select a publisher to chat.</div>
+        <div class="chat-composer">
+          <input id="adminChatInput" type="text" class="form-input" placeholder="Send message to publisher...">
+          <button class="btn btn-primary" onclick="sendAdminChat()">Send</button>
+        </div>
       </div>
     </div>
 
@@ -764,6 +801,8 @@
     let transcriptChannels = {}; // roomSlug -> channelName[]
     let transcriptSessions = {}; // roomSlug -> session[]
     let transcriptSessionState = {}; // roomSlug -> { limit, offset, total, selectedSessionId }
+    let adminChatMessages = {}; // key: roomSlug:publisherId -> messages[]
+    let activeChat = null; // { roomSlug, publisherId, publisherName }
 
     // ========== Reactive State Management ==========
     // Lightweight state store with change notifications using Proxy
@@ -955,6 +994,15 @@
             updateRecordingUI(msg.roomSlug);
             handleTranscriptRecordingStatusUpdate(msg.roomSlug, msg)
               .catch((error) => console.warn('Failed to refresh transcript session on recording update:', error));
+          } else if (msg.type === 'publisher-chat-message') {
+            addAdminChatMessage(msg.data);
+          } else if (msg.type === 'publisher-chat-history') {
+            const roomSlug = msg?.data?.roomSlug;
+            const publisherId = msg?.data?.publisherId;
+            if (!roomSlug || !publisherId) return;
+            const key = getAdminChatKey(roomSlug, publisherId);
+            adminChatMessages[key] = Array.isArray(msg?.data?.messages) ? msg.data.messages : [];
+            renderActiveAdminChat();
           } else if (msg.type === 'error') {
             console.error('Admin WebSocket error:', msg.data.message);
           }
@@ -1055,6 +1103,76 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function getAdminChatKey(roomSlug, publisherId) {
+      return `${roomSlug}:${publisherId}`;
+    }
+
+    function formatChatTime(timestamp) {
+      try {
+        return new Date(timestamp).toLocaleTimeString();
+      } catch {
+        return '';
+      }
+    }
+
+    function addAdminChatMessage(message) {
+      if (!message?.roomSlug || !message?.publisherId) return;
+      const key = getAdminChatKey(message.roomSlug, message.publisherId);
+      if (!adminChatMessages[key]) {
+        adminChatMessages[key] = [];
+      }
+      adminChatMessages[key].push(message);
+      if (adminChatMessages[key].length > 100) {
+        adminChatMessages[key].splice(0, adminChatMessages[key].length - 100);
+      }
+      renderActiveAdminChat();
+    }
+
+    function openAdminChat(roomSlug, publisherId, publisherName) {
+      activeChat = { roomSlug, publisherId, publisherName };
+      document.getElementById('adminChatPanel').style.display = 'block';
+      document.getElementById('adminChatTitle').textContent = `Chat with ${publisherName} (${roomSlug})`;
+      renderActiveAdminChat();
+      if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+        adminWs.send(JSON.stringify({
+          type: 'admin-chat-history-request',
+          data: { roomSlug, publisherId }
+        }));
+      }
+    }
+
+    function renderActiveAdminChat() {
+      const logEl = document.getElementById('adminChatLog');
+      if (!activeChat) return;
+      const key = getAdminChatKey(activeChat.roomSlug, activeChat.publisherId);
+      const messages = adminChatMessages[key] || [];
+      if (messages.length === 0) {
+        logEl.textContent = 'No messages yet.';
+        return;
+      }
+      logEl.innerHTML = messages.map((msg) => {
+        const sender = msg.sender === 'admin' ? 'You' : (msg.publisherName || 'Publisher');
+        return `<div class="chat-row"><strong>${escapeHtml(sender)}</strong> <small>${formatChatTime(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
+      }).join('');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function sendAdminChat() {
+      if (!activeChat || !adminWs || adminWs.readyState !== WebSocket.OPEN) return;
+      const inputEl = document.getElementById('adminChatInput');
+      const text = inputEl.value.trim();
+      if (!text) return;
+      adminWs.send(JSON.stringify({
+        type: 'admin-chat-send',
+        data: {
+          roomSlug: activeChat.roomSlug,
+          publisherId: activeChat.publisherId,
+          text
+        }
+      }));
+      inputEl.value = '';
     }
 
     function showAuthenticatedView() {
@@ -1299,6 +1417,7 @@
                   </td>
                   <td style="text-align: right; padding: 8px;">
                     <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(baseUrl + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy URL</button>
+                    <button class="btn btn-secondary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="openAdminChat('${slug}', ${pub.id}, '${escapeAttr(pub.name)}')">Chat</button>
                     <button class="btn btn-primary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}')">Edit</button>
                     <button class="btn btn-danger btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="deletePublisher('${slug}', ${pub.id})">Delete</button>
                   </td>
@@ -2282,7 +2401,18 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     });
 
     // Initialize on page load
-    document.addEventListener('DOMContentLoaded', checkSingleTenantMode);
+    document.addEventListener('DOMContentLoaded', () => {
+      checkSingleTenantMode();
+      const chatInput = document.getElementById('adminChatInput');
+      if (chatInput) {
+        chatInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            sendAdminChat();
+          }
+        });
+      }
+    });
   </script>
 </body>
 
