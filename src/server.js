@@ -201,6 +201,37 @@ const clients = new Map();
 
 // Tenant admin WebSocket connections: tenantId -> Set<socket>
 const tenantAdminClients = new Map();
+// Active room publisher sockets keyed by publisher DB id
+const roomPublisherClients = new Map();
+// In-memory chat history by publisher id
+const publisherChatHistory = new Map();
+
+function pushPublisherChatMessage(publisherId, message) {
+  if (!publisherChatHistory.has(publisherId)) {
+    publisherChatHistory.set(publisherId, []);
+  }
+  const history = publisherChatHistory.get(publisherId);
+  history.push(message);
+  if (history.length > 100) {
+    history.splice(0, history.length - 100);
+  }
+}
+
+function getPublisherChatHistory(publisherId) {
+  return publisherChatHistory.get(publisherId) || [];
+}
+
+function broadcastTenantAdminMessage(tenantId, payload) {
+  const adminSockets = tenantAdminClients.get(tenantId);
+  if (!adminSockets || adminSockets.size === 0) return;
+  for (const socket of adminSockets) {
+    try {
+      socket.send(JSON.stringify(payload));
+    } catch (e) {
+      fastify.log.error(`Failed sending tenant admin message: ${e.message}`);
+    }
+  }
+}
 
 // Broadcast updated channel list to all clients
 function broadcastChannelList() {
@@ -1612,6 +1643,15 @@ async function registerRoomWsRoutes(fastify) {
       return;
     }
 
+    roomPublisherClients.set(publisher.id, {
+      socket: connection,
+      publisherId: publisher.id,
+      publisherName: publisher.name,
+      roomSlug: slug,
+      roomId: room.id,
+      tenantId: room.tenant_id
+    });
+
     const iceServers = DEFAULT_ICE_SERVERS;
     const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
 
@@ -1645,6 +1685,34 @@ async function registerRoomWsRoutes(fastify) {
           // Client requests config after handlers are ready (fixes iOS Safari timing issue)
           connection.send(JSON.stringify(config));
           fastify.log.info(`Config sent to publisher ${clientId} (${publisher.name}) for room ${slug}, channel: ${publisher.channel_name}`);
+        } else if (payload.type === 'publisher-chat-history-request') {
+          connection.send(JSON.stringify({
+            type: 'publisher-chat-history',
+            data: {
+              messages: getPublisherChatHistory(publisher.id)
+            }
+          }));
+        } else if (payload.type === 'publisher-chat-send') {
+          const text = typeof payload?.data?.text === 'string' ? payload.data.text.trim() : '';
+          if (!text) return;
+          const chatMessage = {
+            id: uuidv4(),
+            roomSlug: slug,
+            publisherId: publisher.id,
+            publisherName: publisher.name,
+            sender: 'publisher',
+            text: text.slice(0, 1000),
+            timestamp: new Date().toISOString()
+          };
+          pushPublisherChatMessage(publisher.id, chatMessage);
+          connection.send(JSON.stringify({
+            type: 'publisher-chat-message',
+            data: chatMessage
+          }));
+          broadcastTenantAdminMessage(room.tenant_id, {
+            type: 'publisher-chat-message',
+            data: chatMessage
+          });
         } else if (payload.type === 'webrtc_signal') {
           // In a full implementation, this would relay to the SFU
           // For now, we just log it
@@ -1657,6 +1725,7 @@ async function registerRoomWsRoutes(fastify) {
 
     connection.on('close', () => {
       fastify.log.info(`Publisher ${clientId} (${publisher.name}) disconnected from room ${slug}`);
+      roomPublisherClients.delete(publisher.id);
     });
   });
 }
@@ -1727,6 +1796,68 @@ async function registerAdminWsRoutes(fastify) {
           connection.send(JSON.stringify({
             type: 'recording-stats',
             stats: recordingStats
+          }));
+        } else if (payload.type === 'admin-chat-send') {
+          const publisherId = Number(payload?.data?.publisherId);
+          const roomSlug = typeof payload?.data?.roomSlug === 'string' ? payload.data.roomSlug : '';
+          const text = typeof payload?.data?.text === 'string' ? payload.data.text.trim() : '';
+          if (!publisherId || !roomSlug || !text) return;
+
+          const room = getRoomBySlug(roomSlug);
+          if (!room || room.tenant_id !== tenant.id) return;
+
+          const db = getDatabase();
+          const pubStmt = db.prepare('SELECT id, name, room_id FROM publishers WHERE id = ?');
+          const publisher = pubStmt.get(publisherId);
+          if (!publisher || publisher.room_id !== room.id) return;
+
+          const chatMessage = {
+            id: uuidv4(),
+            roomSlug,
+            publisherId: publisher.id,
+            publisherName: publisher.name,
+            sender: 'admin',
+            text: text.slice(0, 1000),
+            timestamp: new Date().toISOString()
+          };
+          pushPublisherChatMessage(publisher.id, chatMessage);
+
+          const publisherClient = roomPublisherClients.get(publisher.id);
+          if (publisherClient) {
+            try {
+              publisherClient.socket.send(JSON.stringify({
+                type: 'publisher-chat-message',
+                data: chatMessage
+              }));
+            } catch (e) {
+              fastify.log.error(`Failed sending admin chat message to publisher: ${e.message}`);
+            }
+          }
+
+          broadcastTenantAdminMessage(tenant.id, {
+            type: 'publisher-chat-message',
+            data: chatMessage
+          });
+        } else if (payload.type === 'admin-chat-history-request') {
+          const publisherId = Number(payload?.data?.publisherId);
+          const roomSlug = typeof payload?.data?.roomSlug === 'string' ? payload.data.roomSlug : '';
+          if (!publisherId || !roomSlug) return;
+
+          const room = getRoomBySlug(roomSlug);
+          if (!room || room.tenant_id !== tenant.id) return;
+
+          const db = getDatabase();
+          const pubStmt = db.prepare('SELECT id, room_id FROM publishers WHERE id = ?');
+          const publisher = pubStmt.get(publisherId);
+          if (!publisher || publisher.room_id !== room.id) return;
+
+          connection.send(JSON.stringify({
+            type: 'publisher-chat-history',
+            data: {
+              roomSlug,
+              publisherId,
+              messages: getPublisherChatHistory(publisherId)
+            }
           }));
         }
       } catch (e) {
