@@ -40,6 +40,21 @@ function getPublicDir() {
   return devPath;
 }
 
+function getRnnoiseAssetsDir() {
+  const candidatePaths = [
+    path.join(__dirname, '..', 'node_modules', '@sapphi-red', 'web-noise-suppressor', 'dist'),
+    path.join(process.cwd(), 'node_modules', '@sapphi-red', 'web-noise-suppressor', 'dist')
+  ];
+
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 // Create fastify instance
 const fastify = Fastify({
   logger: true
@@ -100,6 +115,16 @@ fastify.register(fastifyStatic, {
   root: publicDir,
   prefix: '/' // optional: default '/'
 });
+
+const rnnoiseAssetsDir = getRnnoiseAssetsDir();
+if (rnnoiseAssetsDir) {
+  fastify.register(fastifyStatic, {
+    root: rnnoiseAssetsDir,
+    prefix: '/vendor/web-noise-suppressor/'
+  });
+} else {
+  console.warn('RNNoise assets not found in node_modules. Publisher RNNoise toggle will fallback to browser suppression.');
+}
 
 // Register WebSocket plugin
 fastify.register(fastifyWebsocket, {

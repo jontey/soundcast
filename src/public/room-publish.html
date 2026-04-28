@@ -252,6 +252,22 @@
       border-color: #667eea;
     }
 
+    .audio-option-row {
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 14px;
+      color: #2d3748;
+    }
+
+    .audio-option-help {
+      font-size: 12px;
+      color: #718096;
+      margin-bottom: 12px;
+    }
+
     /* Recording Indicator */
     .recording-indicator {
       display: none;
@@ -436,6 +452,13 @@
           <select id="audioSource" class="audio-source-select">
             <option value="">Select audio source</option>
           </select>
+          <label class="audio-option-row">
+            <span>RNNoise suppression (beta)</span>
+            <input type="checkbox" id="rnnoiseToggle">
+          </label>
+          <div class="audio-option-help" id="rnnoiseStatus">
+            Uses browser noise suppression by default. Enable RNNoise for stronger suppression.
+          </div>
         </div>
 
         <div class="audio-meter" id="audioMeter" style="display: none;">
@@ -511,11 +534,18 @@
     let pubTransport = null;
     let pubProducer = null;
     let pubAudioStream = null;
+    let pubRawAudioStream = null;
     let roomConfig = null;
     let pubAudioContext = null;
     let pubAudioMeter = null;
     let pubAudioSource = null;
     let pubMeterUpdateInterval = null;
+    let pubDenoiseSource = null;
+    let pubDenoiseDestination = null;
+    let pubRnnoiseNode = null;
+    let pubRnnoiseWorkletLoaded = false;
+    let rnnoiseModulePromise = null;
+    const rnnoiseAssetBase = '/vendor/web-noise-suppressor';
     let pubSyntheticAudioContext = null;
     let pubSyntheticOscillator = null;
     let transcriptChannels = [];
@@ -552,6 +582,26 @@
       statusEl.className = `status ${className}`;
     }
 
+    function isRnnoiseEnabled() {
+      return document.getElementById('rnnoiseToggle')?.checked === true;
+    }
+
+    function getMicAudioConstraints(audioSourceId) {
+      return {
+        ...(audioSourceId ? { deviceId: { exact: audioSourceId } } : {}),
+        echoCancellation: true,
+        noiseSuppression: !isRnnoiseEnabled(),
+        autoGainControl: true
+      };
+    }
+
+    function updateRnnoiseStatus(message) {
+      const statusEl = document.getElementById('rnnoiseStatus');
+      if (statusEl) {
+        statusEl.textContent = message;
+      }
+    }
+
     function showError(message) {
       const el = document.getElementById('errorMessage');
       el.textContent = message;
@@ -563,6 +613,87 @@
       const div = document.createElement('div');
       div.textContent = value || '';
       return div.innerHTML;
+    }
+
+    async function loadRnnoiseModule() {
+      if (rnnoiseModulePromise) {
+        return rnnoiseModulePromise;
+      }
+      rnnoiseModulePromise = import(`${rnnoiseAssetBase}/index.js`);
+      return rnnoiseModulePromise;
+    }
+
+    function resetDenoiseGraph() {
+      if (pubDenoiseSource) {
+        try {
+          pubDenoiseSource.disconnect();
+        } catch (error) {
+          console.warn('Failed to disconnect RNNoise source:', error);
+        }
+      }
+      if (pubRnnoiseNode) {
+        try {
+          pubRnnoiseNode.disconnect();
+          pubRnnoiseNode.destroy?.();
+        } catch (error) {
+          console.warn('Failed to close RNNoise node:', error);
+        }
+      }
+      pubDenoiseSource = null;
+      pubDenoiseDestination = null;
+      pubRnnoiseNode = null;
+    }
+
+    async function applyNoiseSuppression(rawStream) {
+      if (!isRnnoiseEnabled()) {
+        updateRnnoiseStatus('Using browser noise suppression.');
+        resetDenoiseGraph();
+        return rawStream;
+      }
+
+      if (typeof AudioWorkletNode === 'undefined') {
+        updateRnnoiseStatus('RNNoise unavailable in this browser (AudioWorklet not supported).');
+        return rawStream;
+      }
+
+      try {
+        if (!pubAudioContext || pubAudioContext.state === 'closed') {
+          pubAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+          pubRnnoiseWorkletLoaded = false;
+        }
+        if (pubAudioContext.state === 'suspended') {
+          await pubAudioContext.resume();
+        }
+
+        const { RnnoiseWorkletNode, loadRnnoise } = await loadRnnoiseModule();
+        if (!pubRnnoiseWorkletLoaded) {
+          await pubAudioContext.audioWorklet.addModule(`${rnnoiseAssetBase}/rnnoise/workletProcessor.js`);
+          pubRnnoiseWorkletLoaded = true;
+        }
+
+        const wasmBinary = await loadRnnoise({
+          url: `${rnnoiseAssetBase}/rnnoise.wasm`,
+          simdUrl: `${rnnoiseAssetBase}/rnnoise_simd.wasm`
+        });
+
+        resetDenoiseGraph();
+        pubDenoiseSource = pubAudioContext.createMediaStreamSource(rawStream);
+        pubRnnoiseNode = new RnnoiseWorkletNode(pubAudioContext, {
+          wasmBinary,
+          maxChannels: 1
+        });
+        pubDenoiseDestination = pubAudioContext.createMediaStreamDestination();
+        pubDenoiseSource.connect(pubRnnoiseNode);
+        pubRnnoiseNode.connect(pubDenoiseDestination);
+
+        updateRnnoiseStatus('RNNoise suppression enabled.');
+        return pubDenoiseDestination.stream;
+      } catch (error) {
+        console.warn('RNNoise initialization failed. Falling back to browser suppression.', error);
+        updateRnnoiseStatus('RNNoise failed to initialize, using browser suppression.');
+        resetDenoiseGraph();
+        return rawStream;
+      }
     }
 
     async function waitForTranscriptLib(timeoutMs = 10000) {
@@ -746,6 +877,21 @@
 
         // Add change listener for switching microphone during broadcast
         audioSourceSelect.addEventListener('change', handleAudioSourceChange);
+
+        const rnnoiseToggle = document.getElementById('rnnoiseToggle');
+        if (rnnoiseToggle && !rnnoiseToggle.dataset.listenerAttached) {
+          rnnoiseToggle.addEventListener('change', () => {
+            if (pubProducer) {
+              showError('Restart broadcasting to apply RNNoise changes.');
+            }
+            updateRnnoiseStatus(
+              rnnoiseToggle.checked
+                ? 'RNNoise will be used for the next microphone capture.'
+                : 'Using browser noise suppression.'
+            );
+          });
+          rnnoiseToggle.dataset.listenerAttached = 'true';
+        }
       } catch (error) {
         console.error('Error loading audio devices:', error);
         showError('Error loading audio devices: ' + error.message);
@@ -790,27 +936,27 @@
           });
           pubAudioStream = null;
         }
+        if (pubRawAudioStream) {
+          pubRawAudioStream.getTracks().forEach(track => track.stop());
+          pubRawAudioStream = null;
+        }
+        resetDenoiseGraph();
 
         // Small delay to allow OS to release the microphone
         await new Promise(resolve => setTimeout(resolve, 100));
 
         // Get new stream from selected device
-        const newStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: { exact: newDeviceId },
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
-        const newTrack = newStream.getAudioTracks()[0];
+        const newStream = await navigator.mediaDevices.getUserMedia({ audio: getMicAudioConstraints(newDeviceId) });
+        pubRawAudioStream = newStream;
+        const processedStream = await applyNoiseSuppression(newStream);
+        const newTrack = processedStream.getAudioTracks()[0];
         console.log('New track obtained:', newTrack.label);
 
-        pubAudioStream = newStream;
+        pubAudioStream = processedStream;
 
         // Update audio meter with new source
         if (pubAudioContext && pubAudioMeter) {
-          pubAudioSource = pubAudioContext.createMediaStreamSource(newStream);
+          pubAudioSource = pubAudioContext.createMediaStreamSource(processedStream);
           pubAudioSource.connect(pubAudioMeter);
         }
 
@@ -1286,24 +1432,16 @@
         lastAudioDeviceId = audioSourceId || null;
 
         // Get microphone access (use selected device when available)
-        const audioConstraints = audioSourceId
-          ? {
-            deviceId: { exact: audioSourceId },
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-          : true;
-
         const micRequest = navigator.mediaDevices.getUserMedia({
-          audio: audioConstraints
+          audio: getMicAudioConstraints(audioSourceId)
         });
         const micTimeout = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Microphone request timed out')), 5000)
         );
 
         try {
-          pubAudioStream = await Promise.race([micRequest, micTimeout]);
+          pubRawAudioStream = await Promise.race([micRequest, micTimeout]);
+          pubAudioStream = await applyNoiseSuppression(pubRawAudioStream);
         } catch (micErr) {
           console.warn('Using synthetic fallback audio stream:', micErr.message);
           if (pubSyntheticAudioContext && pubSyntheticAudioContext.state !== 'closed') {
@@ -1315,6 +1453,7 @@
           pubSyntheticOscillator.frequency.value = 440;
           pubSyntheticOscillator.connect(destination);
           pubSyntheticOscillator.start();
+          pubRawAudioStream = destination.stream;
           pubAudioStream = destination.stream;
         }
 
@@ -1425,6 +1564,11 @@
         pubAudioStream.getTracks().forEach(track => track.stop());
         pubAudioStream = null;
       }
+      if (pubRawAudioStream) {
+        pubRawAudioStream.getTracks().forEach(track => track.stop());
+        pubRawAudioStream = null;
+      }
+      resetDenoiseGraph();
 
       if (pubSyntheticOscillator) {
         try {
@@ -1461,6 +1605,7 @@
           pubAudioContext.close();
         }
         pubAudioContext = null;
+        pubRnnoiseWorkletLoaded = false;
       }
 
       // Clear meter update interval
