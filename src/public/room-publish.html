@@ -22,9 +22,18 @@
       background: white;
       border-radius: 20px;
       padding: 40px;
-      max-width: 600px;
+      max-width: 1200px;
       width: 100%;
       box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .publisher-layout {
+      display: block;
+    }
+
+    .publisher-main,
+    .publisher-transcript {
+      min-width: 0;
     }
 
     .header {
@@ -357,25 +366,6 @@
       background: #f8fafc;
     }
 
-    .chat-log {
-      max-height: 150px;
-      overflow-y: auto;
-      border: 1px solid #e2e8f0;
-      background: white;
-      border-radius: 6px;
-      padding: 8px;
-      margin-bottom: 8px;
-      font-size: 12px;
-    }
-
-    .chat-msg {
-      margin-bottom: 6px;
-    }
-
-    .chat-msg strong {
-      color: #4a5568;
-    }
-
     .monitor-row {
       display: flex;
       gap: 8px;
@@ -388,6 +378,23 @@
       width: auto;
       padding: 8px 12px;
       font-size: 13px;
+    }
+
+    .chat-row {
+      margin-bottom: 6px;
+    }
+
+    @media (min-width: 1100px) {
+      .publisher-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 20px;
+        align-items: start;
+      }
+
+      .publisher-transcript .transcript-toggle {
+        margin-top: 0;
+      }
     }
 
   </style>
@@ -405,76 +412,74 @@
       </div>
     </div>
 
-    <div id="status" class="status disconnected">
-      Connecting to room...
-    </div>
+    <div class="publisher-layout">
+      <div class="publisher-main">
+        <div id="status" class="status disconnected">
+          Connecting to room...
+        </div>
 
-    <div class="listener-count" id="listenerCount" style="display: none;">
-      <span class="listener-count-icon">&#128266;</span>
-      <span class="listener-count-value" id="listenerCountValue">0</span>
-      <span class="listener-count-label" id="listenerCountLabel">listeners</span>
-    </div>
+        <div class="listener-count" id="listenerCount" style="display: none;">
+          <span class="listener-count-icon">&#128266;</span>
+          <span class="listener-count-value" id="listenerCountValue">0</span>
+          <span class="listener-count-label" id="listenerCountLabel">listeners</span>
+        </div>
 
-    <div id="errorMessage" class="error"></div>
+        <div id="errorMessage" class="error"></div>
 
-    <div id="configInfo" class="info-box" style="display: none;">
-      <div class="info-label">SFU Configuration</div>
-      <div class="info-value" id="sfuUrl"></div>
-    </div>
+        <div id="configInfo" class="info-box" style="display: none;">
+          <div class="info-label">SFU Configuration</div>
+          <div class="info-value" id="sfuUrl"></div>
+        </div>
 
-    <div id="audioSourceContainer" style="display: none;">
-      <label class="info-label">Audio Source</label>
-      <select id="audioSource" class="audio-source-select">
-        <option value="">Select audio source</option>
-      </select>
-    </div>
+        <div id="audioSourceContainer" style="display: none;">
+          <label class="info-label">Audio Source</label>
+          <select id="audioSource" class="audio-source-select">
+            <option value="">Select audio source</option>
+          </select>
+        </div>
 
-    <div class="audio-meter" id="audioMeter" style="display: none;">
-      <div class="audio-meter-label">Audio Level</div>
-      <div class="audio-meter-bar" id="audioMeterBar"></div>
-    </div>
+        <div class="audio-meter" id="audioMeter" style="display: none;">
+          <div class="audio-meter-label">Audio Level</div>
+          <div class="audio-meter-bar" id="audioMeterBar"></div>
+        </div>
 
-    <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
-      Start Broadcasting
-    </button>
-    <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
-      Stop Broadcasting
-    </button>
+        <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
+          Start Broadcasting
+        </button>
+        <button id="stopBtn" class="btn btn-danger" onclick="stopBroadcast(true)" style="display: none;">
+          Stop Broadcasting
+        </button>
 
-    <div class="chat-box">
-      <div class="info-label">Monitor Another Channel</div>
-      <select id="monitorChannelSelect" class="audio-source-select">
-        <option value="">Select channel to monitor</option>
-      </select>
-      <div class="monitor-row">
-        <button id="startMonitorBtn" class="btn btn-primary" onclick="startMonitorChannel()">Start Monitor</button>
-        <button id="stopMonitorBtn" class="btn btn-danger" onclick="stopMonitorChannel()" style="display:none;">Stop Monitor</button>
+        <div class="chat-box">
+          <div class="info-label">Monitor Another Channel</div>
+          <select id="monitorChannelSelect" class="audio-source-select">
+            <option value="">Select channel to monitor</option>
+          </select>
+          <div class="monitor-row">
+            <button id="startMonitorBtn" class="btn btn-primary" onclick="startMonitorChannel()">Start Monitor</button>
+            <button id="stopMonitorBtn" class="btn btn-danger" onclick="stopMonitorChannel()" style="display:none;">Stop Monitor</button>
+          </div>
+          <audio id="monitorAudioPlayer" autoplay playsinline></audio>
+        </div>
       </div>
-      <audio id="monitorAudioPlayer" autoplay playsinline></audio>
-    </div>
 
-    <div class="chat-box">
-      <div class="info-label">Admin Chat</div>
-      <div id="publisherChatLog" class="chat-log">No messages yet.</div>
-      <div class="monitor-row">
-        <input id="publisherChatInput" class="audio-source-select" type="text" placeholder="Message admin..." style="margin:0;">
-        <button class="btn btn-primary" onclick="sendPublisherChat()">Send</button>
+      <div class="publisher-transcript">
+        <button id="toggleTranscriptBtn" class="transcript-toggle" onclick="toggleTranscriptPanel()">
+          Show Transcripts
+        </button>
+        <div id="transcriptPanel" class="transcript-panel hidden">
+          <div id="transcriptStatus" class="transcript-status">Transcripts hidden</div>
+          <div id="transcriptTabs" class="transcript-tabs"></div>
+          <textarea id="transcriptEditor" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
+        </div>
       </div>
-    </div>
-
-    <button id="toggleTranscriptBtn" class="transcript-toggle" onclick="toggleTranscriptPanel()">
-      Show Transcripts
-    </button>
-    <div id="transcriptPanel" class="transcript-panel hidden">
-      <div id="transcriptStatus" class="transcript-status">Transcripts hidden</div>
-      <div id="transcriptTabs" class="transcript-tabs"></div>
-      <textarea id="transcriptEditor" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
     </div>
   </div>
 
   <script src="/js/bundles/mediasoup-client.js"></script>
   <script src="/js/common.js"></script>
   <script src="/js/transcript-sync.js"></script>
+  <script src="/js/floating-chat-widget.js"></script>
   <script>
     // Extract room slug from URL path (/room/:slug/publish)
     const pathParts = window.location.pathname.split('/');
@@ -521,6 +526,7 @@
     let monitorConsumers = [];
     let monitorRtpCapabilities = null;
     let monitorChannel = null;
+    let publisherChatWidget = null;
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -938,41 +944,22 @@
     }
 
     function renderPublisherChat(messages) {
-      const logEl = document.getElementById('publisherChatLog');
-      if (!messages.length) {
-        logEl.textContent = 'No messages yet.';
-        return;
-      }
-      logEl.innerHTML = messages.map(msg => {
-        const senderLabel = msg.sender === 'admin' ? 'Admin' : 'You';
-        return `<div class="chat-msg"><strong>${senderLabel}</strong> <small>${formatChatTimestamp(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
-      }).join('');
-      logEl.scrollTop = logEl.scrollHeight;
+      if (!publisherChatWidget) return;
+      publisherChatWidget.setMessages(Array.isArray(messages) ? messages : [], 'No messages yet.');
     }
 
     function appendPublisherChat(message) {
-      const logEl = document.getElementById('publisherChatLog');
-      if (!message || !message.text) return;
-      if (logEl.textContent === 'No messages yet.') {
-        logEl.textContent = '';
-      }
-      const senderLabel = message.sender === 'admin' ? 'Admin' : 'You';
-      const row = document.createElement('div');
-      row.className = 'chat-msg';
-      row.innerHTML = `<strong>${senderLabel}</strong> <small>${formatChatTimestamp(message.timestamp)}</small><br>${escapeHtml(message.text)}`;
-      logEl.appendChild(row);
-      logEl.scrollTop = logEl.scrollHeight;
+      if (!publisherChatWidget || !message || !message.text) return;
+      publisherChatWidget.appendMessage(message);
     }
 
-    function sendPublisherChat() {
-      const inputEl = document.getElementById('publisherChatInput');
-      const text = inputEl.value.trim();
-      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    function sendPublisherChat(text) {
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return false;
       ws.send(JSON.stringify({
         type: 'publisher-chat-send',
         data: { text }
       }));
-      inputEl.value = '';
+      return true;
     }
 
     // Handle recording status updates
@@ -1502,10 +1489,15 @@
       stopMonitorChannel();
     });
 
-    document.getElementById('publisherChatInput').addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        sendPublisherChat();
+    publisherChatWidget = window.SoundcastFloatingChat.create({
+      buttonLabel: 'Admin Chat',
+      title: 'Admin Chat',
+      inputPlaceholder: 'Message admin...',
+      emptyMessage: 'No messages yet.',
+      onSend: sendPublisherChat,
+      renderMessage: (message) => {
+        const senderLabel = message.sender === 'admin' ? 'Admin' : 'You';
+        return `<div class="chat-row"><strong>${senderLabel}</strong> <small>${formatChatTimestamp(message.timestamp)}</small><br>${escapeHtml(message.text)}</div>`;
       }
     });
 

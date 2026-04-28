@@ -619,33 +619,8 @@
       text-align: right;
     }
 
-    .chat-panel {
-      margin-top: 16px;
-      border: 1px solid #cbd5e0;
-      border-radius: 8px;
-      padding: 12px;
-      background: #f8fafc;
-      display: none;
-    }
-
-    .chat-log {
-      max-height: 220px;
-      overflow-y: auto;
-      background: white;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      padding: 10px;
-      margin: 8px 0;
-      font-size: 13px;
-    }
-
     .chat-row {
       margin-bottom: 8px;
-    }
-
-    .chat-composer {
-      display: flex;
-      gap: 8px;
     }
   </style>
 </head>
@@ -682,14 +657,6 @@
       </div>
       <div id="roomsList">
         <div class="loading">Loading rooms...</div>
-      </div>
-      <div id="adminChatPanel" class="chat-panel">
-        <div id="adminChatTitle" style="font-weight: bold;">Publisher Chat</div>
-        <div id="adminChatLog" class="chat-log">Select a publisher to chat.</div>
-        <div class="chat-composer">
-          <input id="adminChatInput" type="text" class="form-input" placeholder="Send message to publisher...">
-          <button class="btn btn-primary" onclick="sendAdminChat()">Send</button>
-        </div>
       </div>
     </div>
 
@@ -790,6 +757,7 @@
   </div>
 
   <script src="/js/transcript-sync.js"></script>
+  <script src="/js/floating-chat-widget.js"></script>
   <script>
     const API_BASE = window.location.origin + '/api';
     let currentApiKey = '';
@@ -802,7 +770,9 @@
     let transcriptSessions = {}; // roomSlug -> session[]
     let transcriptSessionState = {}; // roomSlug -> { limit, offset, total, selectedSessionId }
     let adminChatMessages = {}; // key: roomSlug:publisherId -> messages[]
-    let activeChat = null; // { roomSlug, publisherId, publisherName }
+    let adminChatWidgets = {}; // key: roomSlug:publisherId -> floating chat widget
+    let adminChatWindowOrder = []; // preserve window stacking order
+    let adminChatEnabled = false;
 
     // ========== Reactive State Management ==========
     // Lightweight state store with change notifications using Proxy
@@ -1002,7 +972,10 @@
             if (!roomSlug || !publisherId) return;
             const key = getAdminChatKey(roomSlug, publisherId);
             adminChatMessages[key] = Array.isArray(msg?.data?.messages) ? msg.data.messages : [];
-            renderActiveAdminChat();
+            const widget = adminChatWidgets[key];
+            if (widget) {
+              widget.setMessages(adminChatMessages[key], 'No messages yet.');
+            }
           } else if (msg.type === 'error') {
             console.error('Admin WebSocket error:', msg.data.message);
           }
@@ -1109,6 +1082,73 @@
       return `${roomSlug}:${publisherId}`;
     }
 
+    function getAdminChatMetaFromKey(key) {
+      const idx = key.lastIndexOf(':');
+      if (idx < 0) return null;
+      return {
+        roomSlug: key.slice(0, idx),
+        publisherId: Number(key.slice(idx + 1))
+      };
+    }
+
+    function getAdminChatWindowPosition(key) {
+      const index = adminChatWindowOrder.indexOf(key);
+      const safeIndex = index >= 0 ? index : adminChatWindowOrder.length;
+      const panelWidth = 360;
+      const panelGap = 20;
+      const rightBase = 20;
+      const panelStepX = panelWidth + panelGap;
+      const panelStepY = 360;
+      const fabStepY = 56;
+      const viewportWidth = window.innerWidth || 1440;
+      const usableWidth = Math.max(320, viewportWidth - (rightBase * 2));
+      const columns = Math.max(1, Math.floor((usableWidth + panelGap) / panelStepX));
+      const col = safeIndex % columns;
+      const row = Math.floor(safeIndex / columns);
+      return {
+        right: rightBase + (col * panelStepX),
+        panelBottom: 74 + (row * panelStepY),
+        fabBottom: 20 + (row * fabStepY)
+      };
+    }
+
+    function relayoutAdminChatWindows() {
+      for (const key of adminChatWindowOrder) {
+        const widget = adminChatWidgets[key];
+        if (!widget) continue;
+        widget.setPosition(getAdminChatWindowPosition(key));
+      }
+    }
+
+    function ensureAdminChatWidget(roomSlug, publisherId, publisherName) {
+      const key = getAdminChatKey(roomSlug, publisherId);
+      if (!adminChatWindowOrder.includes(key)) {
+        adminChatWindowOrder.push(key);
+      }
+      if (adminChatWidgets[key]) {
+        return adminChatWidgets[key];
+      }
+
+      const widget = window.SoundcastFloatingChat.create({
+        buttonLabel: publisherName || `Chat ${publisherId}`,
+        title: `Chat with ${publisherName || ('Publisher ' + publisherId)} (${roomSlug})`,
+        inputPlaceholder: 'Send message to publisher...',
+        emptyMessage: 'No messages yet.',
+        position: getAdminChatWindowPosition(key),
+        onSend: (text) => sendAdminChatForKey(key, text),
+        renderMessage: (msg) => {
+          const sender = msg.sender === 'admin' ? 'You' : (msg.publisherName || 'Publisher');
+          return `<div class="chat-row"><strong>${escapeHtml(sender)}</strong> <small>${formatChatTime(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
+        }
+      });
+
+      widget.setEnabled(adminChatEnabled);
+      widget.setMessages(adminChatMessages[key] || [], 'No messages yet.');
+      adminChatWidgets[key] = widget;
+      relayoutAdminChatWindows();
+      return widget;
+    }
+
     function formatChatTime(timestamp) {
       try {
         return new Date(timestamp).toLocaleTimeString();
@@ -1127,14 +1167,20 @@
       if (adminChatMessages[key].length > 100) {
         adminChatMessages[key].splice(0, adminChatMessages[key].length - 100);
       }
-      renderActiveAdminChat();
+      const widget = ensureAdminChatWidget(message.roomSlug, message.publisherId, message.publisherName);
+      const wasOpen = widget.isOpen();
+      widget.setMessages(adminChatMessages[key], 'No messages yet.');
+      if (!wasOpen) {
+        widget.incrementUnread(1);
+      }
     }
 
     function openAdminChat(roomSlug, publisherId, publisherName) {
-      activeChat = { roomSlug, publisherId, publisherName };
-      document.getElementById('adminChatPanel').style.display = 'block';
-      document.getElementById('adminChatTitle').textContent = `Chat with ${publisherName} (${roomSlug})`;
-      renderActiveAdminChat();
+      const key = getAdminChatKey(roomSlug, publisherId);
+      const widget = ensureAdminChatWidget(roomSlug, publisherId, publisherName);
+      widget.setTitle(`Chat with ${publisherName} (${roomSlug})`);
+      widget.setMessages(adminChatMessages[key] || [], 'No messages yet.');
+      widget.open();
       if (adminWs && adminWs.readyState === WebSocket.OPEN) {
         adminWs.send(JSON.stringify({
           type: 'admin-chat-history-request',
@@ -1143,41 +1189,32 @@
       }
     }
 
-    function renderActiveAdminChat() {
-      const logEl = document.getElementById('adminChatLog');
-      if (!activeChat) return;
-      const key = getAdminChatKey(activeChat.roomSlug, activeChat.publisherId);
-      const messages = adminChatMessages[key] || [];
-      if (messages.length === 0) {
-        logEl.textContent = 'No messages yet.';
-        return;
+    async function sendAdminChatForKey(key, text) {
+      const chatMeta = getAdminChatMetaFromKey(key);
+      if (!chatMeta) return false;
+      if (!adminWs || adminWs.readyState !== WebSocket.OPEN) {
+        showError('Chat connection is not ready yet');
+        return false;
       }
-      logEl.innerHTML = messages.map((msg) => {
-        const sender = msg.sender === 'admin' ? 'You' : (msg.publisherName || 'Publisher');
-        return `<div class="chat-row"><strong>${escapeHtml(sender)}</strong> <small>${formatChatTime(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
-      }).join('');
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    function sendAdminChat() {
-      if (!activeChat || !adminWs || adminWs.readyState !== WebSocket.OPEN) return;
-      const inputEl = document.getElementById('adminChatInput');
-      const text = inputEl.value.trim();
-      if (!text) return;
+      if (!text) return false;
       adminWs.send(JSON.stringify({
         type: 'admin-chat-send',
         data: {
-          roomSlug: activeChat.roomSlug,
-          publisherId: activeChat.publisherId,
+          roomSlug: chatMeta.roomSlug,
+          publisherId: chatMeta.publisherId,
           text
         }
       }));
-      inputEl.value = '';
+      return true;
     }
 
     function showAuthenticatedView() {
       document.getElementById('apiKeySection').style.display = 'none';
       document.getElementById('roomsSection').style.display = 'block';
+      adminChatEnabled = true;
+      for (const widget of Object.values(adminChatWidgets)) {
+        widget.setEnabled(true);
+      }
 
       // Connect WebSocket for real-time stats
       connectAdminWebSocket();
@@ -2402,16 +2439,10 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
 
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', () => {
+      window.addEventListener('resize', () => {
+        relayoutAdminChatWindows();
+      });
       checkSingleTenantMode();
-      const chatInput = document.getElementById('adminChatInput');
-      if (chatInput) {
-        chatInput.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            sendAdminChat();
-          }
-        });
-      }
     });
   </script>
 </body>
