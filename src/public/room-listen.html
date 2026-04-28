@@ -243,6 +243,19 @@
       background: #e2e8f0;
     }
 
+    .btn-with-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+    }
+
     .channel-selector {
       margin-bottom: 20px;
     }
@@ -305,8 +318,9 @@
           style="font-size: 18px; padding: 15px 40px;">
           Start Listening
         </button>
-        <button id="openInChromeBtn" class="btn btn-secondary" onclick="openInChrome()" style="display: none;">
-          Open in Chrome
+        <button id="openInChromeBtn" class="btn btn-secondary btn-with-icon" onclick="openInChrome()" style="display: none;">
+          <img class="btn-icon" src="/icons/chrome.svg" alt="Chrome icon">
+          <span>Open in Chrome</span>
         </button>
       </div>
 
