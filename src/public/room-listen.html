@@ -233,6 +233,29 @@
       background: #e53e3e;
     }
 
+    .btn-secondary {
+      background: #edf2f7;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+    }
+
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+
+    .btn-with-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 18px;
+    }
+
     .channel-selector {
       margin-bottom: 20px;
     }
@@ -294,6 +317,10 @@
         <button id="startBtn" class="btn btn-primary" onclick="startListening()"
           style="font-size: 18px; padding: 15px 40px;">
           Start Listening
+        </button>
+        <button id="openInChromeBtn" class="btn btn-secondary btn-with-icon" onclick="openInChrome()" style="display: none;">
+          <img class="btn-icon" src="/icons/chrome.svg" alt="Chrome icon">
+          <span>Open in Chrome</span>
         </button>
       </div>
 
@@ -364,6 +391,7 @@
     let isMuted = false;
     let selectedChannel = null;
     let listenRtpCapabilities = null;
+    let mobilePlatform = 'unknown';
 
     // Reconnection state
     let roomReconnectAttempts = 0;
@@ -390,6 +418,117 @@
       el.textContent = message;
       el.style.display = 'block';
       setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    async function detectMobilePlatform() {
+      // Prefer User-Agent Client Hints when available.
+      if (navigator.userAgentData && typeof navigator.userAgentData.getHighEntropyValues === 'function') {
+        try {
+          const uaDataValues = await navigator.userAgentData.getHighEntropyValues(['platform']);
+          const hintedPlatform = (uaDataValues.platform || navigator.userAgentData.platform || '').toLowerCase();
+          if (hintedPlatform.includes('android')) {
+            return 'android';
+          }
+          if (hintedPlatform.includes('ios')) {
+            return 'ios';
+          }
+        } catch (err) {
+          console.debug('User-Agent Client Hints lookup failed, falling back to navigator.userAgent', err);
+        }
+      }
+
+      const ua = navigator.userAgent || '';
+      if (/android/i.test(ua)) {
+        return 'android';
+      }
+
+      // iPadOS can present itself as Macintosh with touch points.
+      const isiOS = /iPad|iPhone|iPod/i.test(ua)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+      if (isiOS) {
+        return 'ios';
+      }
+
+      return 'unknown';
+    }
+
+    function getListenerRoomUrl() {
+      return window.location.href;
+    }
+
+    function getChromeDeepLink(url, platform) {
+      if (platform === 'ios') {
+        const parsedUrl = new URL(url);
+        const chromeScheme = parsedUrl.protocol === 'https:' ? 'googlechromes:' : 'googlechrome:';
+        return `${chromeScheme}//${parsedUrl.host}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+      }
+
+      if (platform === 'android') {
+        const parsedUrl = new URL(url);
+        const noScheme = `${parsedUrl.host}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+        return `intent://${noScheme}#Intent;scheme=${parsedUrl.protocol.replace(':', '')};package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+      }
+
+      return null;
+    }
+
+    async function setupOpenInChromeButton() {
+      mobilePlatform = await detectMobilePlatform();
+      const chromeButton = document.getElementById('openInChromeBtn');
+
+      if (!chromeButton) {
+        return;
+      }
+
+      if (mobilePlatform === 'ios' || mobilePlatform === 'android') {
+        chromeButton.style.display = 'inline-block';
+      } else {
+        chromeButton.style.display = 'none';
+      }
+    }
+
+    function openInChrome() {
+      const deeplink = getChromeDeepLink(getListenerRoomUrl(), mobilePlatform);
+      if (!deeplink) {
+        showError('Open in Chrome is only available on iOS and Android.');
+        return;
+      }
+
+      const fallbackUrl = getListenerRoomUrl();
+      let pageWasHidden = false;
+
+      const cleanup = () => {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        window.removeEventListener('pagehide', onPageHide);
+      };
+
+      const onVisibilityChange = () => {
+        if (document.visibilityState === 'hidden') {
+          pageWasHidden = true;
+          cleanup();
+        }
+      };
+
+      const onPageHide = () => {
+        pageWasHidden = true;
+        cleanup();
+      };
+
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      window.addEventListener('pagehide', onPageHide);
+
+      // There is no reliable browser API that confirms deep-link success.
+      // Heuristic: if page is still visible shortly after navigation, treat as failure.
+      setTimeout(() => {
+        cleanup();
+        if (!pageWasHidden) {
+          showError('Could not open Chrome automatically. You can continue in this browser.');
+          window.location.href = fallbackUrl;
+        }
+      }, 1500);
+
+      window.location.href = deeplink;
     }
 
     async function requestScreenWakeLock() {
@@ -1149,6 +1288,7 @@
     });
 
     // Connect to room on page load
+    setupOpenInChromeButton();
     connectToRoom();
   </script>
 </body>
