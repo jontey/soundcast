@@ -453,11 +453,11 @@
             <option value="">Select audio source</option>
           </select>
           <label class="audio-option-row">
-            <span>RNNoise suppression (beta)</span>
+            <span>Enable Noise suppression (beta)</span>
             <input type="checkbox" id="rnnoiseToggle">
           </label>
           <div class="audio-option-help" id="rnnoiseStatus">
-            Uses browser noise suppression by default. Enable RNNoise for stronger suppression.
+            Noise suppression disabled.
           </div>
         </div>
 
@@ -590,7 +590,7 @@
       return {
         ...(audioSourceId ? { deviceId: { exact: audioSourceId } } : {}),
         echoCancellation: true,
-        noiseSuppression: !isRnnoiseEnabled(),
+        noiseSuppression: false,
         autoGainControl: true
       };
     }
@@ -646,13 +646,21 @@
 
     async function applyNoiseSuppression(rawStream) {
       if (!isRnnoiseEnabled()) {
-        updateRnnoiseStatus('Using browser noise suppression.');
+        updateRnnoiseStatus('Noise suppression disabled.');
         resetDenoiseGraph();
         return rawStream;
       }
 
       if (typeof AudioWorkletNode === 'undefined') {
-        updateRnnoiseStatus('RNNoise unavailable in this browser (AudioWorklet not supported).');
+        const track = rawStream.getAudioTracks()[0];
+        if (track) {
+          try {
+            await track.applyConstraints({ noiseSuppression: true });
+          } catch (error) {
+            console.warn('Failed to enable browser noise suppression fallback:', error);
+          }
+        }
+        updateRnnoiseStatus('Noise suppression enabled.');
         return rawStream;
       }
 
@@ -686,11 +694,19 @@
         pubDenoiseSource.connect(pubRnnoiseNode);
         pubRnnoiseNode.connect(pubDenoiseDestination);
 
-        updateRnnoiseStatus('RNNoise suppression enabled.');
+        updateRnnoiseStatus('Noise suppression enabled.');
         return pubDenoiseDestination.stream;
       } catch (error) {
         console.warn('RNNoise initialization failed. Falling back to browser suppression.', error);
-        updateRnnoiseStatus('RNNoise failed to initialize, using browser suppression.');
+        const track = rawStream.getAudioTracks()[0];
+        if (track) {
+          try {
+            await track.applyConstraints({ noiseSuppression: true });
+          } catch (applyError) {
+            console.warn('Failed to enable browser noise suppression fallback:', applyError);
+          }
+        }
+        updateRnnoiseStatus('Noise suppression enabled.');
         resetDenoiseGraph();
         return rawStream;
       }
@@ -880,14 +896,16 @@
 
         const rnnoiseToggle = document.getElementById('rnnoiseToggle');
         if (rnnoiseToggle && !rnnoiseToggle.dataset.listenerAttached) {
-          rnnoiseToggle.addEventListener('change', () => {
+          rnnoiseToggle.addEventListener('change', async () => {
             if (pubProducer) {
-              showError('Restart broadcasting to apply RNNoise changes.');
+              const audioSourceSelect = document.getElementById('audioSource');
+              const selectedDeviceId = audioSourceSelect ? audioSourceSelect.value : '';
+              await restartMicrophoneCapture(selectedDeviceId, 'Applying RNNoise setting...');
             }
             updateRnnoiseStatus(
               rnnoiseToggle.checked
-                ? 'RNNoise will be used for the next microphone capture.'
-                : 'Using browser noise suppression.'
+                ? 'Noise suppression enabled.'
+                : 'Noise suppression disabled.'
             );
           });
           rnnoiseToggle.dataset.listenerAttached = 'true';
@@ -896,6 +914,63 @@
         console.error('Error loading audio devices:', error);
         showError('Error loading audio devices: ' + error.message);
       }
+    }
+
+    // Recreate microphone stream + producer with current settings/device
+    async function restartMicrophoneCapture(deviceId, connectingStatus = 'Switching microphone...') {
+      setStatus(connectingStatus, 'connecting');
+
+      // Close the existing producer first
+      if (pubProducer) {
+        pubProducer.close();
+        pubProducer = null;
+      }
+
+      // Disconnect old audio source from meter
+      if (pubAudioSource) {
+        try {
+          pubAudioSource.disconnect();
+        } catch (e) {
+          console.warn('Error disconnecting old audio source:', e);
+        }
+        pubAudioSource = null;
+      }
+
+      // Stop old audio tracks BEFORE getting new stream
+      // This ensures the old microphone is fully released
+      if (pubAudioStream) {
+        pubAudioStream.getTracks().forEach(track => {
+          track.stop();
+          console.log('Stopped old track:', track.label);
+        });
+        pubAudioStream = null;
+      }
+      if (pubRawAudioStream) {
+        pubRawAudioStream.getTracks().forEach(track => track.stop());
+        pubRawAudioStream = null;
+      }
+      resetDenoiseGraph();
+
+      // Small delay to allow OS to release the microphone
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Get stream from selected device
+      const newStream = await navigator.mediaDevices.getUserMedia({ audio: getMicAudioConstraints(deviceId || undefined) });
+      pubRawAudioStream = newStream;
+      const processedStream = await applyNoiseSuppression(newStream);
+      const newTrack = processedStream.getAudioTracks()[0];
+      console.log('New track obtained:', newTrack.label);
+
+      pubAudioStream = processedStream;
+
+      // Update audio meter with new source
+      if (pubAudioContext && pubAudioMeter) {
+        pubAudioSource = pubAudioContext.createMediaStreamSource(processedStream);
+        pubAudioSource.connect(pubAudioMeter);
+      }
+
+      // Create new producer with new track
+      pubProducer = await pubTransport.produce({ track: newTrack });
     }
 
     // Handle audio source change during broadcast
@@ -908,60 +983,9 @@
       }
 
       console.log('Switching microphone to:', newDeviceId);
-      setStatus('Switching microphone...', 'connecting');
 
       try {
-        // Close the existing producer first
-        if (pubProducer) {
-          pubProducer.close();
-          pubProducer = null;
-        }
-
-        // Disconnect old audio source from meter
-        if (pubAudioSource) {
-          try {
-            pubAudioSource.disconnect();
-          } catch (e) {
-            console.warn('Error disconnecting old audio source:', e);
-          }
-          pubAudioSource = null;
-        }
-
-        // Stop old audio tracks BEFORE getting new stream
-        // This ensures the old microphone is fully released
-        if (pubAudioStream) {
-          pubAudioStream.getTracks().forEach(track => {
-            track.stop();
-            console.log('Stopped old track:', track.label);
-          });
-          pubAudioStream = null;
-        }
-        if (pubRawAudioStream) {
-          pubRawAudioStream.getTracks().forEach(track => track.stop());
-          pubRawAudioStream = null;
-        }
-        resetDenoiseGraph();
-
-        // Small delay to allow OS to release the microphone
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Get new stream from selected device
-        const newStream = await navigator.mediaDevices.getUserMedia({ audio: getMicAudioConstraints(newDeviceId) });
-        pubRawAudioStream = newStream;
-        const processedStream = await applyNoiseSuppression(newStream);
-        const newTrack = processedStream.getAudioTracks()[0];
-        console.log('New track obtained:', newTrack.label);
-
-        pubAudioStream = processedStream;
-
-        // Update audio meter with new source
-        if (pubAudioContext && pubAudioMeter) {
-          pubAudioSource = pubAudioContext.createMediaStreamSource(processedStream);
-          pubAudioSource.connect(pubAudioMeter);
-        }
-
-        // Create new producer with new track
-        pubProducer = await pubTransport.produce({ track: newTrack });
+        await restartMicrophoneCapture(newDeviceId, 'Switching microphone...');
 
         console.log('Microphone switched successfully - new producer created');
         setStatus('Broadcasting', 'broadcasting');

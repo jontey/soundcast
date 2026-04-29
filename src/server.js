@@ -120,7 +120,8 @@ const rnnoiseAssetsDir = getRnnoiseAssetsDir();
 if (rnnoiseAssetsDir) {
   fastify.register(fastifyStatic, {
     root: rnnoiseAssetsDir,
-    prefix: '/vendor/web-noise-suppressor/'
+    prefix: '/vendor/web-noise-suppressor/',
+    decorateReply: false
   });
 } else {
   console.warn('RNNoise assets not found in node_modules. Publisher RNNoise toggle will fallback to browser suppression.');
