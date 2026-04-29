@@ -4,6 +4,7 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
+    "bundle": "node src/bundle-mediasoup.js",
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "test:db": "node test/db/test-database-models.js",
@@ -23,6 +24,7 @@
     "yjs": "^13.6.29"
   },
   "devDependencies": {
+    "esbuild": "^0.28.0",
     "nodemon": "^3.1.10",
     "playwright": "^1.58.2"
   }

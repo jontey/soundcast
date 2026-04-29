@@ -1,5 +1,5 @@
 (async function initTranscriptSync() {
-  const Y = await import('https://esm.sh/yjs@13.6.27');
+  const Y = await import('/js/bundles/yjs.js');
 
   function isNearBottom(textarea, threshold = 24) {
     const remaining = textarea.scrollHeight - textarea.scrollTop - textarea.clientHeight;
