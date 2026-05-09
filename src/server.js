@@ -62,6 +62,128 @@ const fastify = Fastify({
 
 let transcriptionRuntime = null;
 
+const CAPTIVE_SUCCESS_BODY = '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>';
+const CAPTIVE_RELEASE_TTL_MS = Number.parseInt(process.env.CAPTIVE_RELEASE_TTL_MS || '600000', 10);
+const CAPTIVE_PORTAL_PATH = process.env.CAPTIVE_PORTAL_PATH || '/room/main/listen';
+const captiveReleasedClients = new Map();
+
+function getCaptiveClientKey(request) {
+  const ip = request.ip || request.socket?.remoteAddress || '';
+  return ip.replace(/^::ffff:/, '');
+}
+
+function pruneCaptiveReleases(now = Date.now()) {
+  for (const [clientKey, expiresAt] of captiveReleasedClients.entries()) {
+    if (expiresAt <= now) {
+      captiveReleasedClients.delete(clientKey);
+    }
+  }
+}
+
+function markCaptiveClientReleased(request) {
+  pruneCaptiveReleases();
+  const clientKey = getCaptiveClientKey(request);
+  captiveReleasedClients.set(clientKey, Date.now() + CAPTIVE_RELEASE_TTL_MS);
+  return clientKey;
+}
+
+function isCaptiveClientReleased(request) {
+  pruneCaptiveReleases();
+  const clientKey = getCaptiveClientKey(request);
+  const expiresAt = captiveReleasedClients.get(clientKey);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    captiveReleasedClients.delete(clientKey);
+    return false;
+  }
+  return true;
+}
+
+function sendCaptiveSuccess(reply) {
+  return reply
+    .type('text/html')
+    .header('Cache-Control', 'no-store')
+    .send(CAPTIVE_SUCCESS_BODY);
+}
+
+function getSafeCaptiveContinuePath(request) {
+  const requestedTo = typeof request.query?.to === 'string' ? request.query.to : '';
+
+  if (requestedTo.startsWith('/') && !requestedTo.startsWith('//')) {
+    return requestedTo;
+  }
+
+  try {
+    const parsedUrl = new URL(requestedTo);
+    if (parsedUrl.host === request.headers.host && (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:')) {
+      return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
+    }
+  } catch {
+    // Fall through to the configured portal path.
+  }
+
+  return CAPTIVE_PORTAL_PATH;
+}
+
+function sendCaptiveContinuePage(request, reply) {
+  const continuePath = getSafeCaptiveContinuePath(request);
+  const continuePathJson = JSON.stringify(continuePath);
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Success</title>
+</head>
+<body>
+Success
+<script>
+  setTimeout(function () {
+    window.location.replace(${continuePathJson});
+  }, 300);
+</script>
+</body>
+</html>`;
+
+  return reply
+    .type('text/html')
+    .header('Cache-Control', 'no-store')
+    .send(html);
+}
+
+function registerCaptivePortalRoutes(fastifyInstance) {
+  fastifyInstance.post('/api/captive/release', async (request, reply) => {
+    const clientKey = markCaptiveClientReleased(request);
+    request.log.info({ clientKey }, 'Marked captive portal client as released');
+    return reply.send({
+      released: true,
+      expiresInMs: CAPTIVE_RELEASE_TTL_MS
+    });
+  });
+
+  fastifyInstance.get('/api/captive/continue', async (request, reply) => {
+    const clientKey = markCaptiveClientReleased(request);
+    request.log.info({ clientKey }, 'Serving captive portal success handoff');
+    return sendCaptiveContinuePage(request, reply);
+  });
+
+  const handleAppleProbe = async (request, reply) => {
+    if (isCaptiveClientReleased(request)) {
+      return sendCaptiveSuccess(reply);
+    }
+
+    return reply
+      .code(302)
+      .header('Cache-Control', 'no-store')
+      .header('Location', CAPTIVE_PORTAL_PATH)
+      .send();
+  };
+
+  fastifyInstance.get('/hotspot-detect.html', handleAppleProbe);
+  fastifyInstance.get('/library/test/success.html', handleAppleProbe);
+  fastifyInstance.get('/success.html', handleAppleProbe);
+}
+
 // Initialize database
 const dbPath = process.env.DB_PATH || './soundcast.db';
 initDatabase(dbPath);
@@ -111,6 +233,7 @@ transcriptionRuntime = new TranscriptionRuntime({
 // Fastify setup - serve static files
 const publicDir = getPublicDir();
 console.log('Serving static files from:', publicDir);
+registerCaptivePortalRoutes(fastify);
 fastify.register(fastifyStatic, {
   root: publicDir,
   prefix: '/' // optional: default '/'
@@ -1948,6 +2071,8 @@ function createHttpsServer() {
   });
 
   // Register same plugins and routes for HTTPS server
+  registerCaptivePortalRoutes(fastifyHttps);
+
   fastifyHttps.register(fastifyStatic, {
     root: publicDir,
     prefix: '/'

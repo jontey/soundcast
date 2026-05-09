@@ -319,8 +319,8 @@
           Start Listening
         </button>
         <button id="openInChromeBtn" class="btn btn-secondary btn-with-icon" onclick="openInChrome()" style="display: none;">
-          <img class="btn-icon" src="/icons/chrome.svg" alt="Chrome icon">
-          <span>Open in Chrome</span>
+          <img id="openInChromeIcon" class="btn-icon" src="/icons/chrome.svg" alt="Chrome icon">
+          <span id="openInChromeText">Open in Chrome</span>
         </button>
       </div>
 
@@ -457,13 +457,11 @@
       return window.location.href;
     }
 
-    function getChromeDeepLink(url, platform) {
-      if (platform === 'ios') {
-        const parsedUrl = new URL(url);
-        const chromeScheme = parsedUrl.protocol === 'https:' ? 'googlechromes:' : 'googlechrome:';
-        return `${chromeScheme}//${parsedUrl.host}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
-      }
+    function getListenerRoomPath() {
+      return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    }
 
+    function getChromeDeepLink(url, platform) {
       if (platform === 'android') {
         const parsedUrl = new URL(url);
         const noScheme = `${parsedUrl.host}${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`;
@@ -476,22 +474,40 @@
     async function setupOpenInChromeButton() {
       mobilePlatform = await detectMobilePlatform();
       const chromeButton = document.getElementById('openInChromeBtn');
+      const chromeIcon = document.getElementById('openInChromeIcon');
+      const chromeText = document.getElementById('openInChromeText');
 
       if (!chromeButton) {
         return;
       }
 
-      if (mobilePlatform === 'ios' || mobilePlatform === 'android') {
-        chromeButton.style.display = 'inline-block';
+      if (mobilePlatform === 'ios') {
+        chromeButton.style.display = 'inline-flex';
+        if (chromeIcon) chromeIcon.style.display = 'none';
+        if (chromeText) chromeText.textContent = 'Open in Browser';
+      } else if (mobilePlatform === 'android') {
+        chromeButton.style.display = 'inline-flex';
+        if (chromeIcon) chromeIcon.style.display = 'inline-block';
+        if (chromeText) chromeText.textContent = 'Open in Chrome';
       } else {
         chromeButton.style.display = 'none';
       }
     }
 
+    function openIosCaptiveBrowser() {
+      const continueUrl = `/api/captive/continue?to=${encodeURIComponent(getListenerRoomPath())}`;
+      window.location.href = continueUrl;
+    }
+
     function openInChrome() {
+      if (mobilePlatform === 'ios') {
+        openIosCaptiveBrowser();
+        return;
+      }
+
       const deeplink = getChromeDeepLink(getListenerRoomUrl(), mobilePlatform);
       if (!deeplink) {
-        showError('Open in Chrome is only available on iOS and Android.');
+        showError('Open in Chrome is only available on Android.');
         return;
       }
 
