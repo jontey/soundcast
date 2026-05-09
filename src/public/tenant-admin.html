@@ -551,6 +551,11 @@
       margin-bottom: 10px;
     }
 
+    .transcript-tab-group {
+      display: inline-flex;
+      align-items: stretch;
+    }
+
     .transcript-tab {
       background: #edf2f7;
       color: #2d3748;
@@ -561,10 +566,30 @@
       cursor: pointer;
     }
 
+    .transcript-tab-group .transcript-tab {
+      border-radius: 6px 0 0 6px;
+    }
+
     .transcript-tab.active {
       background: #667eea;
       color: white;
       border-color: #667eea;
+    }
+
+    .transcript-restart-btn {
+      background: #fff;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+      border-left: 0;
+      border-radius: 0 6px 6px 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-restart-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
 
     .transcript-editor {
@@ -769,6 +794,7 @@
     let transcriptChannels = {}; // roomSlug -> channelName[]
     let transcriptSessions = {}; // roomSlug -> session[]
     let transcriptSessionState = {}; // roomSlug -> { limit, offset, total, selectedSessionId }
+    let transcriptRestarting = {}; // roomSlug::channelName -> true while restart request is in flight
     let adminChatMessages = {}; // key: roomSlug:publisherId -> messages[]
     let adminChatWidgets = {}; // key: roomSlug:publisherId -> floating chat widget
     let adminChatWindowOrder = []; // preserve window stacking order
@@ -2168,10 +2194,33 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     function renderTranscriptTabs(roomSlug, channels, activeChannel) {
       const tabsEl = document.getElementById(`transcript-tabs-${roomSlug}`);
       if (!tabsEl) return;
+      const canRestart = canRestartTranscriptChannel(roomSlug);
       tabsEl.innerHTML = channels.map(channel => {
         const active = channel === activeChannel ? 'active' : '';
-        return `<button class="transcript-tab ${active}" onclick="openTranscriptChannel('${roomSlug}', '${escapeAttr(channel)}')">${escapeHtml(channel)}</button>`;
+        const restartKey = `${roomSlug}::${channel}`;
+        const restarting = Boolean(transcriptRestarting[restartKey]);
+        const disabled = canRestart && !restarting ? '' : 'disabled';
+        const restartLabel = restarting ? 'Restarting...' : 'Restart';
+        const escapedChannel = escapeAttr(channel);
+        return `
+          <span class="transcript-tab-group">
+            <button class="transcript-tab ${active}" onclick="openTranscriptChannel('${roomSlug}', '${escapedChannel}')">${escapeHtml(channel)}</button>
+            <button class="transcript-restart-btn" ${disabled} title="Restart transcription for ${escapeHtml(channel)}" onclick="restartTranscriptChannel(event, '${roomSlug}', '${escapedChannel}')">${restartLabel}</button>
+          </span>
+        `;
       }).join('');
+    }
+
+    function canRestartTranscriptChannel(roomSlug) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const selected = sessionState.selectedSession;
+      const status = recordingStatus[roomSlug] || {};
+      return Boolean(
+        selected
+        && selected.status === 'active'
+        && status.transcriptionActive
+        && status.transcriptionSessionId === selected.id
+      );
     }
 
     async function loadRoomTranscripts(roomSlug) {
@@ -2344,6 +2393,37 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         await loadRoomTranscripts(roomSlug);
       } catch (error) {
         setTranscriptStatus(roomSlug, error.message || 'Failed to stop transcription session');
+      }
+    }
+
+    async function restartTranscriptChannel(event, roomSlug, channelName) {
+      if (event) event.stopPropagation();
+      if (!canRestartTranscriptChannel(roomSlug)) return;
+
+      const restartKey = `${roomSlug}::${channelName}`;
+      if (transcriptRestarting[restartKey]) return;
+      transcriptRestarting[restartKey] = true;
+      renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug] || [], transcriptBindings[roomSlug]?.channelName);
+      setTranscriptStatus(roomSlug, `Restarting transcription for ${channelName}...`);
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/channels/${encodeURIComponent(channelName)}/restart`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${currentApiKey}`
+          }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || 'Failed to restart transcription channel');
+        }
+        showSuccess(payload.message || `Restarted transcription for ${channelName}`);
+        await loadTranscriptSession(roomSlug, getTranscriptSessionState(roomSlug).selectedSessionId);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message || 'Failed to restart transcription channel');
+      } finally {
+        delete transcriptRestarting[restartKey];
+        renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug] || [], transcriptBindings[roomSlug]?.channelName);
       }
     }
 
