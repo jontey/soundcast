@@ -428,8 +428,8 @@ class TrackRecorder {
       this.ffmpegProcess.stdin?.end();
       this.ffmpegProcess.kill('SIGINT');
 
-      // Give FFmpeg time to finalize the file
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Give FFmpeg time to finalize the file (fast cleanup for reconnects)
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       if (!this.ffmpegProcess.killed) {
         this.ffmpegProcess.kill('SIGKILL');

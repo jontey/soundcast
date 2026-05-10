@@ -638,7 +638,7 @@ function removeProducersForPublisher(channel, { clientId, publisherId = null } =
 }
 
 // Stop recording side effects for removed producers
-function cleanupProducerSideEffects(channelId, removedProducers) {
+async function cleanupProducerSideEffects(channelId, removedProducers) {
   if (!removedProducers || removedProducers.length === 0 || !channelId) return;
 
   const channelParts = channelId.split(':');
@@ -647,9 +647,11 @@ function cleanupProducerSideEffects(channelId, removedProducers) {
     const room = getRoomBySlug(roomSlug);
     if (room && isRecording(room.id)) {
       for (const removed of removedProducers) {
-        removeProducerFromRecording(room.id, removed.producerId).catch(err => {
+        try {
+          await removeProducerFromRecording(room.id, removed.producerId);
+        } catch (err) {
           fastify.log.error(`Failed to remove stale producer from recording: ${err.message}`);
-        });
+        }
         if (transcriptionRuntime && transcriptionRuntime.getRoomSession(room.id)) {
           transcriptionRuntime.unregisterProducerStream(room.id, removed.producerId);
         }
@@ -1192,7 +1194,7 @@ async function registerMainWsRoutes(fastify) {
             });
             if (removedProducers.length > 0) {
               fastify.log.info(`Removed ${removedProducers.length} stale producer(s) before creating new producer for client ${clientId}`);
-              cleanupProducerSideEffects(clientInfo.channelId, removedProducers);
+              await cleanupProducerSideEffects(clientInfo.channelId, removedProducers);
             }
 
             const producerId = uuidv4();
