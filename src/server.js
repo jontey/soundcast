@@ -14,7 +14,7 @@ import { registerApiRoutes } from './routes/api.js';
 import { getRoomBySlug, getRoomById, listRoomsByTenant, createRoom } from './db/models/room.js';
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
 import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
-import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings } from './recording/recorder.js';
+import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings, waitForRecordingFinalization } from './recording/recorder.js';
 import TranscriptionRuntime from './transcription/runtime.js';
 
 // ES module equivalent for __dirname
@@ -2166,6 +2166,7 @@ async function main() {
     } catch (error) {
       fastify.log.warn({ err: error }, 'Failed closing HTTP server');
     }
+    await waitForRecordingFinalization({ log: fastify.log });
     process.exit(0);
   };
 

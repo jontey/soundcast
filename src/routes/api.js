@@ -936,6 +936,55 @@ export async function registerApiRoutes(fastify) {
     }
   });
 
+  // POST /api/rooms/:room_slug/transcriptions/channels/:channel_name/restart - Restart one active transcription channel
+  fastify.post('/api/rooms/:room_slug/transcriptions/channels/:channel_name/restart', {
+    preHandler: authenticateTenant,
+    handler: async (request, reply) => {
+      const { room_slug, channel_name } = request.params;
+
+      try {
+        const room = getRoomBySlug(room_slug);
+        if (!room) {
+          return reply.code(404).send({ error: 'Not Found', message: 'Room not found' });
+        }
+        if (room.tenant_id !== request.tenant.id) {
+          return reply.code(403).send({ error: 'Forbidden', message: 'You do not have permission to update this room' });
+        }
+
+        const transcriptionRuntime = request.server.transcriptionRuntime || null;
+        if (!transcriptionRuntime) {
+          return reply.code(503).send({ error: 'Service Unavailable', message: 'Transcription runtime is not configured' });
+        }
+
+        const payload = await transcriptionRuntime.restartChannel(room.id, channel_name);
+        if (!payload) {
+          return reply.code(404).send({ error: 'Not Found', message: 'No active transcription session for this room' });
+        }
+        if (!payload.restarted) {
+          return reply.code(404).send({ error: 'Not Found', message: 'No active transcription stream for this channel', ...payload });
+        }
+
+        if (request.server.notifyRecordingStatusChange) {
+          const status = getRecordingStatus(room.id);
+          request.server.notifyRecordingStatusChange(request.tenant.id, room.slug, status || { isRecording: false });
+        }
+
+        return reply.code(200).send({
+          message: `Transcription restarted for channel ${payload.channelName}`,
+          ...payload
+        });
+      } catch (error) {
+        console.error('Error restarting transcription channel:', error);
+        const overflow = error.code === 'SIDECAR_CAPACITY_EXCEEDED';
+        return reply.code(overflow ? 503 : 500).send({
+          error: overflow ? 'Service Unavailable' : 'Internal Server Error',
+          message: overflow ? 'sidecar_capacity_exceeded' : (error.message || 'Failed to restart transcription channel'),
+          code: overflow ? 'sidecar_capacity_exceeded' : 'transcription_channel_restart_failed'
+        });
+      }
+    }
+  });
+
   // GET /api/rooms/:room_slug/transcriptions/channels/:channel_name - Get active transcript by channel
   fastify.get('/api/rooms/:room_slug/transcriptions/channels/:channel_name', {
     preHandler: authenticateTenant,

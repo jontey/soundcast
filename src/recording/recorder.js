@@ -38,6 +38,7 @@ let onStatusChange = null; // Callback for status change notifications
 // Active recording sessions: roomId -> RecordingSession
 const activeRecordings = new Map();
 const blockedRecordings = new Map(); // roomId -> { recordingId, roomSlug, tenantId, folderName, startedAt, reason }
+const recordingFinalizations = new Map(); // id -> { label, startedAt, promise }
 
 // Port allocation tracking
 const usedPorts = new Set();
@@ -87,6 +88,42 @@ function atomicWriteJson(filePath, data) {
   const tmpPath = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
   fs.renameSync(tmpPath, filePath);
+}
+
+function trackRecordingFinalization(label, operation) {
+  const id = Symbol(label);
+  const entry = {
+    label,
+    startedAt: new Date().toISOString(),
+    promise: null
+  };
+  const promise = Promise.resolve()
+    .then(operation)
+    .finally(() => {
+      recordingFinalizations.delete(id);
+    });
+  entry.promise = promise;
+  recordingFinalizations.set(id, entry);
+  return promise;
+}
+
+export function getRecordingFinalizationStatus() {
+  return Array.from(recordingFinalizations.values()).map((entry) => ({
+    label: entry.label,
+    startedAt: entry.startedAt
+  }));
+}
+
+export async function waitForRecordingFinalization({ log = null } = {}) {
+  while (recordingFinalizations.size > 0) {
+    const pending = Array.from(recordingFinalizations.values());
+    if (log) {
+      log.info({
+        pending: pending.map(({ label, startedAt }) => ({ label, startedAt }))
+      }, 'Waiting for recording finalization to complete before shutdown');
+    }
+    await Promise.allSettled(pending.map((entry) => entry.promise));
+  }
 }
 
 function getSessionLockPath(folderPath) {
@@ -702,20 +739,22 @@ export async function addProducerToRecording(roomId, producerId, channelName, pr
  * @param {string} producerId - Producer ID
  */
 export async function removeProducerFromRecording(roomId, producerId) {
-  const session = activeRecordings.get(roomId);
-  if (!session) return;
+  return trackRecordingFinalization(`remove producer ${producerId} from room ${roomId}`, async () => {
+    const session = activeRecordings.get(roomId);
+    if (!session) return;
 
-  const trackRecorder = session.tracks.get(producerId);
-  if (!trackRecorder) return;
+    const trackRecorder = session.tracks.get(producerId);
+    if (!trackRecorder) return;
 
-  await trackRecorder.stop();
-  session.tracks.delete(producerId);
+    await trackRecorder.stop();
+    session.tracks.delete(producerId);
 
-  // Update metadata
-  writeMetadata(session);
-  persistSessionLock(session, 'recording');
+    // Update metadata
+    writeMetadata(session);
+    persistSessionLock(session, 'recording');
 
-  console.log(`Removed producer ${producerId} from recording for room ${session.roomSlug}`);
+    console.log(`Removed producer ${producerId} from recording for room ${session.roomSlug}`);
+  });
 }
 
 /**
@@ -725,56 +764,58 @@ export async function removeProducerFromRecording(roomId, producerId) {
  * @returns {object} Recording summary
  */
 export async function stopRecording(roomSlug, roomId) {
-  const session = activeRecordings.get(roomId);
-  if (!session && blockedRecordings.has(roomId)) {
-    throw new Error('Recording session is currently owned by another live process');
-  }
-  if (!session) {
-    throw new Error('No active recording for this room');
-  }
+  return trackRecordingFinalization(`stop recording ${roomSlug}`, async () => {
+    const session = activeRecordings.get(roomId);
+    if (!session && blockedRecordings.has(roomId)) {
+      throw new Error('Recording session is currently owned by another live process');
+    }
+    if (!session) {
+      throw new Error('No active recording for this room');
+    }
 
-  const tenantId = session.tenantId;
+    const tenantId = session.tenantId;
 
-  // Stop all tracks
-  const trackCount = session.tracks.size;
-  for (const [producerId, trackRecorder] of session.tracks) {
-    await trackRecorder.stop();
-  }
-  session.tracks.clear();
+    // Stop all tracks
+    const trackCount = session.tracks.size;
+    for (const [producerId, trackRecorder] of session.tracks) {
+      await trackRecorder.stop();
+    }
+    session.tracks.clear();
 
-  // Update database
-  const now = new Date().toISOString();
-  stopAllTracksForRecording(session.recordingId);
-  const recording = updateRecordingStatus(session.recordingId, 'stopped', now);
+    // Update database
+    const now = new Date().toISOString();
+    stopAllTracksForRecording(session.recordingId);
+    const recording = updateRecordingStatus(session.recordingId, 'stopped', now);
 
-  // Final metadata update
-  writeMetadata(session, true);
-  persistSessionLock(session, 'stopped');
-  removeSessionLock(session);
+    // Final metadata update
+    writeMetadata(session, true);
+    persistSessionLock(session, 'stopped');
+    removeSessionLock(session);
 
-  // Remove session
-  activeRecordings.delete(roomId);
+    // Remove session
+    activeRecordings.delete(roomId);
 
-  console.log(`Stopped recording for room ${roomSlug}: ${trackCount} track(s)`);
+    console.log(`Stopped recording for room ${roomSlug}: ${trackCount} track(s)`);
 
-  const result = {
-    recordingId: recording.id,
-    folderName: recording.folder_name,
-    startedAt: recording.started_at,
-    stoppedAt: recording.stopped_at,
-    trackCount,
-    recovered: Boolean(session.recovered)
-  };
+    const result = {
+      recordingId: recording.id,
+      folderName: recording.folder_name,
+      startedAt: recording.started_at,
+      stoppedAt: recording.stopped_at,
+      trackCount,
+      recovered: Boolean(session.recovered)
+    };
 
-  // Notify about recording status change
-  if (onStatusChange && tenantId) {
-    onStatusChange(tenantId, roomSlug, {
-      isRecording: false,
-      ...result
-    });
-  }
+    // Notify about recording status change
+    if (onStatusChange && tenantId) {
+      onStatusChange(tenantId, roomSlug, {
+        isRecording: false,
+        ...result
+      });
+    }
 
-  return result;
+    return result;
+  });
 }
 
 /**
@@ -882,6 +923,8 @@ export default {
   stopRecording,
   addProducerToRecording,
   removeProducerFromRecording,
+  waitForRecordingFinalization,
+  getRecordingFinalizationStatus,
   isRecording,
   getRecordingStatus,
   getActiveRecordings

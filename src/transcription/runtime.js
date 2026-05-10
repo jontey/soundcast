@@ -528,6 +528,20 @@ export class TranscriptionRuntime {
     this.channelUsageCounts.set(channelKey, currentCount - 1);
   }
 
+  shutdownChannelSidecar(roomId, channelName) {
+    const channelKey = this.makeChannelKey(roomId, channelName);
+    const instanceId = this.channelAssignments.get(channelKey);
+    if (!instanceId) {
+      this.channelUsageCounts.delete(channelKey);
+      this.channelAssignments.delete(channelKey);
+      return null;
+    }
+
+    const instance = this.sidecarInstances.get(instanceId) || null;
+    this.shutdownSidecarInstance(instanceId, { force: true, removeAssignment: true });
+    return instance;
+  }
+
   shutdownSidecarInstance(instanceId, { force = false, removeAssignment = false } = {}) {
     const instance = this.sidecarInstances.get(instanceId);
     if (!instance) return;
@@ -916,7 +930,7 @@ export class TranscriptionRuntime {
     if (!session || !trackInfo) return null;
 
     const existingStream = session.streams.get(trackInfo.producerId);
-    if (existingStream) {
+    if (existingStream && !trackInfo.skipExistingRelease) {
       if (existingStream.channelName) {
         this.releaseChannelAssignment(session.roomId, existingStream.channelName);
       }
@@ -966,6 +980,84 @@ export class TranscriptionRuntime {
     return state;
   }
 
+  async restartChannel(roomId, channelName) {
+    await this.ensureAvailableOrThrow();
+
+    const session = this.sessions.get(roomId);
+    if (!session) return null;
+    if (session.stopping) {
+      throw new Error('Transcription session is stopping');
+    }
+
+    const channelStreams = Array.from(session.streams.values())
+      .filter((stream) => stream.channelName === channelName);
+    if (channelStreams.length === 0) {
+      return {
+        restarted: false,
+        reason: 'channel_not_active',
+        transcriptionSessionId: session.sessionId,
+        channelName,
+        streamCount: 0
+      };
+    }
+
+    // Let a manual restart recover from a poll that is hung inside the old sidecar request.
+    session.polling = false;
+    for (const stream of channelStreams) {
+      stream.paused = true;
+    }
+
+    const trackInfos = channelStreams.map((stream) => ({
+      producerId: stream.producerId,
+      publisherId: stream.publisherId || null,
+      producerName: stream.producerName || null,
+      channelName: stream.channelName,
+      segmentPattern: stream.segmentPattern || null,
+      processedFiles: Array.from(stream.processedFiles || []),
+      skipExistingRelease: true
+    }));
+
+    this.shutdownChannelSidecar(session.roomId, channelName);
+
+    const restartedStreams = [];
+    for (const trackInfo of trackInfos) {
+      const restarted = await this.registerProducerStream(roomId, trackInfo, session);
+      if (restarted) {
+        restartedStreams.push({
+          producerId: restarted.producerId,
+          publisherId: restarted.publisherId,
+          producerName: restarted.producerName,
+          channelName: restarted.channelName,
+          sidecarInstanceId: restarted.sidecarInstanceId,
+          sidecarPort: restarted.sidecarPort,
+          sidecarUrl: restarted.sidecarUrl
+        });
+      }
+    }
+
+    this.persistSessionLock(session, 'active');
+    this.fastify.log.info({
+      transcriptionSessionId: session.sessionId,
+      roomId: session.roomId,
+      roomSlug: session.roomSlug,
+      channelName,
+      streamCount: restartedStreams.length
+    }, 'Restarted transcription channel');
+
+    return {
+      restarted: true,
+      transcriptionSessionId: session.sessionId,
+      eventName: session.eventName,
+      modelName: session.modelName,
+      channelName,
+      streamCount: restartedStreams.length,
+      sidecarMode: SIDECAR_MODE,
+      sidecarInstanceCount: this.countRoomSidecars(roomId),
+      sidecarCapacity: MAX_SIDECAR_INSTANCES,
+      streams: restartedStreams
+    };
+  }
+
   unregisterProducerStream(roomId, producerId) {
     const session = this.sessions.get(roomId);
     if (!session) return;
@@ -993,6 +1085,7 @@ export class TranscriptionRuntime {
   }
 
   async pollProducerStream(session, streamState) {
+    if (streamState.paused) return;
     if (!streamState.matcher) return;
 
     const { dir, regex } = streamState.matcher;
@@ -1029,6 +1122,9 @@ export class TranscriptionRuntime {
             sidecarUrl: streamState.sidecarUrl
           })
         );
+        if (session.streams.get(streamState.producerId) !== streamState || streamState.paused) {
+          return;
+        }
         streamState.processedFiles.add(filename);
         this.scheduleSessionLockPersist(session, 'active');
 
@@ -1060,6 +1156,9 @@ export class TranscriptionRuntime {
         );
         this.appendAsrText(docState, finalText);
       } catch (error) {
+        if (session.streams.get(streamState.producerId) !== streamState || streamState.paused) {
+          return;
+        }
         // No retry policy: mark the segment as processed after first failed send.
         streamState.processedFiles.add(filename);
         this.scheduleSessionLockPersist(session, 'active');
