@@ -466,6 +466,7 @@
           <div class="audio-meter-bar" id="audioMeterBar"></div>
         </div>
 
+        <button id="muteBtn" class="btn" onclick="toggleLocalMute()">Mute Audio</button>
         <button id="startBtn" class="btn btn-primary" onclick="startBroadcast()" disabled>
           Start Broadcasting
         </button>
@@ -526,6 +527,32 @@
     }
 
     document.getElementById('roomName').textContent = `Room: ${roomSlug}`;
+
+    // Local mute state
+    let isMuted = false;
+    function toggleLocalMute() {
+      isMuted = !isMuted;
+      const btn = document.getElementById('muteBtn');
+      if (!btn) return;
+
+      if (isMuted) {
+        btn.textContent = 'Unmute Audio';
+        btn.classList.add('btn-danger');
+        // Disconnect audio source from meter to silence local output
+        if (pubAudioSource) {
+          try { pubAudioSource.disconnect(); } catch (e) { /* ignore */ }
+        }
+        const meterBar = document.getElementById('audioMeterBar');
+        if (meterBar) meterBar.style.width = '0%';
+      } else {
+        btn.textContent = 'Mute Audio';
+        btn.classList.remove('btn-danger');
+        // Reconnect audio source to meter to restore local output
+        if (pubAudioSource && pubAudioMeter) {
+          try { pubAudioSource.connect(pubAudioMeter); } catch (e) { /* ignore */ }
+        }
+      }
+    }
 
     // WebSocket and WebRTC state (prefixed to avoid conflicts with common.js globals)
     let ws = null;           // Room WebSocket (for config)
@@ -966,7 +993,9 @@
       // Update audio meter with new source
       if (pubAudioContext && pubAudioMeter) {
         pubAudioSource = pubAudioContext.createMediaStreamSource(processedStream);
-        pubAudioSource.connect(pubAudioMeter);
+        if (!isMuted) {
+          pubAudioSource.connect(pubAudioMeter);
+        }
       }
 
       // Create new producer with new track
@@ -1509,7 +1538,9 @@
 
           pubAudioSource = pubAudioContext.createMediaStreamSource(pubAudioStream);
           pubAudioMeter = createAudioMeter(pubAudioContext);
-          pubAudioSource.connect(pubAudioMeter);
+          if (!isMuted) {
+            pubAudioSource.connect(pubAudioMeter);
+          }
 
           if (pubMeterUpdateInterval) {
             clearInterval(pubMeterUpdateInterval);
