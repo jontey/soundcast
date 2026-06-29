@@ -25,7 +25,6 @@ const RTP_PORT_MAX = parseInt(process.env.RECORDING_RTP_PORT_MAX || '50999');
 const FFMPEG_PATH = process.env.FFMPEG_PATH || 'ffmpeg';
 const RECORDING_SEGMENT_SECONDS = parseInt(process.env.RECORDING_SEGMENT_SECONDS || '5');
 const RECORDING_MERGE_ON_STOP = process.env.RECORDING_MERGE_ON_STOP !== 'false';
-const RECORDING_DELETE_SEGMENTS_AFTER_MERGE = process.env.RECORDING_DELETE_SEGMENTS_AFTER_MERGE === 'true';
 const SESSION_LOCK_VERSION = 1;
 const SESSION_LOCK_FILENAME = 'session.lock.json';
 
@@ -701,14 +700,15 @@ class TrackRecorder {
       fs.unlinkSync(listPath);
     }
 
-    if (RECORDING_DELETE_SEGMENTS_AFTER_MERGE) {
-      for (const name of entries) {
-        const segmentPath = path.join(outputDir, name);
-        if (fs.existsSync(segmentPath)) {
-          fs.unlinkSync(segmentPath);
-        }
+    let deletedCount = 0;
+    for (const name of entries) {
+      const segmentPath = path.join(outputDir, name);
+      if (fs.existsSync(segmentPath)) {
+        fs.unlinkSync(segmentPath);
+        deletedCount += 1;
       }
     }
+    console.log(`Deleted ${deletedCount} segment chunks for ${this.producerName} after merge`);
 
     return true;
   }
