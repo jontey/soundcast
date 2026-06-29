@@ -42,6 +42,10 @@ const recordingFinalizations = new Map(); // id -> { label, startedAt, promise }
 
 // Port allocation tracking
 const usedPorts = new Set();
+// Ports recently released are kept out of circulation briefly so the OS has
+// time to reclaim the underlying UDP socket before FFmpeg tries to bind it again.
+const coolingPorts = new Map();
+const PORT_COOLDOWN_MS = 5000;
 
 /**
  * Initialize the recorder module with dependencies from server.js
@@ -238,9 +242,20 @@ export function recoverRecordingSessions({ getRoomById }) {
 function allocatePort() {
   // Reserve RTP/RTCP as a pair (port + 1) to avoid collisions between
   // concurrent FFmpeg inputs that may bind both sockets.
+  const now = Date.now();
+  for (const [p, ts] of coolingPorts) {
+    if (now - ts > PORT_COOLDOWN_MS) {
+      coolingPorts.delete(p);
+    }
+  }
   const start = RTP_PORT_MIN % 2 === 0 ? RTP_PORT_MIN : RTP_PORT_MIN + 1;
   for (let port = start; port <= RTP_PORT_MAX - 1; port += 2) {
-    if (!usedPorts.has(port) && !usedPorts.has(port + 1)) {
+    if (
+      !usedPorts.has(port) &&
+      !usedPorts.has(port + 1) &&
+      !coolingPorts.has(port) &&
+      !coolingPorts.has(port + 1)
+    ) {
       usedPorts.add(port);
       usedPorts.add(port + 1);
       return port;
@@ -255,6 +270,7 @@ function allocatePort() {
  */
 function releasePort(port) {
   usedPorts.delete(port);
+  coolingPorts.set(port, Date.now());
 }
 
 /**
@@ -309,12 +325,16 @@ class TrackRecorder {
     this.mergedFilePath = mergedFilePath;
     this.trackId = trackId;
     this.publisherId = publisherId;
-    this.plainTransport = null;
-    this.consumer = null;
+    this.segmentPlainTransport = null;
+    this.segmentConsumer = null;
+    this.segmentRtpPort = null;
+    this.segmentSdpPath = null;
     this.ffmpegProcess = null;
+    this.pcmPlainTransport = null;
+    this.pcmConsumer = null;
+    this.pcmRtpPort = null;
+    this.pcmSdpPath = null;
     this.ffmpegPcmProcess = null;
-    this.rtpPort = null;
-    this.sdpPath = null;
     this.fifoPath = null;
   }
 
@@ -333,142 +353,18 @@ class TrackRecorder {
 
   async start(producer) {
     try {
-      // Allocate RTP port for FFmpeg to receive on
-      this.rtpPort = allocatePort();
-
-      // Create PlainTransport for consuming the producer
-      // rtcpMux: true means RTP and RTCP on same port (simpler)
-      this.plainTransport = await router.createPlainTransport({
-        listenIp: { ip: '127.0.0.1', announcedIp: null },
-        rtcpMux: true,
-        comedia: false
-      });
-
-      console.log(`PlainTransport created, tuple: ${JSON.stringify(this.plainTransport.tuple)}`);
-
-      // Connect the transport - tells mediasoup where to SEND RTP
-      await this.plainTransport.connect({
-        ip: '127.0.0.1',
-        port: this.rtpPort
-      });
-
-      console.log(`PlainTransport connected to 127.0.0.1:${this.rtpPort}`);
-
-      // Create consumer on the PlainTransport
-      this.consumer = await this.plainTransport.consume({
-        producerId: producer.id,
-        rtpCapabilities: router.rtpCapabilities,
-        paused: false
-      });
-
-      console.log(`Consumer created: id=${this.consumer.id}, paused=${this.consumer.paused}, producerId=${producer.id}`);
-      console.log(`Producer state: id=${producer.id}, paused=${producer.paused}, closed=${producer.closed}`);
-
-      // Explicitly resume consumer to ensure RTP flows
-      if (this.consumer.paused) {
-        await this.consumer.resume();
-        console.log(`Consumer resumed`);
-      }
-
       // Ensure output directory exists BEFORE writing any files
       const outputDir = path.dirname(this.segmentPattern);
       if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
       }
 
-      // Generate SDP file for FFmpeg
-      const sdpContent = this.generateSdp();
-      this.sdpPath = this.segmentPattern.replace(/%03d\.ogg$/, 'sdp');
-      fs.writeFileSync(this.sdpPath, sdpContent);
-
-      // Log SDP for debugging
-      console.log(`SDP for ${this.producerName}:\n${sdpContent}`);
-
-      // Spawn FFmpeg process with segmented output to flush to disk continuously
-      this.ffmpegProcess = spawn(FFMPEG_PATH, [
-        '-protocol_whitelist', 'file,rtp,udp',
-        '-analyzeduration', '10000000',  // 10 seconds
-        '-probesize', '5000000',         // 5MB
-        '-fflags', '+genpts+discardcorrupt',
-        '-i', this.sdpPath,
-        '-c:a', 'copy',
-        '-f', 'segment',
-        '-segment_time', String(RECORDING_SEGMENT_SECONDS),
-        '-reset_timestamps', '1',
-        '-y',
-        this.segmentPattern
-      ], {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      this.ffmpegProcess.on('error', (err) => {
-        console.error(`FFmpeg error for ${this.producerName}: ${err.message}`);
-      });
-
-      this.ffmpegProcess.stderr.on('data', (data) => {
-        // Log FFmpeg output for debugging (can be verbose)
-        const output = data.toString();
-        if (output.includes('error') || output.includes('Error')) {
-          console.error(`FFmpeg stderr: ${output}`);
-        }
-      });
-
-      this.ffmpegProcess.on('close', (code) => {
-        console.log(`FFmpeg process exited with code ${code} for ${this.producerName}`);
-        // Cleanup SDP file
-        if (this.sdpPath && fs.existsSync(this.sdpPath)) {
-          fs.unlinkSync(this.sdpPath);
-        }
-      });
-
-      // Spawn a second FFmpeg process that outputs raw 16kHz mono PCM to a named pipe
-      // for real-time ASR streaming.
-      this.fifoPath = this.segmentPattern.replace(/_%03d\.ogg$/, '.fifo');
-      if (process.platform !== 'win32') {
-        try {
-          if (fs.existsSync(this.fifoPath)) {
-            fs.unlinkSync(this.fifoPath);
-          }
-          execSync(`mkfifo "${this.fifoPath}"`);
-        } catch (err) {
-          console.warn(`Failed to create FIFO ${this.fifoPath}: ${err.message}`);
-          this.fifoPath = null;
-        }
-      } else {
-        this.fifoPath = null;
-      }
-
-      if (this.fifoPath) {
-        this.ffmpegPcmProcess = spawn(FFMPEG_PATH, [
-          '-protocol_whitelist', 'file,rtp,udp',
-          '-analyzeduration', '10000000',
-          '-probesize', '5000000',
-          '-fflags', '+genpts+discardcorrupt',
-          '-i', this.sdpPath,
-          '-f', 's16le',
-          '-ar', '16000',
-          '-ac', '1',
-          '-y',
-          this.fifoPath
-        ], {
-          stdio: ['ignore', 'pipe', 'pipe']
-        });
-
-        this.ffmpegPcmProcess.on('error', (err) => {
-          console.error(`FFmpeg PCM error for ${this.producerName}: ${err.message}`);
-        });
-
-        this.ffmpegPcmProcess.stderr.on('data', (data) => {
-          const output = data.toString();
-          if (output.includes('error') || output.includes('Error')) {
-            console.error(`FFmpeg PCM stderr: ${output}`);
-          }
-        });
-
-        this.ffmpegPcmProcess.on('close', (code) => {
-          console.log(`FFmpeg PCM process exited with code ${code} for ${this.producerName}`);
-        });
-      }
+      // Create two independent PlainTransport/Consumer pairs: one for the segment
+      // recorder and one for the real-time PCM stream. Each FFmpeg input binds to
+      // its own UDP port, so a failure or blocking write on one path does not
+      // starve the other.
+      await this._startSegmentPath(producer);
+      await this._startPcmPath(producer);
 
       console.log(`Started recording track: ${this.producerName} -> ${this.segmentPattern}`);
       if (this.fifoPath) {
@@ -482,8 +378,161 @@ class TrackRecorder {
     }
   }
 
-  generateSdp() {
-    const rtpParams = this.consumer.rtpParameters;
+  async _startSegmentPath(producer) {
+    this.segmentRtpPort = allocatePort();
+
+    this.segmentPlainTransport = await router.createPlainTransport({
+      listenIp: { ip: '127.0.0.1', announcedIp: null },
+      rtcpMux: true,
+      comedia: false
+    });
+
+    await this.segmentPlainTransport.connect({
+      ip: '127.0.0.1',
+      port: this.segmentRtpPort
+    });
+
+    this.segmentConsumer = await this.segmentPlainTransport.consume({
+      producerId: producer.id,
+      rtpCapabilities: router.rtpCapabilities,
+      paused: false
+    });
+
+    if (this.segmentConsumer.paused) {
+      await this.segmentConsumer.resume();
+    }
+
+    this.segmentSdpPath = this.segmentPattern.replace(/%03d\.ogg$/, 'sdp');
+    const sdpContent = this.generateSdp(this.segmentConsumer, this.segmentRtpPort);
+    this._atomicWriteSdp(this.segmentSdpPath, sdpContent);
+    console.log(`Segment SDP for ${this.producerName}:\n${sdpContent}`);
+
+    this.ffmpegProcess = spawn(FFMPEG_PATH, [
+      '-protocol_whitelist', 'file,rtp,udp',
+      '-analyzeduration', '10000000',
+      '-probesize', '5000000',
+      '-fflags', '+genpts+discardcorrupt',
+      '-i', this.segmentSdpPath,
+      '-c:a', 'copy',
+      '-f', 'segment',
+      '-segment_time', String(RECORDING_SEGMENT_SECONDS),
+      '-reset_timestamps', '1',
+      '-y',
+      this.segmentPattern
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    this.ffmpegProcess.on('error', (err) => {
+      console.error(`FFmpeg error for ${this.producerName}: ${err.message}`);
+    });
+
+    this.ffmpegProcess.stderr.on('data', (data) => {
+      const output = data.toString();
+      if (output.includes('error') || output.includes('Error')) {
+        console.error(`FFmpeg stderr: ${output}`);
+      }
+    });
+
+    this.ffmpegProcess.on('close', (code) => {
+      console.log(`FFmpeg process exited with code ${code} for ${this.producerName}`);
+      if (this.segmentSdpPath && fs.existsSync(this.segmentSdpPath)) {
+        fs.unlinkSync(this.segmentSdpPath);
+      }
+    });
+  }
+
+  async _startPcmPath(producer) {
+    this.pcmRtpPort = allocatePort();
+
+    this.pcmPlainTransport = await router.createPlainTransport({
+      listenIp: { ip: '127.0.0.1', announcedIp: null },
+      rtcpMux: true,
+      comedia: false
+    });
+
+    await this.pcmPlainTransport.connect({
+      ip: '127.0.0.1',
+      port: this.pcmRtpPort
+    });
+
+    this.pcmConsumer = await this.pcmPlainTransport.consume({
+      producerId: producer.id,
+      rtpCapabilities: router.rtpCapabilities,
+      paused: false
+    });
+
+    if (this.pcmConsumer.paused) {
+      await this.pcmConsumer.resume();
+    }
+
+    this.pcmSdpPath = this.segmentPattern.replace(/_%03d\.ogg$/, '_pcm.sdp');
+    const sdpContent = this.generateSdp(this.pcmConsumer, this.pcmRtpPort);
+    this._atomicWriteSdp(this.pcmSdpPath, sdpContent);
+    console.log(`PCM SDP for ${this.producerName}:\n${sdpContent}`);
+
+    this.fifoPath = this.segmentPattern.replace(/_%03d\.ogg$/, '.fifo');
+    if (process.platform !== 'win32') {
+      try {
+        if (fs.existsSync(this.fifoPath)) {
+          fs.unlinkSync(this.fifoPath);
+        }
+        execSync(`mkfifo "${this.fifoPath}"`);
+      } catch (err) {
+        console.warn(`Failed to create FIFO ${this.fifoPath}: ${err.message}`);
+        this.fifoPath = null;
+      }
+    } else {
+      this.fifoPath = null;
+    }
+
+    if (this.fifoPath) {
+      this.ffmpegPcmProcess = spawn(FFMPEG_PATH, [
+        '-protocol_whitelist', 'file,rtp,udp',
+        '-analyzeduration', '10000000',
+        '-probesize', '5000000',
+        '-fflags', '+genpts+discardcorrupt',
+        '-i', this.pcmSdpPath,
+        '-f', 's16le',
+        '-ar', '16000',
+        '-ac', '1',
+        '-y',
+        this.fifoPath
+      ], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      this.ffmpegPcmProcess.on('error', (err) => {
+        console.error(`FFmpeg PCM error for ${this.producerName}: ${err.message}`);
+      });
+
+      this.ffmpegPcmProcess.stderr.on('data', (data) => {
+        const output = data.toString();
+        if (output.includes('error') || output.includes('Error')) {
+          console.error(`FFmpeg PCM stderr: ${output}`);
+        }
+      });
+
+      this.ffmpegPcmProcess.on('close', (code) => {
+        console.log(`FFmpeg PCM process exited with code ${code} for ${this.producerName}`);
+        if (this.pcmSdpPath && fs.existsSync(this.pcmSdpPath)) {
+          fs.unlinkSync(this.pcmSdpPath);
+        }
+      });
+    }
+  }
+
+  _atomicWriteSdp(sdpPath, sdpContent) {
+    const tmpSdpPath = `${sdpPath}.tmp`;
+    fs.writeFileSync(tmpSdpPath, sdpContent);
+    const sdpFd = fs.openSync(tmpSdpPath, 'r+');
+    fs.fsyncSync(sdpFd);
+    fs.closeSync(sdpFd);
+    fs.renameSync(tmpSdpPath, sdpPath);
+  }
+
+  generateSdp(consumer, rtpPort) {
+    const rtpParams = consumer.rtpParameters;
     const codec = rtpParams.codecs[0];
     const payloadType = codec.payloadType;
 
@@ -497,7 +546,7 @@ class TrackRecorder {
       's=FFmpeg',
       'c=IN IP4 127.0.0.1',
       't=0 0',
-      `m=audio ${this.rtpPort} RTP/AVP ${payloadType}`,
+      `m=audio ${rtpPort} RTP/AVP ${payloadType}`,
       `a=rtpmap:${payloadType} opus/48000/2`,
       `a=fmtp:${payloadType} sprop-stereo=1; stereo=1; useinbandfec=1`,
       'a=recvonly'
@@ -558,20 +607,38 @@ class TrackRecorder {
       }
     }
 
-    // Close consumer
-    if (this.consumer && !this.consumer.closed) {
-      this.consumer.close();
+    // Close consumers
+    if (this.segmentConsumer && !this.segmentConsumer.closed) {
+      this.segmentConsumer.close();
+    }
+    if (this.pcmConsumer && !this.pcmConsumer.closed) {
+      this.pcmConsumer.close();
     }
 
-    // Close transport
-    if (this.plainTransport && !this.plainTransport.closed) {
-      this.plainTransport.close();
+    // Close transports
+    if (this.segmentPlainTransport && !this.segmentPlainTransport.closed) {
+      this.segmentPlainTransport.close();
+    }
+    if (this.pcmPlainTransport && !this.pcmPlainTransport.closed) {
+      this.pcmPlainTransport.close();
     }
 
-    // Release port
-    if (this.rtpPort) {
-      releasePort(this.rtpPort);
-      releasePort(this.rtpPort + 1); // RTCP port
+    // Release ports
+    if (this.segmentRtpPort) {
+      releasePort(this.segmentRtpPort);
+      releasePort(this.segmentRtpPort + 1); // RTCP port
+    }
+    if (this.pcmRtpPort) {
+      releasePort(this.pcmRtpPort);
+      releasePort(this.pcmRtpPort + 1); // RTCP port
+    }
+
+    // Clean up SDP files in case the close handlers did not run.
+    if (this.segmentSdpPath && fs.existsSync(this.segmentSdpPath)) {
+      try { fs.unlinkSync(this.segmentSdpPath); } catch {}
+    }
+    if (this.pcmSdpPath && fs.existsSync(this.pcmSdpPath)) {
+      try { fs.unlinkSync(this.pcmSdpPath); } catch {}
     }
 
     // Update database

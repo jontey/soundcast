@@ -14,10 +14,18 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Iterable
 
+import logging
 import numpy as np
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from mlx_audio.stt import load as load_stt
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+logger = logging.getLogger("soundcast-asr")
 
 APP_TITLE = "Soundcast MLX ASR Sidecar"
 MODEL_ID = os.getenv("ASR_MODEL_ID", "mlx-community/Qwen3-ASR-0.6B-8bit")
@@ -39,10 +47,11 @@ FIFO_MIN_AUDIO_SECONDS = float(os.getenv("FIFO_MIN_AUDIO_SECONDS", "1.0"))
 FIFO_MAX_AUDIO_SECONDS = float(os.getenv("FIFO_MAX_AUDIO_SECONDS", "60.0"))
 # How long to wait for the FIFO writer to appear before giving up.
 FIFO_OPEN_TIMEOUT = float(os.getenv("FIFO_OPEN_TIMEOUT", "30.0"))
+# How long the SSE endpoint will wait for the model to load in the worker thread.
+MODEL_LOAD_TIMEOUT = float(os.getenv("MODEL_LOAD_TIMEOUT", "120.0"))
 
 app = FastAPI(title=APP_TITLE)
 
-_model_error: str | None = None
 _model_lock = Lock()
 _inference_lock = Lock()
 _thread_local_model = threading.local()
@@ -50,18 +59,20 @@ _thread_local_model = threading.local()
 
 def get_model():
     """Return an MLX model bound to the current thread."""
-    global _model_error
     if getattr(_thread_local_model, "model", None) is not None:
         return _thread_local_model.model
     with _model_lock:
         if getattr(_thread_local_model, "model", None) is not None:
             return _thread_local_model.model
+        logger.info("Loading ASR model %s in thread %s", MODEL_ID, threading.current_thread().name)
+        started_at = time.monotonic()
         try:
             _thread_local_model.model = load_stt(MODEL_ID)
-            _model_error = None
+            elapsed = time.monotonic() - started_at
+            logger.info("ASR model loaded in %.2fs in thread %s", elapsed, threading.current_thread().name)
             return _thread_local_model.model
         except Exception as exc:  # noqa: BLE001
-            _model_error = str(exc)
+            logger.exception("ASR model load failed in thread %s", threading.current_thread().name)
             raise
 
 
@@ -150,9 +161,22 @@ def run_transcription(audio_bytes: bytes, language: str | None) -> list[dict]:
     return events
 
 
-def _fifo_reader_thread(session: FifoSession):
-    """Background thread that reads PCM from the FIFO and enqueues transcription events."""
+def _fifo_reader_thread(session: FifoSession, model_loaded_event: threading.Event | None = None):
+    """Background thread that loads the model, reads PCM from the FIFO, and enqueues transcription events."""
     try:
+        # Load the model in this thread before opening the FIFO. Each producer gets
+        # its own thread-local model instance; this also gives FFmpeg a chance to
+        # buffer RTP input while the model warms up.
+        try:
+            get_model()
+        except Exception as exc:  # noqa: BLE001
+            session.error = f"model load failed: {exc}"
+        if model_loaded_event:
+            model_loaded_event.set()
+        if session.error or not session.running:
+            session.queue.put_nowait(None)
+            return
+
         deadline = time.monotonic() + FIFO_OPEN_TIMEOUT
         while session.running and time.monotonic() < deadline:
             try:
@@ -236,18 +260,16 @@ def _fifo_reader_thread(session: FifoSession):
 
 @app.get("/health")
 async def health():
-    try:
-        get_model()
-        payload = {"ready": True, "model": MODEL_ID}
-        if FIFO_PATH:
-            payload["fifo_path"] = FIFO_PATH
-            payload["fifo_mode"] = True
-        return payload
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(
-            {"ready": False, "model": MODEL_ID, "reason": _model_error or f"model load failed: {exc}"},
-            status_code=503,
-        )
+    """Liveness/readiness probe. Returns ready once the process is accepting requests.
+
+    Model loading is intentionally deferred to the worker thread that owns the
+    model instance, so we do not load a model in the main thread here.
+    """
+    payload = {"ready": True, "model": MODEL_ID}
+    if FIFO_PATH:
+        payload["fifo_path"] = FIFO_PATH
+        payload["fifo_mode"] = True
+    return payload
 
 
 def stream_transcription_lines(file_path: Path, language: str | None) -> Iterable[str]:
@@ -397,6 +419,7 @@ async def transcribe_sse(fifo_path: str | None = None, language: str | None = No
     pushes partial/final tokens as SSE events.
     """
     target_fifo = fifo_path or FIFO_PATH
+    logger.info("SSE request for fifo=%s", target_fifo)
     if not target_fifo:
         return JSONResponse(
             {"error": "No FIFO path provided. Pass ?fifo_path=... or set FIFO_PATH env var."},
@@ -410,18 +433,39 @@ async def transcribe_sse(fifo_path: str | None = None, language: str | None = No
         )
 
     session = FifoSession(target_fifo, language)
+    model_loaded_event = threading.Event()
+    reader = Thread(
+        target=_fifo_reader_thread, args=(session, model_loaded_event), daemon=True
+    )
+    reader.start()
+
+    # Do not return the SSE response until the worker thread has loaded the model
+    # in its own thread-local context. This prevents the client from aborting the
+    # connection while waiting for a lazily-loaded model.
+    loop = asyncio.get_event_loop()
+    logger.info("Waiting for model load for fifo=%s", target_fifo)
+    started_at = time.monotonic()
+    loaded = await loop.run_in_executor(
+        None, model_loaded_event.wait, MODEL_LOAD_TIMEOUT
+    )
+    elapsed = time.monotonic() - started_at
+    logger.info("Model load wait finished for fifo=%s loaded=%s elapsed=%.2fs error=%s", target_fifo, loaded, elapsed, session.error)
+    if not loaded or session.error:
+        session.running = False
+        session.close()
+        reader.join(timeout=2.0)
+        reason = session.error or "timed out waiting for ASR model load"
+        status_code = 503 if session.error else 504
+        return JSONResponse({"error": reason}, status_code=status_code)
 
     async def _event_generator():
-        reader = Thread(target=_fifo_reader_thread, args=(session,), daemon=True)
-        reader.start()
-
         try:
             while True:
                 # Pull events from the thread-safe queue without blocking the
                 # event loop. A short timeout lets us periodically check whether
                 # the reader has stopped.
                 try:
-                    event = await asyncio.get_event_loop().run_in_executor(
+                    event = await loop.run_in_executor(
                         None, lambda: session.queue.get(timeout=1.0)
                     )
                 except queue.Empty:
