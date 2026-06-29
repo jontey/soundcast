@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -312,8 +312,10 @@ class TrackRecorder {
     this.plainTransport = null;
     this.consumer = null;
     this.ffmpegProcess = null;
+    this.ffmpegPcmProcess = null;
     this.rtpPort = null;
     this.sdpPath = null;
+    this.fifoPath = null;
   }
 
   toMetadata() {
@@ -324,6 +326,7 @@ class TrackRecorder {
       channelName: this.channelName,
       segmentPattern: this.segmentPattern,
       mergedFilePath: this.mergedFilePath,
+      fifoPath: this.fifoPath,
       publisherId: this.publisherId
     };
   }
@@ -418,7 +421,59 @@ class TrackRecorder {
         }
       });
 
+      // Spawn a second FFmpeg process that outputs raw 16kHz mono PCM to a named pipe
+      // for real-time ASR streaming.
+      this.fifoPath = this.segmentPattern.replace(/_%03d\.ogg$/, '.fifo');
+      if (process.platform !== 'win32') {
+        try {
+          if (fs.existsSync(this.fifoPath)) {
+            fs.unlinkSync(this.fifoPath);
+          }
+          execSync(`mkfifo "${this.fifoPath}"`);
+        } catch (err) {
+          console.warn(`Failed to create FIFO ${this.fifoPath}: ${err.message}`);
+          this.fifoPath = null;
+        }
+      } else {
+        this.fifoPath = null;
+      }
+
+      if (this.fifoPath) {
+        this.ffmpegPcmProcess = spawn(FFMPEG_PATH, [
+          '-protocol_whitelist', 'file,rtp,udp',
+          '-analyzeduration', '10000000',
+          '-probesize', '5000000',
+          '-fflags', '+genpts+discardcorrupt',
+          '-i', this.sdpPath,
+          '-f', 's16le',
+          '-ar', '16000',
+          '-ac', '1',
+          '-y',
+          this.fifoPath
+        ], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        this.ffmpegPcmProcess.on('error', (err) => {
+          console.error(`FFmpeg PCM error for ${this.producerName}: ${err.message}`);
+        });
+
+        this.ffmpegPcmProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          if (output.includes('error') || output.includes('Error')) {
+            console.error(`FFmpeg PCM stderr: ${output}`);
+          }
+        });
+
+        this.ffmpegPcmProcess.on('close', (code) => {
+          console.log(`FFmpeg PCM process exited with code ${code} for ${this.producerName}`);
+        });
+      }
+
       console.log(`Started recording track: ${this.producerName} -> ${this.segmentPattern}`);
+      if (this.fifoPath) {
+        console.log(`Started PCM stream: ${this.producerName} -> ${this.fifoPath}`);
+      }
       return true;
     } catch (err) {
       console.error(`Failed to start track recording: ${err.message}`);
@@ -460,6 +515,16 @@ class TrackRecorder {
   async stop() {
     const now = new Date().toISOString();
 
+    // Stop PCM FFmpeg first so the FIFO writer closes and the reader gets EOF.
+    if (this.ffmpegPcmProcess && !this.ffmpegPcmProcess.killed) {
+      this.ffmpegPcmProcess.stdin?.end();
+      this.ffmpegPcmProcess.kill('SIGINT');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (!this.ffmpegPcmProcess.killed) {
+        this.ffmpegPcmProcess.kill('SIGKILL');
+      }
+    }
+
     // Stop FFmpeg gracefully
     if (this.ffmpegProcess && !this.ffmpegProcess.killed) {
       this.ffmpegProcess.stdin?.end();
@@ -471,6 +536,16 @@ class TrackRecorder {
       if (!this.ffmpegProcess.killed) {
         this.ffmpegProcess.kill('SIGKILL');
       }
+    }
+
+    // Clean up FIFO if it exists.
+    if (this.fifoPath && fs.existsSync(this.fifoPath)) {
+      try {
+        fs.unlinkSync(this.fifoPath);
+      } catch (err) {
+        console.warn(`Failed to remove FIFO ${this.fifoPath}: ${err.message}`);
+      }
+      this.fifoPath = null;
     }
 
     let mergedOk = true;
