@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
 import * as Y from 'yjs';
 import {
@@ -45,6 +45,8 @@ const TRANSCRIPTION_LOCK_VERSION = 1;
 const TRANSCRIPTION_LOCK_FILENAME = 'transcription.lock.json';
 const TRANSCRIPTION_LANGUAGE = (process.env.TRANSCRIPTION_LANGUAGE || '').trim();
 const SIDECAR_MODE = 'per-channel';
+const STREAMING_MODE = process.env.TRANSCRIPTION_STREAMING_MODE === 'true';
+const STREAMING_FIFO_PREFIX = process.env.TRANSCRIPTION_STREAMING_FIFO_PREFIX || '/tmp/soundcast-asr-fifo';
 
 function nowIso() {
   return new Date().toISOString();
@@ -192,6 +194,9 @@ export class TranscriptionRuntime {
 
     this.lastAvailabilityCheckAt = 0;
     this.lastAvailability = null;
+
+    // Abort controllers for active SSE streaming connections (streamId -> AbortController)
+    this.streamingControllers = new Map();
   }
 
   get isMacAppleSilicon() {
@@ -370,7 +375,7 @@ export class TranscriptionRuntime {
     return null;
   }
 
-  async spawnSidecarInstance({ roomId, roomSlug, channelName, modelName, preferredPort = null }) {
+  async spawnSidecarInstance({ roomId, roomSlug, channelName, modelName, preferredPort = null, fifoPath = null }) {
     const port = this.findFreePort(preferredPort);
     if (!port) {
       const error = new Error('ASR sidecar capacity exceeded');
@@ -393,6 +398,7 @@ export class TranscriptionRuntime {
         ...process.env,
         PORT: String(port),
         ASR_MODEL_ID: modelName || DEFAULT_MODEL,
+        ...(fifoPath ? { FIFO_PATH: fifoPath } : {}),
         ...(process.env.TRANSCRIPTION_PYTHON_BIN ? { PYTHON_BIN: process.env.TRANSCRIPTION_PYTHON_BIN } : {})
       },
       stdio: ['ignore', outFd, errFd]
@@ -411,7 +417,8 @@ export class TranscriptionRuntime {
       process: child,
       refs: 0,
       outPath,
-      errPath
+      errPath,
+      fifoPath: fifoPath || null
     };
 
     this.sidecarInstances.set(instanceId, instance);
@@ -450,7 +457,7 @@ export class TranscriptionRuntime {
     return instance;
   }
 
-  async ensureChannelSidecar({ roomId, roomSlug, channelName, modelName, preferredPort = null }) {
+  async ensureChannelSidecar({ roomId, roomSlug, channelName, modelName, preferredPort = null, fifoPath = null }) {
     const channelKey = this.makeChannelKey(roomId, channelName);
     const existingId = this.channelAssignments.get(channelKey);
     if (existingId) {
@@ -470,7 +477,8 @@ export class TranscriptionRuntime {
       roomSlug,
       channelName,
       modelName,
-      preferredPort
+      preferredPort,
+      fifoPath
     });
     this.channelAssignments.set(channelKey, instance.id);
     this.fastify.log.info({
@@ -490,7 +498,8 @@ export class TranscriptionRuntime {
       roomSlug: session.roomSlug,
       channelName,
       modelName: session.modelName,
-      preferredPort: options.preferredPort || null
+      preferredPort: options.preferredPort || null,
+      fifoPath: options.fifoPath || null
     });
 
     const currentCount = this.channelUsageCounts.get(channelKey) || 0;
@@ -842,7 +851,10 @@ export class TranscriptionRuntime {
       session.lockPersistTimer = null;
     }
 
-    for (const [producerId] of session.streams) {
+    for (const [producerId, stream] of session.streams) {
+      if (stream.streamingAbortController) {
+        this.disconnectStreamingSidecar(stream);
+      }
       stopTranscriptionStream(session.sessionId, producerId, status);
     }
     this.releaseSessionChannels(session);
@@ -919,6 +931,9 @@ export class TranscriptionRuntime {
   releaseSessionChannels(session) {
     if (!session) return;
     for (const stream of session.streams.values()) {
+      if (stream?.streamingAbortController) {
+        this.disconnectStreamingSidecar(stream);
+      }
       if (stream?.channelName) {
         this.releaseChannelAssignment(session.roomId, stream.channelName);
       }
@@ -934,13 +949,17 @@ export class TranscriptionRuntime {
       if (existingStream.channelName) {
         this.releaseChannelAssignment(session.roomId, existingStream.channelName);
       }
+      if (existingStream.streamingAbortController) {
+        this.disconnectStreamingSidecar(existingStream);
+      }
       stopTranscriptionStream(session.sessionId, trackInfo.producerId, 'stopped');
     }
 
     let sidecarAssignment;
     try {
       sidecarAssignment = await this.acquireChannelAssignment(session, trackInfo.channelName, {
-        preferredPort: trackInfo.preferredSidecarPort || null
+        preferredPort: trackInfo.preferredSidecarPort || null,
+        fifoPath: trackInfo.fifoPath || null
       });
     } catch (error) {
       if (error.code === 'SIDECAR_CAPACITY_EXCEEDED' && !explicitSession) {
@@ -969,6 +988,7 @@ export class TranscriptionRuntime {
       producerName: trackInfo.producerName || null,
       channelName: trackInfo.channelName,
       segmentPattern: trackInfo.segmentPattern || null,
+      fifoPath: trackInfo.fifoPath || null,
       matcher,
       processedFiles: new Set(Array.isArray(trackInfo.processedFiles) ? trackInfo.processedFiles : []),
       sidecarInstanceId: sidecarAssignment.instanceId,
@@ -976,6 +996,18 @@ export class TranscriptionRuntime {
       sidecarUrl: sidecarAssignment.sidecarUrl
     };
     session.streams.set(trackInfo.producerId, state);
+
+    // If streaming mode is enabled and a FIFO path is available, connect to the
+    // sidecar's SSE endpoint to receive real-time partial/final tokens.
+    if (STREAMING_MODE && state.fifoPath) {
+      this.connectStreamingSidecar(session, state).catch((error) => {
+        this.fastify.log.warn(
+          { streamId: state.streamId, producerId: state.producerId, error: error.message },
+          'Failed to connect streaming sidecar; falling back to segment polling'
+        );
+      });
+    }
+
     this.scheduleSessionLockPersist(session, 'active');
     return state;
   }
@@ -1063,6 +1095,9 @@ export class TranscriptionRuntime {
     if (!session) return;
     if (session.streams.has(producerId)) {
       const stream = session.streams.get(producerId);
+      if (stream?.streamingAbortController) {
+        this.disconnectStreamingSidecar(stream);
+      }
       stopTranscriptionStream(session.sessionId, producerId, 'stopped');
       session.streams.delete(producerId);
       if (stream?.channelName) {
@@ -1245,6 +1280,159 @@ export class TranscriptionRuntime {
       const prefix = current.length > 0 && !current.endsWith('\n') ? '\n' : '';
       docState.ytext.insert(current.length, `${prefix}${text}\n`);
     }, 'asr');
+  }
+
+  async connectStreamingSidecar(session, streamState) {
+    if (streamState.streamingAbortController) {
+      this.disconnectStreamingSidecar(streamState);
+    }
+
+    if (!streamState.fifoPath || !streamState.sidecarUrl) {
+      throw new Error('Missing FIFO path or sidecar URL for streaming');
+    }
+
+    // Make sure the FIFO exists before asking the sidecar to read it.
+    // The recorder normally creates it; create here as a fallback.
+    if (!fs.existsSync(streamState.fifoPath)) {
+      try {
+        execSync(`mkfifo "${streamState.fifoPath}"`);
+      } catch (error) {
+        throw new Error(`Failed to create FIFO ${streamState.fifoPath}: ${error.message}`);
+      }
+    }
+
+    const controller = new AbortController();
+    streamState.streamingAbortController = controller;
+    this.streamingControllers.set(streamState.streamId, controller);
+
+    const url = new URL(`${streamState.sidecarUrl}/api/v1/transcribe/sse`);
+    url.searchParams.set('fifo_path', streamState.fifoPath);
+    if (TRANSCRIPTION_LANGUAGE) {
+      url.searchParams.set('language', TRANSCRIPTION_LANGUAGE);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/event-stream'
+      }
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`SSE connection failed: ${response.status}`);
+    }
+
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let lastFinalText = '';
+    let segmentBuffer = [];
+    let lastSegmentAt = Date.now();
+
+    const flushSegment = async () => {
+      const joinedText = segmentBuffer.join(' ').trim();
+      segmentBuffer = [];
+      if (!joinedText) return;
+
+      const timestampStart = parseTimestampStartMs(path.basename(streamState.segmentPattern || ''));
+      const timestampEnd = timestampStart === null ? null : timestampStart + POLL_INTERVAL_MS;
+
+      createTranscriptSegment({
+        session_id: session.sessionId,
+        stream_id: streamState.streamId,
+        room_id: session.roomId,
+        channel_name: streamState.channelName,
+        producer_id: streamState.producerId,
+        publisher_id: streamState.publisherId,
+        segment_file: null,
+        text_content: joinedText,
+        timestamp_start_ms: timestampStart,
+        timestamp_end_ms: timestampEnd,
+        confidence_score: null,
+        language: TRANSCRIPTION_LANGUAGE || null
+      });
+
+      const docStateLocal = await this.getOrCreateDoc(
+        session.roomId,
+        session.roomSlug,
+        session.sessionId,
+        streamState.channelName,
+        session.eventName
+      );
+      this.appendAsrText(docStateLocal, joinedText);
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        let lineEnd = buffer.indexOf('\n');
+        while (lineEnd !== -1) {
+          const line = buffer.slice(0, lineEnd).trim();
+          buffer = buffer.slice(lineEnd + 1);
+
+          if (line.startsWith('data:')) {
+            const payload = line.slice(5).trim();
+            try {
+              const item = JSON.parse(payload);
+              if (item.type === 'partial' && item.text) {
+                // For partials we update the live doc immediately for low-latency UI.
+                const docStateLocal = await this.getOrCreateDoc(
+                  session.roomId,
+                  session.roomSlug,
+                  session.sessionId,
+                  streamState.channelName,
+                  session.eventName
+                );
+                // Replace the last incomplete line with the latest partial text.
+                const current = docStateLocal.ytext.toString();
+                const lines = current.split('\n');
+                const lastLine = lines[lines.length - 2] || '';
+                if (lastLine && !lastLine.startsWith('[')) {
+                  // Heuristic: replace the last line if it looks like an unfinished partial.
+                  const prefixLength = current.length - lastLine.length;
+                  docStateLocal.ydoc.transact(() => {
+                    docStateLocal.ytext.delete(prefixLength, lastLine.length);
+                    docStateLocal.ytext.insert(prefixLength, item.text);
+                  }, 'asr-partial');
+                } else {
+                  this.appendAsrText(docStateLocal, item.text);
+                }
+              } else if (item.type === 'final' && item.text) {
+                // Deduplicate: the sidecar may re-emit final tokens for the same audio window.
+                if (item.text !== lastFinalText) {
+                  lastFinalText = item.text;
+                  segmentBuffer.push(item.text);
+                }
+              }
+            } catch { }
+          }
+          lineEnd = buffer.indexOf('\n');
+        }
+
+        // Flush accumulated final tokens to a transcript segment every few seconds.
+        if (segmentBuffer.length > 0 && Date.now() - lastSegmentAt > 5000) {
+          await flushSegment();
+          lastSegmentAt = Date.now();
+        }
+      }
+    } finally {
+      await flushSegment();
+      this.disconnectStreamingSidecar(streamState);
+    }
+  }
+
+  disconnectStreamingSidecar(streamState) {
+    if (streamState?.streamingAbortController) {
+      try {
+        streamState.streamingAbortController.abort();
+      } catch { }
+      this.streamingControllers.delete(streamState.streamId);
+      streamState.streamingAbortController = null;
+    }
   }
 
   schedulePersist(docState) {
