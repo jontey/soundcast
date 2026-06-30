@@ -72,29 +72,90 @@ def stream_transcription_lines(file_path: Path, language: str | None) -> Iterabl
     final_text: str = ""
 
     kwargs = {"language": language} if language else {}
+    stream_fn = getattr(model, "stream_transcribe", None)
+    transcribe_fn = getattr(model, "transcribe", None)
+    generate_fn = getattr(model, "generate", None)
+
+    if not callable(stream_fn) and not callable(transcribe_fn) and not callable(generate_fn):
+        raise RuntimeError("Model does not expose stream_transcribe(), transcribe(), or generate()")
+
     # NOTE: mlx-audio inference can segfault under concurrent stream_transcribe calls
     # on the same model instance. Serialize inference requests for stability.
     with _inference_lock:
-        for chunk in model.stream_transcribe(str(file_path), **kwargs):
-            # mlx-audio returns StreamingResult objects; keep only text payloads.
-            token_text = getattr(chunk, "text", None)
-            is_final = bool(getattr(chunk, "is_final", False))
+        if callable(stream_fn):
+            for chunk in stream_fn(str(file_path), **kwargs):
+                # mlx-audio returns StreamingResult objects; keep only text payloads.
+                token_text = getattr(chunk, "text", None)
+                is_final = bool(getattr(chunk, "is_final", False))
 
-            if token_text is None and isinstance(chunk, dict):
-                token_text = chunk.get("text", "")
-                is_final = bool(chunk.get("is_final", is_final))
+                if token_text is None and isinstance(chunk, dict):
+                    token_text = chunk.get("text", "")
+                    is_final = bool(chunk.get("is_final", is_final))
 
-            if token_text is None:
-                token_text = str(chunk)
+                if token_text is None:
+                    token_text = str(chunk)
 
-            token_text = str(token_text)
-            if token_text:
-                yield json.dumps({"type": "partial", "text": token_text}) + "\n"
+                token_text = str(token_text)
+                if token_text:
+                    yield json.dumps({"type": "partial", "text": token_text}) + "\n"
 
-            if is_final:
-                final_text = sanitize_asr_text(token_text) or sanitize_asr_text("".join(partial_tokens))
-            elif token_text:
-                partial_tokens.append(token_text)
+                if is_final:
+                    final_text = sanitize_asr_text(token_text) or sanitize_asr_text("".join(partial_tokens))
+                elif token_text:
+                    partial_tokens.append(token_text)
+        else:
+            # Some models only expose non-streaming transcribe()/generate().
+            output = None
+            errors: list[str] = []
+            call_variants = [
+                lambda: transcribe_fn(str(file_path), **kwargs),
+                lambda: transcribe_fn(audio=str(file_path), **kwargs),
+                lambda: transcribe_fn(path=str(file_path), **kwargs),
+                lambda: transcribe_fn(file=str(file_path), **kwargs),
+                lambda: transcribe_fn(str(file_path)),
+                lambda: transcribe_fn(audio=str(file_path)),
+                lambda: transcribe_fn(path=str(file_path)),
+                lambda: transcribe_fn(file=str(file_path)),
+                lambda: generate_fn(str(file_path), stream=False, **kwargs),
+                lambda: generate_fn(audio=str(file_path), stream=False, **kwargs),
+                lambda: generate_fn(path=str(file_path), stream=False, **kwargs),
+                lambda: generate_fn(file=str(file_path), stream=False, **kwargs),
+                lambda: generate_fn(str(file_path), stream=False),
+                lambda: generate_fn(audio=str(file_path), stream=False),
+                lambda: generate_fn(path=str(file_path), stream=False),
+                lambda: generate_fn(file=str(file_path), stream=False),
+            ]
+            for call in call_variants:
+                try:
+                    output = call()
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(str(exc))
+            if output is None:
+                raise RuntimeError(f"Failed transcribe() invocation variants: {' | '.join(errors[:3])}")
+            text = ""
+            # Some models return list[STTOutput] for batch size 1.
+            if isinstance(output, list) and output:
+                output = output[0]
+            if isinstance(output, dict):
+                text = (
+                    output.get("text")
+                    or output.get("transcript")
+                    or output.get("output_text")
+                    or output.get("generated_text")
+                    or ""
+                )
+            else:
+                text = (
+                    getattr(output, "text", None)
+                    or getattr(output, "transcript", None)
+                    or getattr(output, "output_text", None)
+                    or getattr(output, "generated_text", None)
+                    or str(output)
+                )
+            final_text = sanitize_asr_text(text)
+            if final_text:
+                yield json.dumps({"type": "partial", "text": final_text}) + "\n"
 
     if not final_text:
         final_text = sanitize_asr_text("".join(partial_tokens))
@@ -127,6 +188,12 @@ async def transcribe_stream(
             selected_language = language.strip() if isinstance(language, str) else None
             for line in stream_transcription_lines(tmp_path, selected_language or None):
                 yield line
+        except Exception as exc:  # noqa: BLE001
+            # Keep wire contract stable even on provider/model failures.
+            err = sanitize_asr_text(str(exc))
+            if err:
+                yield json.dumps({"type": "error", "error": err}) + "\n"
+            yield json.dumps({"type": "final", "text": ""}) + "\n"
         finally:
             try:
                 tmp_path.unlink(missing_ok=True)
