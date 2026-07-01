@@ -11,9 +11,8 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase, getDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
-import { getRoomBySlug, getRoomById, listRoomsByTenant, createRoom } from './db/models/room.js';
+import { getRoomBySlug, getRoomById, listAllRooms, createRoom } from './db/models/room.js';
 import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
-import { verifyTenantApiKey, getTenantByName, createTenant } from './db/models/tenant.js';
 import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings, waitForRecordingFinalization } from './recording/recorder.js';
 import TranscriptionRuntime from './transcription/runtime.js';
 
@@ -189,32 +188,11 @@ const dbPath = process.env.DB_PATH || './soundcast.db';
 initDatabase(dbPath);
 console.log('Database initialized');
 
-// Single-tenant mode: auto-create default tenant and room
-const singleTenantMode = process.env.SINGLE_TENANT === 'true';
-let defaultApiKey = null;
-let defaultTenant = null;
-
-if (singleTenantMode) {
-  defaultTenant = getTenantByName('default');
-  if (!defaultTenant) {
-    defaultApiKey = process.env.ADMIN_KEY || 'admin';
-    defaultTenant = createTenant('default', defaultApiKey);
-    console.log(`Single-tenant mode: Created default tenant with API key: ${defaultApiKey}`);
-  } else {
-    console.log('Single-tenant mode: Using existing default tenant');
-    defaultApiKey = process.env.ADMIN_KEY || 'admin';
-  }
-
-  // Auto-create default "main" room if it doesn't exist
-  const existingRoom = getRoomBySlug('main');
-  if (!existingRoom) {
-    createRoom({
-      tenant_id: defaultTenant.id,
-      name: 'Main',
-      slug: 'main'
-    });
-    console.log('Single-tenant mode: Created default "main" room');
-  }
+// Auto-create a default "main" room if it doesn't exist yet.
+const existingMainRoom = getRoomBySlug('main');
+if (!existingMainRoom) {
+  createRoom({ name: 'Main', slug: 'main' });
+  console.log('Created default "main" room');
 }
 
 // Room-level TURN/STUN settings were removed; use a single runtime default.
@@ -224,10 +202,8 @@ const DEFAULT_ICE_SERVERS = [];
 transcriptionRuntime = new TranscriptionRuntime({
   fastify,
   verifyPublisherToken,
-  verifyTenantApiKey,
   getRoomBySlug,
-  getRoomById,
-  listRoomsByTenant
+  getRoomById
 });
 
 // Fastify setup - serve static files
@@ -282,12 +258,21 @@ fastify.get('/room/:slug/listen', async (request, reply) => {
     return reply.code(404).send('Room not found');
   }
 
-  return reply.sendFile('room-listen.html');
+  return reply.sendFile('index.html');
 });
 
-// Tenant admin route
-fastify.get('/tenant-admin', async (request, reply) => {
-  return reply.sendFile('tenant-admin.html');
+// Admin dashboard
+fastify.get('/admin', async (request, reply) => {
+  return reply.sendFile('admin.html');
+});
+
+// Landing page: default listener page (users can change rooms in the UI).
+fastify.get('/', async (request, reply) => {
+  const mainRoom = getRoomBySlug('main');
+  if (!mainRoom) {
+    return reply.sendFile('index.html');
+  }
+  return reply.redirect('/room/main/listen');
 });
 
 // mediasoup configuration
@@ -348,8 +333,8 @@ const channels = new Map();
 // Store active connections
 const clients = new Map();
 
-// Tenant admin WebSocket connections: tenantId -> Set<socket>
-const tenantAdminClients = new Map();
+// Admin WebSocket connections
+const adminClients = new Set();
 // Active room publisher sockets keyed by publisher DB id
 const roomPublisherClients = new Map();
 // In-memory chat history by publisher id
@@ -370,14 +355,13 @@ function getPublisherChatHistory(publisherId) {
   return publisherChatHistory.get(publisherId) || [];
 }
 
-function broadcastTenantAdminMessage(tenantId, payload) {
-  const adminSockets = tenantAdminClients.get(tenantId);
-  if (!adminSockets || adminSockets.size === 0) return;
-  for (const socket of adminSockets) {
+function broadcastAdminMessage(payload) {
+  if (adminClients.size === 0) return;
+  for (const socket of adminClients) {
     try {
       socket.send(JSON.stringify(payload));
     } catch (e) {
-      fastify.log.error(`Failed sending tenant admin message: ${e.message}`);
+      fastify.log.error(`Failed sending admin message: ${e.message}`);
     }
   }
 }
@@ -394,10 +378,10 @@ function broadcastChannelList() {
   }
 }
 
-// Get channel stats for a specific tenant.
-function getChannelStatsForTenant(tenantId) {
+// Get channel stats across all rooms.
+function getAllChannelStats() {
   const stats = {};
-  const rooms = listRoomsByTenant(tenantId);
+  const rooms = listAllRooms();
 
   for (const room of rooms) {
     stats[room.slug] = {};
@@ -443,10 +427,10 @@ function getChannelStatsForTenant(tenantId) {
   return stats;
 }
 
-// Get recording status for all rooms in a tenant
-function getRecordingStatusForTenant(tenantId) {
+// Get recording status for all rooms
+function getAllRecordingStatus() {
   const recordingStats = {};
-  const rooms = listRoomsByTenant(tenantId);
+  const rooms = listAllRooms();
 
   for (const room of rooms) {
     const status = getRecordingStatus(room.id);
@@ -499,10 +483,12 @@ function notifyPublishersRecordingStatus(roomSlug, payload) {
   }
 }
 
-// Notify tenant admins about recording status change
-function notifyRecordingStatusChange(tenantId, roomSlug, status) {
-  const adminClients = tenantAdminClients.get(tenantId);
-  if (!adminClients) return;
+// Notify admin clients and publishers about recording status change
+function notifyRecordingStatusChange(roomSlug, status) {
+  if (adminClients.size === 0) {
+    notifyPublishersRecordingStatus(roomSlug, status);
+    return;
+  }
 
   const room = getRoomBySlug(roomSlug);
   const transcriptionStatus = room && transcriptionRuntime
@@ -538,7 +524,7 @@ function notifyRecordingStatusChange(tenantId, roomSlug, status) {
   notifyPublishersRecordingStatus(roomSlug, normalizedStatus);
 }
 
-// Find room and tenant for a channel name
+// Find room for a channel name
 // channelId format can be "roomSlug:channelName" (e.g., "sjh2:English") or just "channelName"
 function findRoomForChannel(channelId) {
   const db = getDatabase();
@@ -552,7 +538,7 @@ function findRoomForChannel(channelId) {
 
     // Look up by room slug and channel name
     const stmt = db.prepare(`
-      SELECT r.id as room_id, r.slug, r.tenant_id
+      SELECT r.id as room_id, r.slug
       FROM rooms r
       JOIN publishers p ON p.room_id = r.id
       WHERE r.slug = ? AND p.channel_name = ?
@@ -563,7 +549,7 @@ function findRoomForChannel(channelId) {
 
   // Fallback: query by channel_name directly (legacy format)
   const stmt = db.prepare(`
-    SELECT r.id as room_id, r.slug, r.tenant_id
+    SELECT r.id as room_id, r.slug
     FROM rooms r
     JOIN publishers p ON p.room_id = r.id
     WHERE p.channel_name = ?
@@ -674,14 +660,11 @@ function countActivePublishers(channel) {
   return count;
 }
 
-// Notify tenant admins about channel updates
-function notifyTenantAdmins(channelId, source = 'main') {
+// Notify admins about channel updates
+function notifyAdmins(channelId, source = 'main') {
   const roomInfo = findRoomForChannel(channelId);
   if (!roomInfo) return;
-
-  const tenantId = roomInfo.tenant_id;
-  const adminSockets = tenantAdminClients.get(tenantId);
-  if (!adminSockets || adminSockets.size === 0) return;
+  if (adminClients.size === 0) return;
 
   // Get current stats for this channel
   let channelStats;
@@ -715,11 +698,11 @@ function notifyTenantAdmins(channelId, source = 'main') {
     subscribers: channelStats.subscribers
   };
 
-  for (const socket of adminSockets) {
+  for (const socket of adminClients) {
     try {
       socket.send(JSON.stringify(update));
     } catch (e) {
-      fastify.log.error(`Failed to send update to tenant admin: ${e.message}`);
+      fastify.log.error(`Failed to send update to admin: ${e.message}`);
     }
   }
 }
@@ -1217,8 +1200,8 @@ async function registerMainWsRoutes(fastify) {
             // Notify all clients that the channel list has changed
             broadcastChannelList();
 
-            // Notify tenant admins about the new publisher
-            notifyTenantAdmins(clientInfo.channelId);
+            // Notify admins about the new publisher
+            notifyAdmins(clientInfo.channelId);
 
             // Check if recording is active for this room and add producer if so
             const channelParts = clientInfo.channelId.split(':');
@@ -1457,9 +1440,9 @@ async function registerMainWsRoutes(fastify) {
             }));
             fastify.log.info(`Created ${consumersData.length} consumers for listener ${clientId}`);
 
-            // Notify tenant admins about the new subscriber
+            // Notify admins about the new subscriber
             if (consumersData.length > 0) {
-              notifyTenantAdmins(clientInfo.channelId);
+              notifyAdmins(clientInfo.channelId);
               notifyPublishersListenerCount(clientInfo.channelId);
             }
           } catch (error) {
@@ -1538,8 +1521,8 @@ async function registerMainWsRoutes(fastify) {
             // Notify all clients that the channel list has changed
             broadcastChannelList();
 
-            // Notify tenant admins about the publisher leaving
-            notifyTenantAdmins(data.channelId);
+            // Notify admins about the publisher leaving
+            notifyAdmins(data.channelId);
 
             // Send confirmation to the client
             connection.send(JSON.stringify({
@@ -1580,8 +1563,8 @@ async function registerMainWsRoutes(fastify) {
 
             clientInfo.consumers = [];
 
-            // Notify tenant admins about the subscriber leaving
-            notifyTenantAdmins(clientInfo.channelId);
+            // Notify admins about the subscriber leaving
+            notifyAdmins(clientInfo.channelId);
             notifyPublishersListenerCount(clientInfo.channelId);
 
             // Reset client info
@@ -1647,8 +1630,8 @@ async function registerMainWsRoutes(fastify) {
           }
         }
 
-        // Notify tenant admins about the publisher disconnect
-        notifyTenantAdmins(clientInfo.channelId);
+        // Notify admins about the publisher disconnect
+        notifyAdmins(clientInfo.channelId);
         // Notify remaining publishers about updated listener count
         notifyPublishersListenerCount(clientInfo.channelId);
       }
@@ -1667,8 +1650,8 @@ async function registerMainWsRoutes(fastify) {
         }
         clientInfo.consumers = [];
 
-        // Notify tenant admins about the listener disconnect
-        notifyTenantAdmins(clientInfo.channelId);
+        // Notify admins about the listener disconnect
+        notifyAdmins(clientInfo.channelId);
         notifyPublishersListenerCount(clientInfo.channelId);
       }
 
@@ -1678,7 +1661,7 @@ async function registerMainWsRoutes(fastify) {
   });
 }
 
-// Room-based WebSocket endpoints for multi-tenant support
+// Room-based WebSocket endpoints
 async function registerRoomWsRoutes(fastify) {
   // Listener endpoint: /ws/room/:slug/listen
   fastify.get('/ws/room/:slug/listen', { websocket: true }, (connection, req) => {
@@ -1799,8 +1782,7 @@ async function registerRoomWsRoutes(fastify) {
       publisherId: publisher.id,
       publisherName: publisher.name,
       roomSlug: slug,
-      roomId: room.id,
-      tenantId: room.tenant_id
+      roomId: room.id
     });
 
     const iceServers = DEFAULT_ICE_SERVERS;
@@ -1860,7 +1842,7 @@ async function registerRoomWsRoutes(fastify) {
             type: 'publisher-chat-message',
             data: chatMessage
           }));
-          broadcastTenantAdminMessage(room.tenant_id, {
+          broadcastAdminMessage({
             type: 'publisher-chat-message',
             data: chatMessage
           });
@@ -1881,51 +1863,23 @@ async function registerRoomWsRoutes(fastify) {
   });
 }
 
-// Tenant Admin WebSocket endpoint
+// Admin WebSocket endpoint
 async function registerAdminWsRoutes(fastify) {
-  // Admin endpoint: /ws/admin?apiKey=xxx
+  // Admin endpoint: /ws/admin (no auth required; single-user deployment)
   fastify.get('/ws/admin', { websocket: true }, (connection, req) => {
-    const apiKey = req.query.apiKey;
+    fastify.log.info('Admin WebSocket connected');
 
-    // Verify API key
-    if (!apiKey) {
-      fastify.log.warn('Missing API key for admin WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Missing API key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    const tenant = verifyTenantApiKey(apiKey);
-    if (!tenant) {
-      fastify.log.warn('Invalid API key for admin WebSocket connection');
-      connection.send(JSON.stringify({
-        type: 'error',
-        data: { message: 'Invalid API key' }
-      }));
-      connection.close();
-      return;
-    }
-
-    fastify.log.info(`Tenant admin connected: ${tenant.name} (ID: ${tenant.id})`);
-
-    // Add to tenantAdminClients Map
-    if (!tenantAdminClients.has(tenant.id)) {
-      tenantAdminClients.set(tenant.id, new Set());
-    }
-    tenantAdminClients.get(tenant.id).add(connection);
+    adminClients.add(connection);
 
     // Send initial channel stats
-    const stats = getChannelStatsForTenant(tenant.id);
+    const stats = getAllChannelStats();
     connection.send(JSON.stringify({
       type: 'channel-stats',
       stats
     }));
 
     // Send initial recording status for all rooms
-    const recordingStats = getRecordingStatusForTenant(tenant.id);
+    const recordingStats = getAllRecordingStatus();
     connection.send(JSON.stringify({
       type: 'recording-stats',
       stats: recordingStats
@@ -1937,13 +1891,13 @@ async function registerAdminWsRoutes(fastify) {
 
         if (payload.type === 'refresh') {
           // Send updated stats
-          const stats = getChannelStatsForTenant(tenant.id);
+          const stats = getAllChannelStats();
           connection.send(JSON.stringify({
             type: 'channel-stats',
             stats
           }));
           // Also send recording status
-          const recordingStats = getRecordingStatusForTenant(tenant.id);
+          const recordingStats = getAllRecordingStatus();
           connection.send(JSON.stringify({
             type: 'recording-stats',
             stats: recordingStats
@@ -1955,7 +1909,7 @@ async function registerAdminWsRoutes(fastify) {
           if (!publisherId || !roomSlug || !text) return;
 
           const room = getRoomBySlug(roomSlug);
-          if (!room || room.tenant_id !== tenant.id) return;
+          if (!room) return;
 
           const db = getDatabase();
           const pubStmt = db.prepare('SELECT id, name, room_id FROM publishers WHERE id = ?');
@@ -1985,7 +1939,7 @@ async function registerAdminWsRoutes(fastify) {
             }
           }
 
-          broadcastTenantAdminMessage(tenant.id, {
+          broadcastAdminMessage({
             type: 'publisher-chat-message',
             data: chatMessage
           });
@@ -1995,7 +1949,7 @@ async function registerAdminWsRoutes(fastify) {
           if (!publisherId || !roomSlug) return;
 
           const room = getRoomBySlug(roomSlug);
-          if (!room || room.tenant_id !== tenant.id) return;
+          if (!room) return;
 
           const db = getDatabase();
           const pubStmt = db.prepare('SELECT id, room_id FROM publishers WHERE id = ?');
@@ -2012,19 +1966,13 @@ async function registerAdminWsRoutes(fastify) {
           }));
         }
       } catch (e) {
-        fastify.log.error(`Invalid message from tenant admin: ${e.message}`);
+        fastify.log.error(`Invalid message from admin: ${e.message}`);
       }
     });
 
     connection.on('close', () => {
-      fastify.log.info(`Tenant admin disconnected: ${tenant.name}`);
-      const sockets = tenantAdminClients.get(tenant.id);
-      if (sockets) {
-        sockets.delete(connection);
-        if (sockets.size === 0) {
-          tenantAdminClients.delete(tenant.id);
-        }
-      }
+      fastify.log.info('Admin WebSocket disconnected');
+      adminClients.delete(connection);
     });
   });
 
@@ -2109,11 +2057,11 @@ function createHttpsServer() {
     if (!room) {
       return reply.code(404).send('Room not found');
     }
-    return reply.sendFile('room-listen.html');
+    return reply.sendFile('index.html');
   });
 
-  fastifyHttps.get('/tenant-admin', async (request, reply) => {
-    return reply.sendFile('tenant-admin.html');
+  fastifyHttps.get('/admin', async (request, reply) => {
+    return reply.sendFile('admin.html');
   });
 
   return fastifyHttps;

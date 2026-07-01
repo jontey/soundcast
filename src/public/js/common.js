@@ -140,7 +140,7 @@ function getIceServers() {
   ];
 }
 
-// Get ICE servers from room config (dynamic - multi-tenant)
+// Get ICE servers from room config (dynamic, per-room)
 function getIceServersFromConfig(roomConfig) {
   if (roomConfig && roomConfig.iceServers && Array.isArray(roomConfig.iceServers) && roomConfig.iceServers.length > 0) {
     return roomConfig.iceServers;

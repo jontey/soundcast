@@ -10,8 +10,6 @@ services:
     #   - "40000-40100:40000-40100/udp"
     environment:
       - NODE_ENV=production
-      - SINGLE_TENANT=true
-      - ADMIN_KEY=admin
       # IMPORTANT: Set this to your server's LAN IP address
       - ANNOUNCED_IP=${HOST_IP:-127.0.0.1}
       - DB_PATH=/app/data/soundcast.db
