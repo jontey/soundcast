@@ -18,23 +18,21 @@ function generateSlug(name, id) {
 /**
  * Create a new room
  * @param {object} roomData - Room data
- * @param {number} roomData.tenant_id - Tenant ID
  * @param {string} roomData.name - Room name
  * @returns {object} Created room
  */
-export function createRoom({ tenant_id, name, slug }) {
+export function createRoom({ name, slug }) {
   const db = getDatabase();
 
   // First insert without slug to get the ID
   const stmt = db.prepare(
-    'INSERT INTO rooms (tenant_id, name, slug) VALUES (?, ?, ?)'
+    'INSERT INTO rooms (name, slug) VALUES (?, ?)'
   );
 
   // Temporary slug (will be updated)
   const tempSlug = `temp-${Date.now()}`;
 
   const result = stmt.run(
-    tenant_id,
     name,
     tempSlug
   );
@@ -60,7 +58,7 @@ export function createRoom({ tenant_id, name, slug }) {
 export function getRoomById(id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE id = ?'
+    'SELECT id, name, slug, created_at FROM rooms WHERE id = ?'
   );
   return stmt.get(id);
 }
@@ -73,7 +71,7 @@ export function getRoomById(id) {
 export function getRoomBySlug(slug) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE slug = ?'
+    'SELECT id, name, slug, created_at FROM rooms WHERE slug = ?'
   );
   return stmt.get(slug);
 }
@@ -133,16 +131,15 @@ export function updateRoom(slug, updates) {
 }
 
 /**
- * List rooms by tenant ID
- * @param {number} tenant_id - Tenant ID
+ * List all rooms
  * @returns {array} Array of room objects
  */
-export function listRoomsByTenant(tenant_id) {
+export function listAllRooms() {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
+    'SELECT id, name, slug, created_at FROM rooms ORDER BY created_at DESC'
   );
-  return stmt.all(tenant_id);
+  return stmt.all();
 }
 
 /**
@@ -184,6 +181,6 @@ export default {
   getRoomById,
   getRoomBySlug,
   updateRoom,
-  listRoomsByTenant,
+  listAllRooms,
   deleteRoom
 };

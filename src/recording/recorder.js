@@ -36,7 +36,7 @@ let onStatusChange = null; // Callback for status change notifications
 
 // Active recording sessions: roomId -> RecordingSession
 const activeRecordings = new Map();
-const blockedRecordings = new Map(); // roomId -> { recordingId, roomSlug, tenantId, folderName, startedAt, reason }
+const blockedRecordings = new Map(); // roomId -> { recordingId, roomSlug, folderName, startedAt, reason }
 const recordingFinalizations = new Map(); // id -> { label, startedAt, promise }
 
 // Port allocation tracking
@@ -52,7 +52,7 @@ const PORT_COOLDOWN_MS = 5000;
  * @param {object} deps.router - mediasoup router
  * @param {Map} deps.channels - channels Map
  * @param {object} deps.fastify - fastify instance
- * @param {function} deps.onStatusChange - Callback when recording status changes (tenantId, roomSlug, status)
+ * @param {function} deps.onStatusChange - Callback when recording status changes (roomSlug, status)
  */
 export function initRecorder(deps) {
   router = deps.router;
@@ -152,7 +152,6 @@ function serializeSessionLock(session, status = 'recording') {
     updatedAt: new Date().toISOString(),
     roomId: session.roomId,
     roomSlug: session.roomSlug,
-    tenantId: session.tenantId || null,
     recordingId: session.recordingId,
     folderName: path.basename(session.folderPath),
     status,
@@ -204,7 +203,6 @@ export function recoverRecordingSessions({ getRoomById }) {
       blockedRecordings.set(room.id, {
         recordingId: recording.id,
         roomSlug: room.slug,
-        tenantId: room.tenant_id,
         folderName: recording.folder_name,
         startedAt: recording.started_at,
         reason: 'session_in_use'
@@ -223,7 +221,6 @@ export function recoverRecordingSessions({ getRoomById }) {
     }
 
     const session = new RecordingSession(room.id, room.slug, recording.id, folderPath);
-    session.tenantId = room.tenant_id;
     session.startedAt = new Date(recording.started_at || lock.startedAt || now);
     session.recovered = true;
     activeRecordings.set(room.id, session);
@@ -718,10 +715,9 @@ class TrackRecorder {
  * Start recording for a room
  * @param {string} roomSlug - Room slug
  * @param {number} roomId - Room ID
- * @param {number} tenantId - Tenant ID
  * @returns {object} Recording session info
  */
-export async function startRecording(roomSlug, roomId, tenantId) {
+export async function startRecording(roomSlug, roomId) {
   if (blockedRecordings.has(roomId)) {
     throw new Error('Recording session is currently owned by another live process');
   }
@@ -745,9 +741,8 @@ export async function startRecording(roomSlug, roomId, tenantId) {
   // Create recording in database
   const recording = createRecording(roomId, folderName);
 
-  // Create session (store tenantId for notifications)
+  // Create session
   const session = new RecordingSession(roomId, roomSlug, recording.id, folderPath);
-  session.tenantId = tenantId;
   activeRecordings.set(roomId, session);
   persistSessionLock(session, 'recording');
 
@@ -790,7 +785,7 @@ export async function startRecording(roomSlug, roomId, tenantId) {
 
   // Notify about recording status change
   if (onStatusChange) {
-    onStatusChange(tenantId, roomSlug, {
+    onStatusChange(roomSlug, {
       isRecording: true,
       ...result
     });
@@ -915,8 +910,6 @@ export async function stopRecording(roomSlug, roomId) {
       throw new Error('No active recording for this room');
     }
 
-    const tenantId = session.tenantId;
-
     // Stop all tracks
     const trackCount = session.tracks.size;
     for (const [producerId, trackRecorder] of session.tracks) {
@@ -949,8 +942,8 @@ export async function stopRecording(roomSlug, roomId) {
     };
 
     // Notify about recording status change
-    if (onStatusChange && tenantId) {
-      onStatusChange(tenantId, roomSlug, {
+    if (onStatusChange) {
+      onStatusChange(roomSlug, {
         isRecording: false,
         ...result
       });

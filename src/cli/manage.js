@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * CLI utility for managing tenants in Soundcast multi-tenant system
+ * CLI utility for managing Soundcast rooms and publishers
  * Usage:
- *   node src/cli/manage.js create-tenant <name> <api-key>
- *   node src/cli/manage.js list-tenants
- *   node src/cli/manage.js list-rooms <tenant-id>
+ *   node src/cli/manage.js create-room <name> [slug]
+ *   node src/cli/manage.js list-rooms
+ *   node src/cli/manage.js create-publisher <room-id> <channel-name> <name>
+ *   node src/cli/manage.js list-publishers <room-id>
  */
 
 import { initDatabase } from '../db/database.js';
-import { createTenant, listTenants, getTenantById, getTenantByName, updateTenantApiKey } from '../db/models/tenant.js';
-import { listRoomsByTenant, getRoomById } from '../db/models/room.js';
+import { listAllRooms, getRoomById, createRoom } from '../db/models/room.js';
 import { createPublisher, listPublishersByRoom } from '../db/models/publisher.js';
 
 // Initialize database
@@ -21,58 +21,38 @@ const command = process.argv[2];
 const args = process.argv.slice(3);
 
 switch (command) {
-  case 'create-tenant': {
-    if (args.length < 2) {
-      console.error('Usage: node src/cli/manage.js create-tenant <name> <api-key>');
+  case 'create-room': {
+    if (args.length < 1) {
+      console.error('Usage: node src/cli/manage.js create-room <name> [slug]');
       process.exit(1);
     }
 
-    const [name, apiKey] = args;
+    const name = args[0];
+    const slug = args[1];
 
     try {
-      const tenant = createTenant(name, apiKey);
-      console.log('✅ Tenant created successfully!');
-      console.log(JSON.stringify(tenant, null, 2));
-      console.log('\n🔑 API Key (save this!):', apiKey);
+      const room = createRoom({ name, slug });
+      console.log('Room created successfully!');
+      console.log(JSON.stringify({
+        id: room.id,
+        name: room.name,
+        slug: room.slug,
+        created_at: room.created_at
+      }, null, 2));
     } catch (error) {
-      console.error('❌ Error creating tenant:', error.message);
-      process.exit(1);
-    }
-    break;
-  }
-
-  case 'list-tenants': {
-    try {
-      const tenants = listTenants();
-      console.log('📋 Tenants:');
-      console.log(JSON.stringify(tenants, null, 2));
-    } catch (error) {
-      console.error('❌ Error listing tenants:', error.message);
+      console.error('Error creating room:', error.message);
       process.exit(1);
     }
     break;
   }
 
   case 'list-rooms': {
-    if (args.length < 1) {
-      console.error('Usage: node src/cli/manage.js list-rooms <tenant-id>');
-      process.exit(1);
-    }
-
-    const tenantId = parseInt(args[0]);
-
     try {
-      const tenant = getTenantById(tenantId);
-      if (!tenant) {
-        console.error(`❌ Tenant with ID ${tenantId} not found`);
-        process.exit(1);
-      }
-
-      console.log(`📋 Rooms for tenant: ${tenant.name} (ID: ${tenant.id})`);
-      const rooms = listRoomsByTenant(tenantId);
+      const rooms = listAllRooms();
+      console.log('Rooms:');
       console.log(JSON.stringify(rooms, null, 2));
     } catch (error) {
-      console.error('❌ Error listing rooms:', error.message);
+      console.error('Error listing rooms:', error.message);
       process.exit(1);
     }
     break;
@@ -132,55 +112,20 @@ switch (command) {
     break;
   }
 
-  case 'update-api-key': {
-    if (args.length < 2) {
-      console.error('Usage: node src/cli/manage.js update-api-key <tenant-name> <new-api-key>');
-      process.exit(1);
-    }
-
-    const tenantName = args[0];
-    const newApiKey = args[1];
-
-    try {
-      const tenant = getTenantByName(tenantName);
-      if (!tenant) {
-        console.error(`Tenant "${tenantName}" not found`);
-        process.exit(1);
-      }
-
-      const updated = updateTenantApiKey(tenant.id, newApiKey);
-      if (updated) {
-        console.log(`API key updated successfully for tenant: ${tenant.name}`);
-        console.log('New API Key:', newApiKey);
-      } else {
-        console.error('Failed to update API key');
-        process.exit(1);
-      }
-    } catch (error) {
-      console.error('Error updating API key:', error.message);
-      process.exit(1);
-    }
-    break;
-  }
-
   case 'help':
   default:
-    console.log('Soundcast Multi-Tenant CLI Management Tool');
+    console.log('Soundcast CLI Management Tool');
     console.log('');
     console.log('Commands:');
-    console.log('  create-tenant <name> <api-key>                     Create a new tenant');
-    console.log('  list-tenants                                       List all tenants');
-    console.log('  update-api-key <tenant-name> <new-api-key>         Update tenant API key');
-    console.log('  list-rooms <tenant-id>                             List rooms for a tenant');
+    console.log('  create-room <name> [slug]                          Create a new room');
+    console.log('  list-rooms                                         List all rooms');
     console.log('  create-publisher <room-id> <channel-name> <name>   Create a publisher for a room');
     console.log('  list-publishers <room-id>                          List publishers for a room');
     console.log('  help                                               Show this help message');
     console.log('');
     console.log('Examples:');
-    console.log('  node src/cli/manage.js create-tenant "Acme Corp" "my-secret-key-123"');
-    console.log('  node src/cli/manage.js list-tenants');
-    console.log('  node src/cli/manage.js update-api-key "Acme Corp" "new-secret-key-456"');
-    console.log('  node src/cli/manage.js list-rooms 1');
+    console.log('  node src/cli/manage.js create-room "Main Stage" main');
+    console.log('  node src/cli/manage.js list-rooms');
     console.log('  node src/cli/manage.js create-publisher 1 main "Main Speaker"');
     console.log('  node src/cli/manage.js list-publishers 1');
     break;

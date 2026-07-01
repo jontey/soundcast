@@ -1,23 +1,12 @@
--- Soundcast Multi-Tenant Database Schema
+-- Soundcast Database Schema
 -- SQLite version
-
--- 2.1. Tenant Model
-CREATE TABLE IF NOT EXISTS tenants (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    api_key_hash TEXT NOT NULL, -- Hashed API key for tenant admin access
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 
 -- 2.2. Room Model
 CREATE TABLE IF NOT EXISTS rooms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
     slug TEXT NOT NULL UNIQUE, -- URL-friendly identifier
-    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
-    UNIQUE (tenant_id, name)
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 2.3. Publisher Model (token-based authentication for broadcasters)
@@ -60,7 +49,6 @@ CREATE TABLE IF NOT EXISTS recording_tracks (
 );
 
 -- Create indexes for better query performance
-CREATE INDEX IF NOT EXISTS idx_rooms_tenant_id ON rooms(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rooms_slug ON rooms(slug);
 CREATE INDEX IF NOT EXISTS idx_publishers_room_id ON publishers(room_id);
 CREATE INDEX IF NOT EXISTS idx_publishers_join_token_hash ON publishers(join_token_hash);

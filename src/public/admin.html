@@ -1,315 +1,2474 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SoundCast Admin</title>
+  <title>Soundcast Admin</title>
   <link rel="stylesheet" href="/css/styles.css">
-  <script>
-    // Redirect to tenant-admin in single-tenant mode
-    fetch('/api/config').then(r => r.json()).then(config => {
-      if (config.singleTenant) {
-        window.location.href = '/tenant-admin';
+  <style>
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 10px;
+      border-radius: 10px;
+      margin-bottom: 30px;
+    }
+
+    .header h1 {
+      font-size: 24px;
+      font-weight: bold;
+      color: white;
+      margin: 0px;
+    }
+
+    .api-key-section {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+      border-left: 4px solid #667eea;
+    }
+
+    .api-key-input {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e2e8f0;
+      border-radius: 5px;
+      font-size: 14px;
+      font-family: monospace;
+      margin-top: 10px;
+    }
+
+    .section {
+      background: white;
+      padding: 25px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      margin-bottom: 25px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      color: #2d3748;
+      border-bottom: 2px solid #667eea;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 10px;
+    }
+
+    .room-card {
+      background: #f7fafc;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+      border-left: 4px solid #48bb78;
+    }
+
+    .room-card.local {
+      border-left-color: #4299e1;
+    }
+
+    .room-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .room-name {
+      font-size: 18px;
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .room-slug {
+      font-family: monospace;
+      color: #718096;
+      font-size: 14px;
+    }
+
+    .badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+
+    .badge.local {
+      background: #bee3f8;
+      color: #2c5282;
+    }
+
+    .badge.public {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+
+    .badge.pending {
+      background: #fefcbf;
+      color: #744210;
+    }
+
+    .badge.offline {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+
+    .badge.recording {
+      background: #e53e3e;
+      color: white;
+      animation: pulse 2s infinite;
+    }
+
+    .btn.recording-active {
+      background: #38a169;
+    }
+
+    .btn.recording-active:hover {
+      background: #2f855a;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
       }
-    }).catch(() => {});
-  </script>
+
+      50% {
+        opacity: 0.6;
+      }
+    }
+
+    .room-urls {
+      background: white;
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 15px;
+    }
+
+    .url-group {
+      margin-bottom: 10px;
+    }
+
+    .url-label {
+      font-size: 12px;
+      font-weight: bold;
+      color: #718096;
+      margin-bottom: 5px;
+    }
+
+    .url-value {
+      font-family: monospace;
+      font-size: 13px;
+      background: #edf2f7;
+      padding: 8px;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .copy-btn {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 5px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .copy-btn:hover {
+      background: #5568d3;
+    }
+
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+      transition: all 0.3s;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+
+    .btn-danger {
+      background: #e53e3e;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c53030;
+    }
+
+    .btn-secondary {
+      background: #48bb78;
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: #38a169;
+    }
+
+    .btn-danger {
+      background: #f56565;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #e53e3e;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 5px;
+      color: #2d3748;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid #e2e8f0;
+      border-radius: 5px;
+      font-size: 14px;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .form-checkbox {
+      margin-right: 8px;
+    }
+
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: white;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 30px;
+      border-radius: 10px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    .modal-header {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      color: #2d3748;
+    }
+
+    .close-modal {
+      float: right;
+      font-size: 28px;
+      cursor: pointer;
+      color: #a0aec0;
+    }
+
+    .close-modal:hover {
+      color: #2d3748;
+    }
+
+    .error {
+      background: #fff5f5;
+      border-left: 4px solid #f56565;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      color: #742a2a;
+    }
+
+    .success {
+      background: #f0fff4;
+      border-left: 4px solid #48bb78;
+      padding: 15px;
+      border-radius: 5px;
+      margin-bottom: 20px;
+      color: #22543d;
+    }
+
+    .interpreters-list {
+      margin-top: 10px;
+    }
+
+    .interpreter-item {
+      background: white;
+      padding: 10px;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .interpreter-info {
+      flex: 1;
+    }
+
+    .interpreter-name {
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .interpreter-lang {
+      font-size: 12px;
+      color: #718096;
+      text-transform: uppercase;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #718096;
+    }
+
+    .publisher-links-section {
+      background: white;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+      border-left: 3px solid #667eea;
+    }
+
+    .publisher-links-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .publisher-links-title {
+      font-weight: bold;
+      color: #2d3748;
+      font-size: 14px;
+    }
+
+    .publisher-links-table {
+      width: 100%;
+      font-size: 13px;
+    }
+
+    .publisher-links-table td {
+      padding: 8px 5px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .publisher-links-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .connection-summary {
+      font-size: 13px;
+      font-weight: bold;
+      color: #48bb78;
+    }
+
+    .connection-summary.partial {
+      color: #ecc94b;
+    }
+
+    .connection-summary.offline {
+      color: #f56565;
+    }
+
+    .status-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-indicator.online {
+      color: #48bb78;
+    }
+
+    .status-indicator.offline {
+      color: #cbd5e0;
+    }
+
+    .recording-control {
+      background: white;
+      padding: 12px;
+      border-radius: 6px;
+      margin-top: 15px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-left: 3px solid #e53e3e;
+    }
+
+    .recording-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .recording-info {
+      font-size: 14px;
+      color: #2d3748;
+    }
+
+    .settings-row {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .settings-row button {
+      font-size: 13px;
+      padding: 8px 16px;
+    }
+
+    .btn-link {
+      background: none;
+      border: none;
+      color: #667eea;
+      cursor: pointer;
+      padding: 8px 16px;
+      font-size: 13px;
+      text-decoration: underline;
+    }
+
+    .btn-link:hover {
+      color: #5568d3;
+    }
+
+    .sessions-table {
+      width: 100%;
+      font-size: 13px;
+      margin-top: 10px;
+      background: white;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .sessions-table th {
+      background: #edf2f7;
+      padding: 8px;
+      text-align: left;
+      font-weight: bold;
+      color: #2d3748;
+    }
+
+    .sessions-table td {
+      padding: 8px;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .form-inline {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .form-inline .form-group {
+      flex: 1;
+      margin-bottom: 0;
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .model-size {
+      font-family: monospace;
+      font-size: 12px;
+      color: #718096;
+    }
+
+    .collapsible-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease, padding 0.3s ease, margin 0.3s ease;
+      padding: 0;
+      margin-top: 0;
+      border-width: 0;
+    }
+
+    .collapsible-content.open {
+      max-height: 1000px;
+      padding: 15px;
+      margin-top: 15px;
+      border-width: 3px;
+    }
+
+    .transcript-panel {
+      margin-top: 15px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .transcript-panel.hidden {
+      display: none;
+    }
+
+    .transcript-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .transcript-tab-group {
+      display: inline-flex;
+      align-items: stretch;
+    }
+
+    .transcript-tab {
+      background: #edf2f7;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-tab-group .transcript-tab {
+      border-radius: 6px 0 0 6px;
+    }
+
+    .transcript-tab.active {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .transcript-restart-btn {
+      background: #fff;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+      border-left: 0;
+      border-radius: 0 6px 6px 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .transcript-restart-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .transcript-editor {
+      width: 100%;
+      min-height: 180px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    .transcript-status {
+      font-size: 12px;
+      color: #4a5568;
+      margin-bottom: 8px;
+    }
+
+    .transcript-session-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+
+    .transcript-session-select {
+      min-width: 280px;
+      max-width: 100%;
+      background: #fff;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: #2d3748;
+    }
+
+    .transcript-session-pager {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }
+
+    .transcript-session-meta {
+      font-size: 11px;
+      color: #718096;
+      min-width: 120px;
+      text-align: right;
+    }
+
+    .chat-row {
+      margin-bottom: 8px;
+    }
+  </style>
 </head>
+
 <body>
   <div class="container">
-    <h1>SoundCast Admin Panel</h1>
-
-    <!-- Multi-tenant redirect banner -->
-    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
-      <h2 style="margin-top: 0;">Multi-Tenant Admin Available</h2>
-      <p style="margin-bottom: 15px;">For multi-tenant room and publisher management with API key authentication:</p>
-      <a href="/tenant-admin" style="background: white; color: #667eea; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Go to Tenant Admin</a>
+    <div class="header">
+      <h1>Soundcast Admin</h1>
     </div>
 
-    <hr style="margin: 20px 0; border: none; border-top: 1px solid #e2e8f0;">
+    <div id="errorMessage" class="error" style="display: none;"></div>
+    <div id="successMessage" class="success" style="display: none;"></div>
 
-    <h2 style="color: #718096;">Legacy Admin (Global)</h2>
-
-    <div id="status" class="status info">Connecting to server...</div>
-
-    <div class="flex-container">
-      <a href="/publisher.html" target="_blank">Open Publisher Page</a>
-      <a href="/" target="_blank">Open Subscriber Page</a>
-    </div>
-    
-    <div>
-      <h2>Create Channel</h2>
-      <div class="flex-container">
-        <form id="createChannelForm">
-          <input type="text" id="channelName" placeholder="Channel Name">
-          <button type="submit" id="createChannelBtn">Create Channel</button>
-        </form>
+    <div id="roomsSection" class="section">
+      <div class="section-title">
+        <div style="display: flex; align-items: center;">
+          Your Rooms
+          <span id="wsStatusIndicator"
+            style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f56565; margin-left: 10px;"
+            title="Connecting..."></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <button onclick="loadRooms()" class="btn btn-secondary">Refresh</button>
+          <button onclick="showCreateRoomModal()" class="btn btn-primary">+ Create Room</button>
+        </div>
       </div>
-    </div>
-    
-    <div>
-      <h2>Active Channels</h2>
-      <div id="channelsList">
-        <p>No active channels</p>
-      </div>
-    </div>
-    
-    <div>
-      <h2>Channel Subscribers</h2>
-      <div id="subscribersList">
-        <p>No subscribers</p>
+      <div id="roomsList">
+        <div class="loading">Loading rooms...</div>
       </div>
     </div>
 
-    <div>
-      <h2>Publishers</h2>
-      <div id="publishersList">
-        <p>No publishers</p>
+  </div>
+
+  <!-- Create Room Modal -->
+  <div id="createRoomModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('createRoomModal')">&times;</span>
+      <div class="modal-header">Create New Room</div>
+      <form id="createRoomForm" onsubmit="createRoom(event)">
+        <div class="form-group">
+          <label class="form-label">Room Name</label>
+          <input type="text" id="roomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
+        </div>
+        <div class="form-group">
+          <button type="submit" class="btn btn-primary">Create Room</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Publisher Modal -->
+  <div id="addPublisherModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('addPublisherModal')">&times;</span>
+      <div class="modal-header">Add Publisher</div>
+      <form id="addPublisherForm" onsubmit="addPublisher(event)">
+        <input type="hidden" id="publisherRoomSlug">
+        <div class="form-group">
+          <label class="form-label">Publisher Name</label>
+          <input type="text" id="publisherName" class="form-input" required placeholder="e.g., Main Speaker">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel Name</label>
+          <input type="text" id="publisherChannelName" class="form-input" required
+            placeholder="e.g., main, spanish, french">
+        </div>
+        <div class="form-group">
+          <button type="submit" class="btn btn-secondary">Add Publisher</button>
+        </div>
+      </form>
+      <div id="newPublisherTokenDisplay" style="display: none; margin-top: 20px;">
+        <div class="success">
+          <strong>Publisher Added!</strong><br>
+          <strong>Join Token (save this!):</strong><br>
+          <code id="newPublisherToken" style="font-size: 16px; user-select: all;"></code><br>
+          <strong style="margin-top: 10px; display: block;">Publisher URL:</strong>
+          <code id="publisherJoinUrl" style="font-size: 12px; user-select: all; word-break: break-all;"></code><br>
+          <button onclick="copyPublisherToken()" class="btn btn-primary" style="margin-top: 10px;">Copy Token</button>
+          <button onclick="copyPublisherUrl()" class="btn btn-secondary" style="margin-top: 10px;">Copy URL</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="/js/common.js"></script>
-  <script>
-    // DOM Elements
-    const channelNameInput = document.getElementById('channelName');
-    const createChannelForm = document.getElementById('createChannelForm');
-    const channelsList = document.getElementById('channelsList');
-    const subscribersList = document.getElementById('subscribersList');
-    const publishersList = document.getElementById('publishersList');
-    
-    // State
-    let channels = [];
-    let subscribers = {};
-    let publishers = [];
-    
-    // Initialize
-    document.addEventListener('DOMContentLoaded', () => {
-      // Connect to WebSocket
-      socket = connectWebSocket();
+  <!-- Edit Publisher Modal -->
+  <div id="editPublisherModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('editPublisherModal')">&times;</span>
+      <div class="modal-header">Edit Publisher</div>
+      <form id="editPublisherForm" onsubmit="editPublisher(event)">
+        <input type="hidden" id="editPublisherRoomSlug">
+        <input type="hidden" id="editPublisherId">
+        <div class="form-group">
+          <label class="form-label">Publisher Name</label>
+          <input type="text" id="editPublisherName" class="form-input" required placeholder="e.g., Main Speaker">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Channel Name</label>
+          <input type="text" id="editPublisherChannelName" class="form-input" required
+            placeholder="e.g., main, spanish, french">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </form>
+    </div>
+  </div>
 
-      // Set up event listeners
-      createChannelForm.addEventListener('submit', createChannel);
+  <!-- Edit Room Modal -->
+  <div id="editRoomModal" class="modal">
+    <div class="modal-content">
+      <span class="close-modal" onclick="closeModal('editRoomModal')">&times;</span>
+      <div class="modal-header">Edit Room</div>
+      <form id="editRoomForm" onsubmit="editRoom(event)">
+        <input type="hidden" id="editRoomOriginalSlug">
+        <div class="form-group">
+          <label class="form-label">Room Name</label>
+          <input type="text" id="editRoomName" class="form-input" required placeholder="e.g., Annual Conference 2025">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Room Slug (URL-friendly identifier)</label>
+          <input type="text" id="editRoomSlug" class="form-input" required placeholder="e.g., annual-conference-2025"
+            pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens allowed">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/transcript-sync.js"></script>
+  <script src="/js/floating-chat-widget.js"></script>
+  <script>
+    const API_BASE = window.location.origin + '/api';
+    let adminWs = null;
+    let channelStats = {}; // roomSlug -> { channelName: { publishers, subscribers } }
+    let recordingStatus = {}; // roomSlug -> { isRecording, startedAt, trackCount, ... }
+    let recordingTimers = {}; // roomSlug -> intervalId for duration updates
+    let transcriptBindings = {}; // roomSlug -> { channelName, binding }
+    let transcriptChannels = {}; // roomSlug -> channelName[]
+    let transcriptSessions = {}; // roomSlug -> session[]
+    let transcriptSessionState = {}; // roomSlug -> { limit, offset, total, selectedSessionId }
+    let transcriptRestarting = {}; // roomSlug::channelName -> true while restart request is in flight
+    let adminChatMessages = {}; // key: roomSlug:publisherId -> messages[]
+    let adminChatWidgets = {}; // key: roomSlug:publisherId -> floating chat widget
+    let adminChatWindowOrder = []; // preserve window stacking order
+    let adminChatEnabled = false;
+
+    // ========== Reactive State Management ==========
+    // Lightweight state store with change notifications using Proxy
+    const StateStore = {
+      _data: {},
+      _listeners: {},
+
+      init(initialState) {
+        this._data = new Proxy(initialState, {
+          set: (target, property, value) => {
+            const oldValue = target[property];
+            target[property] = value;
+            this._notify(property, value, oldValue);
+            return true;
+          }
+        });
+        return this._data;
+      },
+
+      subscribe(path, callback) {
+        if (!this._listeners[path]) {
+          this._listeners[path] = [];
+        }
+        this._listeners[path].push(callback);
+        // Return unsubscribe function
+        return () => {
+          this._listeners[path] = this._listeners[path].filter(cb => cb !== callback);
+        };
+      },
+
+      _notify(path, newValue, oldValue) {
+        if (this._listeners[path]) {
+          this._listeners[path].forEach(callback => {
+            try {
+              callback(newValue, oldValue);
+            } catch (err) {
+              console.error(`[StateStore] Listener error for ${path}:`, err);
+            }
+          });
+        }
+      },
+
+      get(path) {
+        return this._data[path];
+      },
+
+      set(path, value) {
+        this._data[path] = value;
+      }
+    };
+
+    // Initialize reactive state (backward compatible - wraps existing globals)
+    const state = StateStore.init({
+      rooms: {},
+      channelStats: {},
+      recordingStatus: {},
+      publishers: {}
     });
 
-    function onConnected(socket) {
-      // Set up WebSocket message handler
-      socket.onmessage = handleSocketMessage;
+    // ========== Helper Utilities ==========
+    // Batch DOM updates to reduce reflows
+    function batchUpdate(updates) {
+      requestAnimationFrame(() => {
+        updates.forEach(fn => fn());
+      });
     }
-    
-    // Handle WebSocket messages
-    function handleSocketMessage(event) {
+
+    // Smart cache for API responses
+    const apiCache = {
+      _cache: new Map(),
+      _ttl: 5000, // 5 seconds
+
+      async get(key, fetcher) {
+        const cached = this._cache.get(key);
+        if (cached && Date.now() - cached.timestamp < this._ttl) {
+          return cached.data;
+        }
+
+        const data = await fetcher();
+        this._cache.set(key, { data, timestamp: Date.now() });
+        return data;
+      },
+
+      invalidate(key) {
+        this._cache.delete(key);
+      },
+
+      clear() {
+        this._cache.clear();
+      }
+    };
+
+    // Element creation with data attributes
+    function createElement(tag, attrs = {}, children = []) {
+      const el = document.createElement(tag);
+
+      Object.entries(attrs).forEach(([key, value]) => {
+        if (key === 'className') {
+          el.className = value;
+        } else if (key === 'dataset') {
+          Object.assign(el.dataset, value);
+        } else if (key.startsWith('on')) {
+          el.addEventListener(key.slice(2).toLowerCase(), value);
+        } else {
+          el.setAttribute(key, value);
+        }
+      });
+
+      children.forEach(child => {
+        if (typeof child === 'string') {
+          el.appendChild(document.createTextNode(child));
+        } else if (child) {
+          el.appendChild(child);
+        }
+      });
+
+      return el;
+    }
+
+    // Helper to update multiple element properties efficiently
+    function updateElementsFromTemplate(elements, template) {
+      Object.entries(template).forEach(([key, updates]) => {
+        const el = elements[key];
+        if (!el) return;
+
+        Object.entries(updates).forEach(([prop, value]) => {
+          if (prop === 'style') {
+            Object.assign(el.style, value);
+          } else {
+            el[prop] = value;
+          }
+        });
+      });
+    }
+
+    // Connect to admin WebSocket for real-time stats
+    function connectAdminWebSocket() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${location.host}/ws/admin`;
+
+      console.log('Connecting to admin WebSocket...');
+      adminWs = new WebSocket(wsUrl);
+
+      adminWs.onopen = () => {
+        console.log('Admin WebSocket connected');
+        updateConnectionStatus(true);
+      };
+
+      adminWs.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'channel-stats') {
+            // Update both old global and new state (backward compatible)
+            channelStats = msg.stats;
+            state.channelStats = { ...msg.stats };
+            updateAllChannelStatsUI();
+          } else if (msg.type === 'channel-update') {
+            // Update state store (triggers reactivity)
+            if (!state.channelStats[msg.roomSlug]) {
+              state.channelStats[msg.roomSlug] = {};
+            }
+            state.channelStats[msg.roomSlug][msg.channelName] = {
+              publishers: msg.publishers,
+              subscribers: msg.subscribers
+            };
+
+            // Also update old global for backward compatibility
+            if (!channelStats[msg.roomSlug]) {
+              channelStats[msg.roomSlug] = {};
+            }
+            channelStats[msg.roomSlug][msg.channelName] = {
+              publishers: msg.publishers,
+              subscribers: msg.subscribers
+            };
+
+            // Targeted updates only (no API calls)
+            updateChannelStatsForRoomTargeted(msg.roomSlug);
+          } else if (msg.type === 'recording-stats') {
+            // Initial recording status for all rooms
+            recordingStatus = msg.stats;
+            state.recordingStatus = { ...msg.stats };
+            updateAllRecordingUI();
+          } else if (msg.type === 'recording-status') {
+            // Recording status update for a specific room
+            recordingStatus[msg.roomSlug] = msg;
+            state.recordingStatus[msg.roomSlug] = { ...msg };
+            updateRecordingUI(msg.roomSlug);
+            handleTranscriptRecordingStatusUpdate(msg.roomSlug, msg)
+              .catch((error) => console.warn('Failed to refresh transcript session on recording update:', error));
+          } else if (msg.type === 'publisher-chat-message') {
+            addAdminChatMessage(msg.data);
+          } else if (msg.type === 'publisher-chat-history') {
+            const roomSlug = msg?.data?.roomSlug;
+            const publisherId = msg?.data?.publisherId;
+            if (!roomSlug || !publisherId) return;
+            const key = getAdminChatKey(roomSlug, publisherId);
+            adminChatMessages[key] = Array.isArray(msg?.data?.messages) ? msg.data.messages : [];
+            const widget = adminChatWidgets[key];
+            if (widget) {
+              widget.setMessages(adminChatMessages[key], 'No messages yet.');
+            }
+          } else if (msg.type === 'error') {
+            console.error('Admin WebSocket error:', msg.data.message);
+          }
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e);
+        }
+      };
+
+      adminWs.onclose = () => {
+        console.log('Admin WebSocket disconnected, reconnecting in 3s...');
+        updateConnectionStatus(false);
+        setTimeout(connectAdminWebSocket, 3000);
+      };
+
+      adminWs.onerror = (error) => {
+        console.error('Admin WebSocket error:', error);
+      };
+    }
+
+    function updateConnectionStatus(connected) {
+      const indicator = document.getElementById('wsStatusIndicator');
+      if (indicator) {
+        indicator.style.background = connected ? '#48bb78' : '#f56565';
+        indicator.title = connected ? 'Real-time updates connected' : 'Reconnecting...';
+      }
+    }
+
+    function updateAllChannelStatsUI() {
+      for (const roomSlug in channelStats) {
+        updateChannelStatsForRoom(roomSlug);
+      }
+    }
+
+    function updateChannelStatsForRoom(roomSlug) {
+      // Refresh the publishers and live status table (old way - full reload)
+      loadPublishersAndLiveStatus(roomSlug);
+    }
+
+    function updateChannelStatsForRoomTargeted(roomSlug) {
+      // Targeted update - no API calls, uses cached data
+      const publishers = state.publishers[roomSlug];
+      const stats = state.channelStats[roomSlug] || {};
+      const summaryEl = document.getElementById(`connection-summary-${roomSlug}`);
+
+      if (!publishers || publishers.length === 0) {
+        // No cached data, fall back to full load
+        loadPublishersAndLiveStatus(roomSlug);
+        return;
+      }
+
+      // Calculate connection summary
+      let activeCount = 0;
+      const totalCount = publishers.length;
+
+      for (const channelName in stats) {
+        if (stats[channelName].publishers > 0) {
+          activeCount++;
+        }
+      }
+
+      // Update summary
+      if (summaryEl) {
+        if (activeCount === 0) {
+          summaryEl.textContent = 'All offline';
+          summaryEl.className = 'connection-summary offline';
+        } else if (activeCount < totalCount) {
+          summaryEl.textContent = `🟢 ${activeCount} of ${totalCount} live`;
+          summaryEl.className = 'connection-summary partial';
+        } else {
+          summaryEl.textContent = `🟢 All ${activeCount} live`;
+          summaryEl.className = 'connection-summary';
+        }
+      }
+
+      // Update table stats (targeted - no rebuild)
+      updatePublisherTableStats(roomSlug, publishers, stats);
+    }
+
+    function showError(message) {
+      const el = document.getElementById('errorMessage');
+      el.textContent = message;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function showSuccess(message) {
+      const el = document.getElementById('successMessage');
+      el.textContent = message;
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+
+    function getAdminChatKey(roomSlug, publisherId) {
+      return `${roomSlug}:${publisherId}`;
+    }
+
+    function getAdminChatMetaFromKey(key) {
+      const idx = key.lastIndexOf(':');
+      if (idx < 0) return null;
+      return {
+        roomSlug: key.slice(0, idx),
+        publisherId: Number(key.slice(idx + 1))
+      };
+    }
+
+    function getAdminChatWindowPosition(key) {
+      const index = adminChatWindowOrder.indexOf(key);
+      const safeIndex = index >= 0 ? index : adminChatWindowOrder.length;
+      const panelWidth = 360;
+      const panelGap = 20;
+      const rightBase = 20;
+      const panelStepX = panelWidth + panelGap;
+      const panelStepY = 360;
+      const fabStepY = 56;
+      const viewportWidth = window.innerWidth || 1440;
+      const usableWidth = Math.max(320, viewportWidth - (rightBase * 2));
+      const columns = Math.max(1, Math.floor((usableWidth + panelGap) / panelStepX));
+      const col = safeIndex % columns;
+      const row = Math.floor(safeIndex / columns);
+      return {
+        right: rightBase + (col * panelStepX),
+        panelBottom: 74 + (row * panelStepY),
+        fabBottom: 20 + (row * fabStepY)
+      };
+    }
+
+    function relayoutAdminChatWindows() {
+      for (const key of adminChatWindowOrder) {
+        const widget = adminChatWidgets[key];
+        if (!widget) continue;
+        widget.setPosition(getAdminChatWindowPosition(key));
+      }
+    }
+
+    function ensureAdminChatWidget(roomSlug, publisherId, publisherName) {
+      const key = getAdminChatKey(roomSlug, publisherId);
+      if (!adminChatWindowOrder.includes(key)) {
+        adminChatWindowOrder.push(key);
+      }
+      if (adminChatWidgets[key]) {
+        return adminChatWidgets[key];
+      }
+
+      const widget = window.SoundcastFloatingChat.create({
+        buttonLabel: publisherName || `Chat ${publisherId}`,
+        title: `Chat with ${publisherName || ('Publisher ' + publisherId)} (${roomSlug})`,
+        inputPlaceholder: 'Send message to publisher...',
+        emptyMessage: 'No messages yet.',
+        position: getAdminChatWindowPosition(key),
+        onSend: (text) => sendAdminChatForKey(key, text),
+        renderMessage: (msg) => {
+          const sender = msg.sender === 'admin' ? 'You' : (msg.publisherName || 'Publisher');
+          return `<div class="chat-row"><strong>${escapeHtml(sender)}</strong> <small>${formatChatTime(msg.timestamp)}</small><br>${escapeHtml(msg.text)}</div>`;
+        }
+      });
+
+      widget.setEnabled(adminChatEnabled);
+      widget.setMessages(adminChatMessages[key] || [], 'No messages yet.');
+      adminChatWidgets[key] = widget;
+      relayoutAdminChatWindows();
+      return widget;
+    }
+
+    function formatChatTime(timestamp) {
       try {
-        const message = JSON.parse(event.data);
-        const { action, data } = message;
-        
-        console.log('Received action:', action, data);
-        
-        switch (action) {
-          case 'rtpCapabilities':
-            rtpCapabilities = data;
-            // Request channel list
-            sendMessage('get-channels');
-            // Request subscribers and publishers list
-            sendMessage('admin-get-channels-subscribers');
-            sendMessage('admin-get-publishers');
-            break;
-            
-          case 'channel-list':
-            console.log('channel-list', data);
-            updateChannelsList(data);
-            break;
-            
-          case 'channels-subscribers':
-            updateSubscribersList(data);
-            break;
+        return new Date(timestamp).toLocaleTimeString();
+      } catch {
+        return '';
+      }
+    }
 
-          case 'publishers-list':
-            updatePublishersList(data);
-            break;
-            
-          case 'channel-created':
-            updateStatus(`Channel ${data.channelId} created successfully`, 'success');
-            sendMessage('get-channels');
-            break;
-            
-          case 'channel-deleted':
-            updateStatus(`Channel ${data.channelId} deleted successfully`, 'success');
-            sendMessage('get-channels');
-            break;
-            
-          case 'subscriber-removed':
-            updateStatus(`Subscriber removed from channel ${data.channelId}`, 'success');
-            sendMessage('admin-get-channels-subscribers');
-            break;
+    function addAdminChatMessage(message) {
+      if (!message?.roomSlug || !message?.publisherId) return;
+      const key = getAdminChatKey(message.roomSlug, message.publisherId);
+      if (!adminChatMessages[key]) {
+        adminChatMessages[key] = [];
+      }
+      adminChatMessages[key].push(message);
+      if (adminChatMessages[key].length > 100) {
+        adminChatMessages[key].splice(0, adminChatMessages[key].length - 100);
+      }
+      const widget = ensureAdminChatWidget(message.roomSlug, message.publisherId, message.publisherName);
+      const wasOpen = widget.isOpen();
+      widget.setMessages(adminChatMessages[key], 'No messages yet.');
+      if (!wasOpen) {
+        widget.incrementUnread(1);
+      }
+    }
 
-          case 'publisher-channel-changed':
-            updateStatus(`Publisher moved to ${data.newChannelId}`, 'success');
-            sendMessage('admin-get-publishers');
-            sendMessage('admin-get-channels-subscribers');
-            break;
-            
-          case 'error':
-            updateStatus(`Error: ${data.message}`, 'error');
-            break;
+    function openAdminChat(roomSlug, publisherId, publisherName) {
+      const key = getAdminChatKey(roomSlug, publisherId);
+      const widget = ensureAdminChatWidget(roomSlug, publisherId, publisherName);
+      widget.setTitle(`Chat with ${publisherName} (${roomSlug})`);
+      widget.setMessages(adminChatMessages[key] || [], 'No messages yet.');
+      widget.open();
+      if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+        adminWs.send(JSON.stringify({
+          type: 'admin-chat-history-request',
+          data: { roomSlug, publisherId }
+        }));
+      }
+    }
+
+    async function sendAdminChatForKey(key, text) {
+      const chatMeta = getAdminChatMetaFromKey(key);
+      if (!chatMeta) return false;
+      if (!adminWs || adminWs.readyState !== WebSocket.OPEN) {
+        showError('Chat connection is not ready yet');
+        return false;
+      }
+      if (!text) return false;
+      adminWs.send(JSON.stringify({
+        type: 'admin-chat-send',
+        data: {
+          roomSlug: chatMeta.roomSlug,
+          publisherId: chatMeta.publisherId,
+          text
+        }
+      }));
+      return true;
+    }
+
+    function showAuthenticatedView() {
+      adminChatEnabled = true;
+      for (const widget of Object.values(adminChatWidgets)) {
+        widget.setEnabled(true);
+      }
+
+      // Connect WebSocket for real-time stats
+      connectAdminWebSocket();
+    }
+
+    async function loadRooms(event) {
+      if (event) event.preventDefault();
+
+      document.getElementById('roomsList').innerHTML = '<div class="loading">Loading rooms...</div>';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms`);
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to load rooms');
+        }
+
+        const data = await response.json();
+
+        // Success - show authenticated view
+        showAuthenticatedView();
+        displayRooms(data.rooms);
+      } catch (error) {
+        showError(error.message);
+        document.getElementById('roomsList').innerHTML = '<div class="loading">Failed to load rooms</div>';
+      }
+    }
+
+    function displayRooms(rooms) {
+      const container = document.getElementById('roomsList');
+
+      // Cache rooms data for editing
+      roomsData = rooms;
+
+      // Reset transcript bindings when room list is re-rendered.
+      for (const roomSlug of Object.keys(transcriptBindings)) {
+        destroyTranscriptBinding(roomSlug);
+      }
+      transcriptChannels = {};
+      transcriptSessions = {};
+      transcriptSessionState = {};
+
+      if (rooms.length === 0) {
+        container.innerHTML = '<div class="loading">No rooms yet. Create one to get started!</div>';
+        return;
+      }
+
+      const baseUrl = window.location.origin;
+      container.innerHTML = rooms.map(room => `
+        <div class="room-card">
+          <div class="room-header" style="flex-wrap: wrap; gap: 10px; align-items: center;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+                <a href="${baseUrl}/room/${room.slug}/listen" target="_blank" style="text-decoration: none;">
+                  <div class="room-name" style="color: #667eea; cursor: pointer;">${escapeHtml(room.name)}</div>
+                </a>
+                <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/room/${room.slug}/listen')" style="padding: 4px 10px; font-size: 12px;">Copy Room Link</button>
+              </div>
+              <div class="room-slug">${escapeHtml(room.slug)}</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #fff5f5; border-radius: 6px; border: 1px solid #fed7d7;">
+                <span style="font-size: 13px; font-weight: 600; color: #742a2a;">⏺️</span>
+                <span id="recording-indicator-${room.slug}" class="badge recording" style="display: none;">REC</span>
+                <span id="recording-duration-${room.slug}" style="font-family: monospace; font-size: 13px; display: none;">00:00:00</span>
+                <span id="recording-tracks-${room.slug}" style="font-size: 11px; color: #718096; display: none;"></span>
+                <button id="record-btn-${room.slug}" onclick="toggleRecording('${room.slug}')" class="btn btn-danger btn-small" data-room-id="${room.id}" style="padding: 4px 12px; font-size: 12px;">
+                  Record
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 1. PUBLISHERS & LIVE STATUS (Combined) -->
+          <div style="background: #f7fafc; padding: 15px; border-radius: 6px; border-left: 3px solid #667eea; margin-bottom: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <div>
+                <span style="font-weight: bold; color: #2d3748; font-size: 14px;">🎤 Publishers & Live Status</span>
+                <span id="connection-summary-${room.slug}" class="connection-summary" style="margin-left: 10px;">Loading...</span>
+              </div>
+              <button class="btn btn-primary btn-small" onclick="copyAllPublisherUrls('${room.slug}')">📋 Copy All URLs</button>
+            </div>
+            <div id="publishers-live-${room.slug}">
+              <div style="padding: 10px; color: #718096; font-size: 13px; text-align: center;">Loading publishers...</div>
+            </div>
+          </div>
+
+          <!-- 2. SETTINGS (Collapsed) -->
+          <div class="settings-row">
+            <button onclick="showAddPublisherModal('${room.slug}')" class="btn btn-secondary btn-small">+ Add Publisher</button>
+            <button onclick="toggleRoomTranscripts('${room.slug}')" class="btn btn-primary btn-small">Transcripts</button>
+            <button onclick="showEditRoomModal('${room.slug}')" class="btn-link">⚙️ Room Settings</button>
+            <button onclick="deleteRoom('${room.slug}')" class="btn-link" style="color: #f56565;">🗑️ Delete Room</button>
+          </div>
+
+          <div id="transcript-panel-${room.slug}" class="transcript-panel hidden">
+            <div id="transcript-status-${room.slug}" class="transcript-status">Transcription panel hidden</div>
+            <div class="transcript-session-row">
+              <select id="transcript-session-select-${room.slug}" class="transcript-session-select" onchange="onTranscriptSessionChange('${room.slug}', this.value)">
+                <option value="">No sessions</option>
+              </select>
+              <div class="transcript-session-pager">
+                <button id="transcript-stop-${room.slug}" class="btn btn-secondary btn-small" onclick="stopSelectedTranscriptSession('${room.slug}')">Stop Session</button>
+                <button id="transcript-prev-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', -1)">Prev</button>
+                <button id="transcript-next-${room.slug}" class="btn btn-secondary btn-small" onclick="changeTranscriptSessionPage('${room.slug}', 1)">Next</button>
+                <span id="transcript-session-meta-${room.slug}" class="transcript-session-meta">0 sessions</span>
+              </div>
+            </div>
+            <div id="transcript-tabs-${room.slug}" class="transcript-tabs"></div>
+            <textarea id="transcript-editor-${room.slug}" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
+          </div>
+
+          <!-- Hidden publisher management panel -->
+          <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
+        </div>
+      `).join('');
+
+      // Load publisher and live status for all rooms
+      rooms.forEach(room => loadPublishersAndLiveStatus(room.slug));
+
+      // Update live stats for all rooms
+      updateAllChannelStatsUI();
+
+    }
+
+    // Load and display publishers with live status
+    async function loadPublishersAndLiveStatus(slug) {
+      const container = document.getElementById(`publishers-live-${slug}`);
+      const summaryEl = document.getElementById(`connection-summary-${slug}`);
+      if (!container) return;
+
+      try {
+        // Fetch with caching
+        const data = await apiCache.get(`publishers-${slug}`, async () => {
+          const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+            headers: {  }
+          });
+          if (!response.ok) throw new Error('Failed to load publishers');
+          return response.json();
+        });
+
+        // Keep publisher channel cache current for transcript tab resolution.
+        state.publishers[slug] = data.publishers;
+
+        const stats = state.channelStats[slug] || channelStats[slug] || {};
+
+        if (data.publishers.length === 0) {
+          container.innerHTML = '<div style="padding: 10px; color: #718096; font-size: 13px; text-align: center;">No publishers configured yet</div>';
+          if (summaryEl) {
+            summaryEl.textContent = '';
+            summaryEl.className = 'connection-summary';
+          }
+          return;
+        }
+
+        // Calculate connection summary
+        let activeCount = 0;
+        const totalCount = data.publishers.length;
+
+        for (const channelName in stats) {
+          if (stats[channelName].publishers > 0) {
+            activeCount++;
+          }
+        }
+
+        // Update summary
+        if (summaryEl) {
+          if (activeCount === 0) {
+            summaryEl.textContent = 'All offline';
+            summaryEl.className = 'connection-summary offline';
+          } else if (activeCount < totalCount) {
+            summaryEl.textContent = `🟢 ${activeCount} of ${totalCount} live`;
+            summaryEl.className = 'connection-summary partial';
+          } else {
+            summaryEl.textContent = `🟢 All ${activeCount} live`;
+            summaryEl.className = 'connection-summary';
+          }
+        }
+
+        // Check if table needs to be built or just updated
+        const existingTable = container.querySelector('table');
+        if (!existingTable || !container.dataset.initialized) {
+          // First render - build full table
+          buildPublisherTable(slug, data.publishers);
+          container.dataset.initialized = 'true';
+        } else {
+          // Subsequent renders - only update status cells
+          updatePublisherTableStats(slug, data.publishers, stats);
         }
       } catch (error) {
-        console.error('Error parsing message:', error);
+        container.innerHTML = '<div style="padding: 10px; color: #f56565; font-size: 13px; text-align: center;">Failed to load publishers</div>';
       }
     }
-    
-    // Create a new channel
-    function createChannel(e) {
-      e.preventDefault();
-      
-      const channelId = channelNameInput.value.trim();
-      
-      if (!channelId) {
-        updateStatus('Please enter a channel name', 'error');
-        return;
-      }
-      
-      sendMessage('admin-create-channel', { channelId });
-      channelNameInput.value = '';
-    }
-    
-    // Delete a channel
-    function deleteChannel(channelId) {
-      if (confirm(`Are you sure you want to delete channel "${channelId}"?`)) {
-        sendMessage('admin-delete-channel', { channelId });
-      }
-    }
-    
-    // Remove a subscriber
-    function removeSubscriber(channelId, consumerId) {
-      if (confirm('Are you sure you want to remove this subscriber?')) {
-        sendMessage('admin-remove-subscriber', { channelId, consumerId });
-      }
-    }
-    
-    // Update channels list
-    function updateChannelsList(channelIds) {
-      channels = channelIds;
 
-      if (channelIds.length === 0) {
-        channelsList.innerHTML = '<p>No active channels</p>';
-        // still refresh publisher options in case all channels were removed
-        updatePublishersList(publishers);
-        return;
-      }
-      
-      let html = '<table>';
-      html += '<tr><th>Channel Name</th><th>Actions</th></tr>';
-      
-      channelIds.forEach(channelId => {
-        html += `
-          <tr>
-            <td>${channelId}</td>
-            <td>
-              <button class="danger" onclick="deleteChannel('${channelId}')">Delete</button>
-            </td>
-          </tr>
-        `;
+    // Build initial publisher table structure (called once)
+    function buildPublisherTable(slug, publishers) {
+      const container = document.getElementById(`publishers-live-${slug}`);
+      if (!container) return;
+
+      const baseUrl = getSecureBaseUrl();
+      const stats = state.channelStats[slug] || channelStats[slug] || {};
+
+      container.innerHTML = `
+        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 2px solid #e2e8f0;">
+              <th style="text-align: left; padding: 8px; font-weight: bold;">Channel</th>
+              <th style="text-align: left; padding: 8px; font-weight: bold;">Publisher</th>
+              <th style="text-align: center; padding: 8px; font-weight: bold;">Status</th>
+              <th style="text-align: center; padding: 8px; font-weight: bold;">Listeners</th>
+              <th style="text-align: right; padding: 8px; font-weight: bold;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${publishers.map(pub => {
+        const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
+        const isLive = channelStat.publishers > 0;
+        const statusIcon = isLive ? '🟢' : '🔴';
+        const statusText = isLive ? 'Live' : 'Offline';
+
+        return `
+                <tr data-room="${escapeAttr(slug)}" data-channel="${escapeAttr(pub.channel_name)}" data-publisher-id="${pub.id}" style="border-bottom: 1px solid #e2e8f0;">
+                  <td style="padding: 8px; font-weight: bold;">${escapeHtml(pub.channel_name)}</td>
+                  <td style="padding: 8px;">${escapeHtml(pub.name)}</td>
+                  <td style="text-align: center; padding: 8px;" data-status-cell>
+                    <span class="status-indicator ${isLive ? 'online' : 'offline'}">${statusIcon} ${statusText}</span>
+                  </td>
+                  <td style="text-align: center; padding: 8px;" data-listener-cell>
+                    👥 ${channelStat.subscribers}
+                  </td>
+                  <td style="text-align: right; padding: 8px;">
+                    <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(baseUrl + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy URL</button>
+                    <button class="btn btn-secondary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="openAdminChat('${slug}', ${pub.id}, '${escapeAttr(pub.name)}')">Chat</button>
+                    <button class="btn btn-primary btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}')">Edit</button>
+                    <button class="btn btn-danger btn-small" style="margin-left: 5px; padding: 4px 8px;" onclick="deletePublisher('${slug}', ${pub.id})">Delete</button>
+                  </td>
+                </tr>
+              `;
+      }).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    // Update publisher table stats (targeted updates only)
+    function updatePublisherTableStats(slug, publishers, stats) {
+      publishers.forEach(pub => {
+        const row = document.querySelector(`[data-room="${slug}"][data-publisher-id="${pub.id}"]`);
+        if (!row) return;
+
+        const channelStat = stats[pub.channel_name] || { publishers: 0, subscribers: 0 };
+        const isLive = channelStat.publishers > 0;
+
+        // Update status indicator
+        const statusCell = row.querySelector('[data-status-cell]');
+        if (statusCell) {
+          const statusIndicator = statusCell.querySelector('.status-indicator');
+          if (statusIndicator) {
+            statusIndicator.className = isLive ? 'status-indicator online' : 'status-indicator offline';
+            statusIndicator.innerHTML = `${isLive ? '🟢' : '🔴'} ${isLive ? 'Live' : 'Offline'}`;
+          }
+        }
+
+        // Update listener count
+        const listenerCell = row.querySelector('[data-listener-cell]');
+        if (listenerCell) {
+          listenerCell.textContent = `👥 ${channelStat.subscribers}`;
+        }
       });
-      
-      html += '</table>';
-      channelsList.innerHTML = html;
-
-      // Refresh publisher dropdowns to include new channel list
-      updatePublishersList(publishers);
     }
-    
-    // Update subscribers list
-    function updateSubscribersList(data) {
-      subscribers = data;
-      
-      let hasSubscribers = false;
-      let html = '';
-      
-      for (const channelId in data) {
-        const channelSubscribers = data[channelId];
-        
-        if (channelSubscribers.length > 0) {
-          hasSubscribers = true;
-          
-          html += `<h3>Channel: ${channelId}</h3>`;
-          html += '<table>';
-          html += '<tr><th>Subscriber ID</th><th>Name</th><th>Actions</th></tr>';
-          
-          channelSubscribers.forEach(subscriber => {
-            html += `
-              <tr>
-                <td>${subscriber.id}</td>
-                <td>${subscriber.name}</td>
-                <td>
-                  <button class="danger" onclick="removeSubscriber('${channelId}', '${subscriber.id}')">Remove</button>
-                </td>
-              </tr>
-            `;
+
+    // Copy all publisher URLs for a room
+    async function copyAllPublisherUrls(slug) {
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: {  }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          showError('No publishers to copy');
+          return;
+        }
+
+        const baseUrl = getSecureBaseUrl();
+        const room = roomsData.find(r => r.slug === slug);
+        const roomName = room ? room.name : slug;
+
+        const formatted = `Publisher Links for ${roomName}:
+
+${data.publishers.map(p =>
+          `${p.channel_name} - ${p.name}:
+${baseUrl}/room/${slug}/publish?token=${p.join_token}`
+        ).join('\n\n')}`;
+
+        copyToClipboard(formatted);
+      } catch (error) {
+        showError('Failed to copy publisher URLs');
+      }
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function escapeAttr(text) {
+      if (!text) return '';
+      return text.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    function copyToClipboard(text) {
+      // Fallback function using execCommand
+      function fallbackCopy() {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showSuccess('Copied to clipboard!');
+        } catch (e) {
+          showError('Failed to copy to clipboard');
+        }
+        document.body.removeChild(textArea);
+      }
+
+      // Check if clipboard API is available (requires secure context)
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showSuccess('Copied to clipboard!');
+        }).catch(fallbackCopy);
+      } else {
+        fallbackCopy();
+      }
+    }
+
+    function copyPublisherToken() {
+      const token = document.getElementById('newPublisherToken').textContent;
+      copyToClipboard(token);
+    }
+
+    function copyPublisherUrl() {
+      const url = document.getElementById('publisherJoinUrl').textContent;
+      copyToClipboard(url);
+    }
+
+    function showAddPublisherModal(slug) {
+      document.getElementById('publisherRoomSlug').value = slug;
+      document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      document.getElementById('addPublisherModal').style.display = 'block';
+    }
+
+    async function addPublisher(event) {
+      event.preventDefault();
+
+      const slug = document.getElementById('publisherRoomSlug').value;
+      const name = document.getElementById('publisherName').value;
+      const channel_name = document.getElementById('publisherChannelName').value;
+
+      try {
+        const body = { name, channel_name };
+
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          method: 'POST',
+          headers: {
+            ,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to add publisher');
+        }
+
+        const data = await response.json();
+        document.getElementById('newPublisherToken').textContent = data.join_token;
+        document.getElementById('publisherJoinUrl').textContent = `${getSecureBaseUrl()}/room/${slug}/publish?token=${data.join_token}`;
+        document.getElementById('newPublisherTokenDisplay').style.display = 'block';
+        document.getElementById('addPublisherForm').reset();
+        showSuccess('Publisher added successfully!');
+
+        // Refresh the combined publishers and live status table
+        loadPublishersAndLiveStatus(slug);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function showEditPublisherModal(slug, publisherId, name, channelName) {
+      document.getElementById('editPublisherRoomSlug').value = slug;
+      document.getElementById('editPublisherId').value = publisherId;
+      document.getElementById('editPublisherName').value = name;
+      document.getElementById('editPublisherChannelName').value = channelName;
+      document.getElementById('editPublisherModal').style.display = 'block';
+    }
+
+    async function editPublisher(event) {
+      event.preventDefault();
+
+      const slug = document.getElementById('editPublisherRoomSlug').value;
+      const publisherId = document.getElementById('editPublisherId').value;
+      const name = document.getElementById('editPublisherName').value;
+      const channel_name = document.getElementById('editPublisherChannelName').value;
+
+      try {
+        const body = { name, channel_name };
+
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+          method: 'PUT',
+          headers: {
+            ,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to update publisher');
+        }
+
+        showSuccess('Publisher updated successfully!');
+        closeModal('editPublisherModal');
+
+        // Refresh the combined publishers and live status table
+        loadPublishersAndLiveStatus(slug);
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function showPublishers(slug) {
+      const container = document.getElementById(`publishers-${slug}`);
+
+      if (container.style.display === 'block') {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.innerHTML = '<div style="padding: 10px;">Loading...</div>';
+      container.style.display = 'block';
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+          headers: {
+            
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to load publishers');
+        }
+
+        const data = await response.json();
+
+        if (data.publishers.length === 0) {
+          container.innerHTML = '<div style="padding: 10px; color: #718096;">No publishers added yet</div>';
+          return;
+        }
+
+        container.innerHTML = data.publishers.map(pub => `
+          <div class="interpreter-item" style="flex-direction: column; align-items: stretch;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+              <div class="interpreter-info">
+                <div class="interpreter-name">${escapeHtml(pub.name)}</div>
+                <div class="interpreter-lang">Channel: ${escapeHtml(pub.channel_name)}</div>
+              </div>
+              <div style="display: flex; gap: 5px;">
+                <button onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}')" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Edit</button>
+                <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
+              </div>
+            </div>
+            <div class="url-value" style="font-size: 11px;">
+              <span style="word-break: break-all;">${getSecureBaseUrl()}/room/${slug}/publish?token=${escapeHtml(pub.join_token)}</span>
+              <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(getSecureBaseUrl() + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (error) {
+        container.innerHTML = '<div style="padding: 10px; color: #f56565;">Failed to load publishers</div>';
+      }
+    }
+
+    async function deletePublisher(slug, publisherId) {
+      if (!confirm('Are you sure you want to delete this publisher?')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+          method: 'DELETE',
+          headers: {
+            
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete publisher');
+        }
+
+        showSuccess('Publisher deleted successfully!');
+        loadPublishersAndLiveStatus(slug); // Refresh the combined table
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function deleteRoom(slug) {
+      if (!confirm(`Are you sure you want to delete this room? This will also delete all publishers in this room.`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${slug}`, {
+          method: 'DELETE',
+          headers: {
+            
+          }
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to delete room');
+        }
+
+        showSuccess('Room deleted successfully!');
+        loadRooms(); // Refresh the list
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    function getSecureBaseUrl() {
+      // Always return HTTPS URL for publisher links (required for microphone access)
+      const hostname = window.location.hostname;
+      const currentPort = window.location.port;
+
+      // If already on HTTPS, use current host
+      if (window.location.protocol === 'https:') {
+        return window.location.origin;
+      }
+
+      // Port mapping: HTTP -> HTTPS
+      const portMap = {
+        '3000': '3001',
+        '80': '443',
+        '': '443'
+      };
+
+      const securePort = portMap[currentPort] || '443';
+      const portSuffix = securePort === '443' ? '' : `:${securePort}`;
+
+      return `https://${hostname}${portSuffix}`;
+    }
+
+    function showCreateRoomModal() {
+      document.getElementById('createRoomModal').style.display = 'block';
+    }
+
+    function closeModal(modalId) {
+      document.getElementById(modalId).style.display = 'none';
+      if (modalId === 'createRoomModal') {
+        document.getElementById('createRoomForm').reset();
+      }
+      if (modalId === 'addPublisherModal') {
+        document.getElementById('addPublisherForm').reset();
+        document.getElementById('newPublisherTokenDisplay').style.display = 'none';
+      }
+      if (modalId === 'editPublisherModal') {
+        document.getElementById('editPublisherForm').reset();
+      }
+      if (modalId === 'editRoomModal') {
+        document.getElementById('editRoomForm').reset();
+      }
+    }
+
+    // Store rooms data for editing
+    let roomsData = [];
+
+    async function showEditRoomModal(slug) {
+      // Find the room in our cached data or fetch it
+      let room = roomsData.find(r => r.slug === slug);
+
+      if (!room) {
+        // Fetch room data
+        try {
+          const response = await fetch(`${API_BASE}/rooms`, {
+            headers: {  }
           });
-          
-          html += '</table>';
+          const data = await response.json();
+          room = data.rooms.find(r => r.slug === slug);
+        } catch (error) {
+          showError('Failed to load room data');
+          return;
         }
       }
-      
-      if (!hasSubscribers) {
-        html = '<p>No subscribers</p>';
-      }
-      
-      subscribersList.innerHTML = html;
-    }
 
-    // Update publishers list
-    function updatePublishersList(data) {
-      publishers = data;
-
-      if (!data || data.length === 0) {
-        publishersList.innerHTML = '<p>No publishers</p>';
+      if (!room) {
+        showError('Room not found');
         return;
       }
 
-      let html = '<table>';
-      html += '<tr><th>Publisher ID</th><th>Channel</th><th>Action</th></tr>';
+      // Populate form
+      document.getElementById('editRoomOriginalSlug').value = room.slug;
+      document.getElementById('editRoomName').value = room.name;
+      document.getElementById('editRoomSlug').value = room.slug;
 
-      data.forEach(pub => {
-        const options = channels
-          .map(c => `<option value="${c}" ${c === pub.channelId ? 'selected' : ''}>${c}</option>`)
+      document.getElementById('editRoomModal').style.display = 'block';
+    }
+
+    async function editRoom(event) {
+      event.preventDefault();
+
+      const originalSlug = document.getElementById('editRoomOriginalSlug').value;
+      const name = document.getElementById('editRoomName').value;
+      const slug = document.getElementById('editRoomSlug').value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
+          method: 'PUT',
+          headers: {
+            ,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name,
+            slug
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to update room');
+        }
+
+        showSuccess('Room updated successfully!');
+        closeModal('editRoomModal');
+        loadRooms();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    async function createRoom(event) {
+      event.preventDefault();
+
+      const name = document.getElementById('roomName').value;
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms`, {
+          method: 'POST',
+          headers: {
+            ,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || 'Failed to create room');
+        }
+
+        showSuccess('Room created successfully!');
+        closeModal('createRoomModal');
+        loadRooms();
+      } catch (error) {
+        showError(error.message);
+      }
+    }
+
+    // ============ Recording Functions ============
+
+    // Format duration in HH:MM:SS
+    function formatDuration(startedAt) {
+      const start = new Date(startedAt);
+      const now = new Date();
+      const diffMs = now - start;
+      const hours = Math.floor(diffMs / 3600000);
+      const minutes = Math.floor((diffMs % 3600000) / 60000);
+      const seconds = Math.floor((diffMs % 60000) / 1000);
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // Toggle recording for a room
+    async function toggleRecording(roomSlug) {
+      const status = recordingStatus[roomSlug];
+      const isRecording = status?.isRecording;
+      const endpoint = isRecording ? 'stop' : 'start';
+      let eventName = status?.eventName || '';
+
+      const btn = document.getElementById(`record-btn-${roomSlug}`);
+      btn.disabled = true;
+      btn.textContent = isRecording ? 'Stopping...' : 'Starting...';
+
+      try {
+        const requestInit = {
+          method: 'POST',
+          headers: {
+            
+          }
+        };
+
+        if (!isRecording) {
+          eventName = prompt('Event name (required):', eventName || '');
+          if (eventName === null) {
+            btn.disabled = false;
+            btn.textContent = 'Record';
+            return;
+          }
+          eventName = eventName.trim();
+          if (!eventName) {
+            throw new Error('Event name is required');
+          }
+
+          requestInit.headers['Content-Type'] = 'application/json';
+          requestInit.body = JSON.stringify({
+            event_name: eventName,
+            enable_transcription: true
+          });
+        }
+
+        let response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/${endpoint}`, requestInit);
+
+        if (!isRecording && response.status === 503) {
+          const errorPayload = await response.json().catch(() => ({}));
+          const reason = errorPayload.message || 'Transcription is unavailable';
+          const continueRecordingOnly = confirm(`${reason}\n\nStart recording without transcription?`);
+          if (continueRecordingOnly) {
+            response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/start`, {
+              method: 'POST',
+              headers: {
+                ,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                event_name: eventName,
+                enable_transcription: false
+              })
+            });
+          } else {
+            throw new Error(reason);
+          }
+        }
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.message || `Failed to ${endpoint} recording`);
+        }
+
+        const result = await response.json();
+        showSuccess(result.message);
+
+        // Update local status (WebSocket will also send update)
+        recordingStatus[roomSlug] = {
+          isRecording: !isRecording,
+          ...result
+        };
+        updateRecordingUI(roomSlug);
+      } catch (error) {
+        showError(error.message);
+        btn.disabled = false;
+        btn.textContent = isRecording ? 'Stop' : 'Record';
+      }
+    }
+
+    // Update recording UI for a specific room
+    function updateRecordingUI(roomSlug) {
+      const status = recordingStatus[roomSlug];
+      const btn = document.getElementById(`record-btn-${roomSlug}`);
+      const indicator = document.getElementById(`recording-indicator-${roomSlug}`);
+      const duration = document.getElementById(`recording-duration-${roomSlug}`);
+      const tracks = document.getElementById(`recording-tracks-${roomSlug}`);
+
+      if (!btn) return;
+
+      btn.disabled = false;
+
+      if (status?.isRecording) {
+        btn.textContent = 'Stop';
+        btn.classList.add('recording-active');
+        indicator.style.display = 'inline';
+        duration.style.display = 'inline';
+        tracks.style.display = 'inline';
+        const eventLabel = status.eventName ? ` | ${status.eventName}` : '';
+        const transcriptionLabel = status.transcriptionActive ? ' | transcription on' : '';
+        tracks.textContent = `${status.trackCount || 0} track${status.trackCount !== 1 ? 's' : ''}${eventLabel}${transcriptionLabel}`;
+
+        // Start duration timer
+        if (recordingTimers[roomSlug]) {
+          clearInterval(recordingTimers[roomSlug]);
+        }
+        recordingTimers[roomSlug] = setInterval(() => {
+          if (status.startedAt) {
+            duration.textContent = formatDuration(status.startedAt);
+          }
+        }, 1000);
+        // Update immediately
+        if (status.startedAt) {
+          duration.textContent = formatDuration(status.startedAt);
+        }
+      } else {
+        btn.textContent = 'Record';
+        btn.classList.remove('recording-active');
+        indicator.style.display = 'none';
+        duration.style.display = 'none';
+        tracks.style.display = 'none';
+
+        // Stop duration timer
+        if (recordingTimers[roomSlug]) {
+          clearInterval(recordingTimers[roomSlug]);
+          delete recordingTimers[roomSlug];
+        }
+      }
+    }
+
+    // Update recording UI for all rooms
+    function updateAllRecordingUI() {
+      for (const roomSlug in recordingStatus) {
+        updateRecordingUI(roomSlug);
+      }
+    }
+
+    async function waitForTranscriptLib(timeoutMs = 10000) {
+      const start = Date.now();
+      while (!window.SoundcastTranscript) {
+        if (Date.now() - start > timeoutMs) {
+          throw new Error('Transcript library failed to load');
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    function setTranscriptStatus(roomSlug, message) {
+      const statusEl = document.getElementById(`transcript-status-${roomSlug}`);
+      if (statusEl) statusEl.textContent = message;
+    }
+
+    function getTranscriptSessionState(roomSlug) {
+      if (!transcriptSessionState[roomSlug]) {
+        transcriptSessionState[roomSlug] = {
+          limit: 20,
+          offset: 0,
+          total: 0,
+          selectedSessionId: null,
+          selectedSession: null,
+          followActive: true
+        };
+      }
+      return transcriptSessionState[roomSlug];
+    }
+
+    function formatSessionTimestamp(value) {
+      if (!value) return 'n/a';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString();
+    }
+
+    function formatSessionOptionLabel(session) {
+      const eventLabel = session.eventName || 'Untitled';
+      const started = formatSessionTimestamp(session.startedAt);
+      return `${eventLabel} | #${session.id} | ${session.status} | ${started}`;
+    }
+
+    function renderTranscriptSessionControls(roomSlug) {
+      const state = getTranscriptSessionState(roomSlug);
+      const sessions = transcriptSessions[roomSlug] || [];
+      const select = document.getElementById(`transcript-session-select-${roomSlug}`);
+      const prevBtn = document.getElementById(`transcript-prev-${roomSlug}`);
+      const nextBtn = document.getElementById(`transcript-next-${roomSlug}`);
+      const stopBtn = document.getElementById(`transcript-stop-${roomSlug}`);
+      const meta = document.getElementById(`transcript-session-meta-${roomSlug}`);
+      if (!select || !prevBtn || !nextBtn || !meta) return;
+
+      if (sessions.length === 0) {
+        select.innerHTML = '<option value="">No sessions</option>';
+        select.value = '';
+      } else {
+        select.innerHTML = sessions
+          .map((session) => `<option value="${session.id}">${escapeHtml(formatSessionOptionLabel(session))}</option>`)
           .join('');
-        html += `
-          <tr>
-            <td>${pub.id}</td>
-            <td>
-              <select id="channelSelect_${pub.id}">${options}</select>
-            </td>
-            <td>
-              <button onclick="changePublisherChannel('${pub.id}')">Change</button>
-            </td>
-          </tr>
-        `;
-      });
+        select.value = state.selectedSessionId ? String(state.selectedSessionId) : String(sessions[0].id);
+      }
 
-      html += '</table>';
-      publishersList.innerHTML = html;
+      const pageStart = state.total === 0 ? 0 : state.offset + 1;
+      const pageEnd = Math.min(state.offset + sessions.length, state.total);
+      meta.textContent = `${pageStart}-${pageEnd} of ${state.total}`;
+      prevBtn.disabled = state.offset <= 0;
+      nextBtn.disabled = state.offset + state.limit >= state.total;
+      if (stopBtn) {
+        stopBtn.disabled = !state.selectedSession || state.selectedSession.status !== 'active';
+      }
     }
 
-    // Change publisher channel
-    function changePublisherChannel(publisherId) {
-      const select = document.getElementById('channelSelect_' + publisherId);
-      const newChannelId = select ? select.value : '';
-      if (!newChannelId) {
-        updateStatus('Please select a channel', 'error');
+    function getSelectedTranscriptSession(roomSlug) {
+      const state = getTranscriptSessionState(roomSlug);
+      return state.selectedSession || null;
+    }
+
+    function destroyTranscriptBinding(roomSlug) {
+      const existing = transcriptBindings[roomSlug];
+      if (!existing) return;
+      try {
+        existing.binding.destroy();
+      } catch (error) {
+        console.warn('Failed to destroy transcript binding:', error);
+      }
+      delete transcriptBindings[roomSlug];
+    }
+
+    async function toggleRoomTranscripts(roomSlug) {
+      const panel = document.getElementById(`transcript-panel-${roomSlug}`);
+      if (!panel) return;
+
+      const isHidden = panel.classList.contains('hidden');
+      if (!isHidden) {
+        panel.classList.add('hidden');
+        destroyTranscriptBinding(roomSlug);
+        setTranscriptStatus(roomSlug, 'Transcription panel hidden');
         return;
       }
-      sendMessage('admin-change-publisher-channel', { publisherId, newChannelId });
+
+      panel.classList.remove('hidden');
+      setTranscriptStatus(roomSlug, 'Loading transcripts...');
+      await loadRoomTranscripts(roomSlug);
     }
-    
-    // Refresh data periodically
-    setInterval(() => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        sendMessage('get-channels');
-        sendMessage('admin-get-channels-subscribers');
-        sendMessage('admin-get-publishers');
+
+    function renderTranscriptTabs(roomSlug, channels, activeChannel) {
+      const tabsEl = document.getElementById(`transcript-tabs-${roomSlug}`);
+      if (!tabsEl) return;
+      const canRestart = canRestartTranscriptChannel(roomSlug);
+      tabsEl.innerHTML = channels.map(channel => {
+        const active = channel === activeChannel ? 'active' : '';
+        const restartKey = `${roomSlug}::${channel}`;
+        const restarting = Boolean(transcriptRestarting[restartKey]);
+        const disabled = canRestart && !restarting ? '' : 'disabled';
+        const restartLabel = restarting ? 'Restarting...' : 'Restart';
+        const escapedChannel = escapeAttr(channel);
+        return `
+          <span class="transcript-tab-group">
+            <button class="transcript-tab ${active}" onclick="openTranscriptChannel('${roomSlug}', '${escapedChannel}')">${escapeHtml(channel)}</button>
+            <button class="transcript-restart-btn" ${disabled} title="Restart transcription for ${escapeHtml(channel)}" onclick="restartTranscriptChannel(event, '${roomSlug}', '${escapedChannel}')">${restartLabel}</button>
+          </span>
+        `;
+      }).join('');
+    }
+
+    function canRestartTranscriptChannel(roomSlug) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const selected = sessionState.selectedSession;
+      const status = recordingStatus[roomSlug] || {};
+      return Boolean(
+        selected
+        && selected.status === 'active'
+        && status.transcriptionActive
+        && status.transcriptionSessionId === selected.id
+      );
+    }
+
+    async function loadRoomTranscripts(roomSlug) {
+      try {
+        const sessionState = getTranscriptSessionState(roomSlug);
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions?limit=${sessionState.limit}&offset=${sessionState.offset}`, {
+          headers: {  }
+        });
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.message || 'Failed to load transcription sessions');
+        }
+
+        const data = await response.json();
+        transcriptSessions[roomSlug] = data.sessions || [];
+        sessionState.total = data.pagination?.total || 0;
+
+        if (!transcriptSessions[roomSlug].length) {
+          sessionState.selectedSessionId = null;
+          sessionState.selectedSession = null;
+          transcriptChannels[roomSlug] = [];
+          renderTranscriptSessionControls(roomSlug);
+          renderTranscriptTabs(roomSlug, [], null);
+          const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+          if (editor) editor.value = '';
+          destroyTranscriptBinding(roomSlug);
+          setTranscriptStatus(roomSlug, 'No transcript sessions found for this room');
+          return;
+        }
+
+        const activeSessionId = recordingStatus[roomSlug]?.transcriptionSessionId || null;
+        const activeVisible = transcriptSessions[roomSlug].some((session) => session.id === activeSessionId);
+        if (sessionState.followActive && activeVisible) {
+          sessionState.selectedSessionId = activeSessionId;
+        }
+        const selectedStillVisible = transcriptSessions[roomSlug].some((session) => session.id === sessionState.selectedSessionId);
+        if (!selectedStillVisible) {
+          sessionState.selectedSessionId = activeVisible ? activeSessionId : transcriptSessions[roomSlug][0].id;
+        }
+
+        renderTranscriptSessionControls(roomSlug);
+        await loadTranscriptSession(roomSlug, sessionState.selectedSessionId);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message);
+        renderTranscriptSessionControls(roomSlug);
+        renderTranscriptTabs(roomSlug, [], null);
+        const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+        if (editor) editor.value = '';
+        destroyTranscriptBinding(roomSlug);
       }
-    }, 5000);
+    }
+
+    async function changeTranscriptSessionPage(roomSlug, direction) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const nextOffset = sessionState.offset + (direction * sessionState.limit);
+      if (nextOffset < 0) return;
+      if (nextOffset >= sessionState.total && direction > 0) return;
+      sessionState.offset = nextOffset;
+      await loadRoomTranscripts(roomSlug);
+    }
+
+    async function onTranscriptSessionChange(roomSlug, value) {
+      const sessionId = parseInt(value, 10);
+      if (!Number.isFinite(sessionId) || sessionId <= 0) return;
+      const sessionState = getTranscriptSessionState(roomSlug);
+      sessionState.selectedSessionId = sessionId;
+      const selected = (transcriptSessions[roomSlug] || []).find((session) => session.id === sessionId);
+      sessionState.followActive = selected?.status === 'active';
+      await loadTranscriptSession(roomSlug, sessionId);
+    }
+
+    async function loadTranscriptSession(roomSlug, sessionId) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${sessionId}`, {
+          headers: {  }
+        });
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.message || 'Failed to load transcription session');
+        }
+
+        const payload = await response.json();
+        sessionState.selectedSessionId = payload.transcriptionSessionId;
+        sessionState.selectedSession = {
+          id: payload.transcriptionSessionId,
+          eventName: payload.eventName,
+          modelName: payload.modelName,
+          status: payload.status,
+          startedAt: payload.startedAt,
+          stoppedAt: payload.stoppedAt
+        };
+        if (payload.status === 'active' && recordingStatus[roomSlug]?.transcriptionSessionId === payload.transcriptionSessionId) {
+          sessionState.followActive = true;
+        }
+
+        const channels = [...new Set([
+          ...(payload.docs || []).map((doc) => doc.channelName).filter(Boolean),
+          ...(Array.isArray(state.publishers[roomSlug])
+            ? state.publishers[roomSlug].map((publisher) => publisher.channel_name).filter(Boolean)
+            : [])
+        ])];
+        transcriptChannels[roomSlug] = channels;
+        renderTranscriptSessionControls(roomSlug);
+
+        if (!channels.length) {
+          setTranscriptStatus(
+            roomSlug,
+            `Event: ${payload.eventName || 'Untitled'} | Session ${payload.transcriptionSessionId} (${payload.status}) | No channel docs yet`
+          );
+          renderTranscriptTabs(roomSlug, [], null);
+          const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+          if (editor) editor.value = '';
+          destroyTranscriptBinding(roomSlug);
+          return;
+        }
+
+        setTranscriptStatus(
+          roomSlug,
+          `Event: ${payload.eventName || 'Untitled'} | Session ${payload.transcriptionSessionId} (${payload.status})`
+        );
+        const currentChannel = transcriptBindings[roomSlug]?.channelName;
+        const defaultChannel = channels.includes(currentChannel) ? currentChannel : channels[0];
+        await openTranscriptChannel(roomSlug, defaultChannel);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message);
+        renderTranscriptTabs(roomSlug, [], null);
+        const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+        if (editor) editor.value = '';
+        destroyTranscriptBinding(roomSlug);
+      }
+    }
+
+    async function handleTranscriptRecordingStatusUpdate(roomSlug, status) {
+      const panel = document.getElementById(`transcript-panel-${roomSlug}`);
+      if (!panel || panel.classList.contains('hidden')) return;
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const activeSessionId = status?.transcriptionSessionId || null;
+      if (!activeSessionId) return;
+      const selectedId = sessionState.selectedSessionId;
+      if (sessionState.followActive || !selectedId) {
+        sessionState.followActive = true;
+        await loadRoomTranscripts(roomSlug);
+      }
+    }
+
+    async function stopSelectedTranscriptSession(roomSlug) {
+      const sessionState = getTranscriptSessionState(roomSlug);
+      const selectedSession = sessionState.selectedSession;
+      if (!selectedSession || selectedSession.status !== 'active') return;
+      if (!confirm(`Stop transcript session #${selectedSession.id} (${selectedSession.eventName || 'Untitled'})?`)) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${selectedSession.id}/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            
+          },
+          body: JSON.stringify({ reason: 'Stopped from admin' })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || 'Failed to stop transcription session');
+        }
+        sessionState.followActive = false;
+        await loadRoomTranscripts(roomSlug);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message || 'Failed to stop transcription session');
+      }
+    }
+
+    async function restartTranscriptChannel(event, roomSlug, channelName) {
+      if (event) event.stopPropagation();
+      if (!canRestartTranscriptChannel(roomSlug)) return;
+
+      const restartKey = `${roomSlug}::${channelName}`;
+      if (transcriptRestarting[restartKey]) return;
+      transcriptRestarting[restartKey] = true;
+      renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug] || [], transcriptBindings[roomSlug]?.channelName);
+      setTranscriptStatus(roomSlug, `Restarting transcription for ${channelName}...`);
+
+      try {
+        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/channels/${encodeURIComponent(channelName)}/restart`, {
+          method: 'POST',
+          headers: {
+            
+          }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.message || 'Failed to restart transcription channel');
+        }
+        showSuccess(payload.message || `Restarted transcription for ${channelName}`);
+        await loadTranscriptSession(roomSlug, getTranscriptSessionState(roomSlug).selectedSessionId);
+      } catch (error) {
+        setTranscriptStatus(roomSlug, error.message || 'Failed to restart transcription channel');
+      } finally {
+        delete transcriptRestarting[restartKey];
+        renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug] || [], transcriptBindings[roomSlug]?.channelName);
+      }
+    }
+
+    async function openTranscriptChannel(roomSlug, channelName) {
+      const editor = document.getElementById(`transcript-editor-${roomSlug}`);
+      if (!editor) return;
+      const sessionState = getTranscriptSessionState(roomSlug);
+      if (!sessionState.selectedSessionId) {
+        setTranscriptStatus(roomSlug, 'No selected transcription session');
+        return;
+      }
+
+      const channels = transcriptChannels[roomSlug] || [];
+      if (!channels.includes(channelName)) {
+        transcriptChannels[roomSlug] = [...channels, channelName];
+      }
+      renderTranscriptTabs(roomSlug, transcriptChannels[roomSlug], channelName);
+
+      destroyTranscriptBinding(roomSlug);
+      editor.value = '';
+      editor.placeholder = `Connecting to ${channelName}...`;
+
+      try {
+        await waitForTranscriptLib();
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const selectedSession = getSelectedTranscriptSession(roomSlug);
+        const isActiveSession = selectedSession?.status === 'active';
+        const wsUrl = isActiveSession
+          ? `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}`
+          : `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?sessionId=${encodeURIComponent(sessionState.selectedSessionId)}`;
+        const binding = await window.SoundcastTranscript.createBinding({
+          wsUrl,
+          textarea: editor,
+          onStatus: (status, message) => {
+            const selectedSession = getSelectedTranscriptSession(roomSlug);
+            const prefix = selectedSession
+              ? `Event: ${selectedSession.eventName || 'Untitled'} | Session ${selectedSession.id} (${selectedSession.status})`
+              : 'Transcript';
+            if (status === 'connected') {
+              setTranscriptStatus(roomSlug, `${prefix} | Channel: ${channelName} (live sync)`);
+            } else if (status === 'disconnected') {
+              setTranscriptStatus(roomSlug, `${prefix} | Channel: ${channelName} (disconnected)`);
+            } else if (status === 'error') {
+              setTranscriptStatus(roomSlug, message || `${prefix} | Channel: ${channelName} (error)`);
+            }
+          }
+        });
+        transcriptBindings[roomSlug] = { channelName, binding };
+      } catch (error) {
+        setTranscriptStatus(roomSlug, `Failed to open ${channelName}: ${error.message}`);
+      }
+    }
+
+    // Close modals on outside click
+    window.onclick = function (event) {
+      if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+      }
+    };
+
+    window.addEventListener('beforeunload', () => {
+      for (const roomSlug of Object.keys(transcriptBindings)) {
+        destroyTranscriptBinding(roomSlug);
+      }
+    });
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      window.addEventListener('resize', () => {
+        relayoutAdminChatWindows();
+      });
+      loadRooms();
+    });
   </script>
 </body>
+
 </html>
