@@ -1,4 +1,5 @@
 import { getDatabase } from '../database.js';
+import bcrypt from 'bcryptjs';
 import { deletePublishersByRoom } from './publisher.js';
 
 /**
@@ -140,6 +141,36 @@ export function listAllRooms() {
     'SELECT id, name, slug, created_at FROM rooms ORDER BY created_at DESC'
   );
   return stmt.all();
+}
+
+export function setRoomPin(slug, pin) {
+  const room = getRoomBySlug(slug);
+  if (!room) return false;
+  getDatabase().prepare('UPDATE rooms SET room_pin_hash = ? WHERE id = ?')
+    .run(bcrypt.hashSync(pin, 10), room.id);
+  return true;
+}
+
+export function verifyRoomPin(slug, pin) {
+  const row = getDatabase().prepare('SELECT id, room_pin_hash FROM rooms WHERE slug = ?').get(slug);
+  return row?.room_pin_hash && bcrypt.compareSync(pin, row.room_pin_hash) ? row.id : null;
+}
+
+export function getRoomLanguages(roomId) {
+  const db = getDatabase();
+  const saved = db.prepare('SELECT name FROM room_languages WHERE room_id = ? ORDER BY position').all(roomId).map(row => row.name);
+  if (saved.length) return saved;
+  const existing = db.prepare('SELECT DISTINCT channel_name AS name FROM publishers WHERE room_id = ? ORDER BY channel_name').all(roomId).map(row => row.name);
+  return existing.length ? existing : ['English'];
+}
+
+export function setRoomLanguages(roomId, languages) {
+  const db = getDatabase();
+  db.transaction(() => {
+    db.prepare('DELETE FROM room_languages WHERE room_id = ?').run(roomId);
+    const insert = db.prepare('INSERT INTO room_languages (room_id, name, position) VALUES (?, ?, ?)');
+    languages.forEach((name, position) => insert.run(roomId, name, position));
+  })();
 }
 
 /**

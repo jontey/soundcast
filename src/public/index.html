@@ -800,8 +800,14 @@
           channelSelect.appendChild(option);
         });
 
+        const requestedChannel = new URLSearchParams(window.location.search).get('channel');
+        if (requestedChannel && channels.includes(requestedChannel)) {
+          channelSelect.value = requestedChannel;
+          selectedChannel = requestedChannel;
+        }
+
         // Auto-select first channel if only one
-        if (channels.length === 1) {
+        if (channels.length === 1 && !selectedChannel) {
           channelSelect.selectedIndex = 1;
           selectedChannel = channels[0];
         }

@@ -511,6 +511,7 @@
     // Extract publisher token and debug mode from URL query params
     const urlParams = new URLSearchParams(window.location.search);
     const publisherToken = urlParams.get('token');
+    const studioPublisherId = Number(urlParams.get('publisherId'));
     const debugMode = urlParams.has('debug');
 
     if (!roomSlug) {
@@ -518,11 +519,11 @@
       throw new Error('Room slug not found in URL');
     }
 
-    if (!publisherToken) {
-      showError('Publisher token required. Please use a valid publisher URL with token.');
-      document.getElementById('status').textContent = 'Missing publisher token';
+    if (!publisherToken && !studioPublisherId) {
+      showError('Open your microphone from the studio or use a publisher link.');
+      document.getElementById('status').textContent = 'Publisher sign in required';
       document.getElementById('status').className = 'status disconnected';
-      throw new Error('Publisher token not found in URL');
+      throw new Error('Publisher credentials not found');
     }
 
     document.getElementById('roomName').textContent = `Room: ${roomSlug}`;
@@ -572,7 +573,7 @@
 
     function getSfuWsUrl() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${protocol}//${window.location.host}/ws`;
+      return `${protocol}//${window.location.host}/ws${publisherToken ? `?token=${encodeURIComponent(publisherToken)}` : ''}`;
     }
 
     // Status management
@@ -760,7 +761,7 @@
       try {
         await waitForTranscriptLib();
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}?token=${encodeURIComponent(publisherToken)}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/transcripts/${encodeURIComponent(roomSlug)}/${encodeURIComponent(channelName)}${publisherToken ? `?token=${encodeURIComponent(publisherToken)}` : ''}`;
         transcriptBinding = await window.SoundcastTranscript.createBinding({
           wsUrl,
           textarea: editor,
@@ -999,7 +1000,8 @@
     // Connect to room WebSocket (for configuration)
     function connectToRoom() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/publish?token=${publisherToken}`;
+      const credentials = publisherToken ? `token=${encodeURIComponent(publisherToken)}` : `publisherId=${studioPublisherId}`;
+      const wsUrl = `${protocol}//${window.location.host}/ws/room/${roomSlug}/publish?${credentials}`;
 
       setStatus('Connecting to room...', 'connecting');
       console.log('Connecting to:', wsUrl);

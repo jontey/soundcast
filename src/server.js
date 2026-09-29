@@ -12,9 +12,11 @@ import fastifyWebsocket from '@fastify/websocket';
 import { initDatabase, getDatabase } from './db/database.js';
 import { registerApiRoutes } from './routes/api.js';
 import { getRoomBySlug, getRoomById, listAllRooms, createRoom } from './db/models/room.js';
-import { verifyPublisherToken, getChannelsByRoom, listPublishersByRoom } from './db/models/publisher.js';
+import { verifyPublisherToken, getPublisherById, listPublishersByRoom } from './db/models/publisher.js';
+import { getRoomLanguages } from './db/models/room.js';
 import { initRecorder, recoverRecordingSessions, isRecording, addProducerToRecording, removeProducerFromRecording, getRecordingStatus, getActiveRecordings, waitForRecordingFinalization } from './recording/recorder.js';
 import TranscriptionRuntime from './transcription/runtime.js';
+import { registerAuthRoutes, currentSession, requireAdmin, canAccessRoom } from './auth.js';
 
 // ES module equivalent for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -234,6 +236,7 @@ fastify.register(fastifyWebsocket, {
 });
 
 // Register REST API routes
+fastify.register(registerAuthRoutes);
 fastify.register(registerApiRoutes);
 
 // Room-specific HTML routes
@@ -262,9 +265,12 @@ fastify.get('/room/:slug/listen', async (request, reply) => {
 });
 
 // Admin dashboard
-fastify.get('/admin', async (request, reply) => {
+fastify.get('/admin', { preHandler: requireAdmin }, async (request, reply) => {
   return reply.sendFile('admin.html');
 });
+fastify.get('/admin.html', { preHandler: requireAdmin }, async (request, reply) => reply.sendFile('admin.html'));
+
+fastify.get('/studio', async (request, reply) => reply.sendFile('studio.html'));
 
 // Landing page: default listener page (users can change rooms in the UI).
 fastify.get('/', async (request, reply) => {
@@ -334,7 +340,7 @@ const channels = new Map();
 const clients = new Map();
 
 // Admin WebSocket connections
-const adminClients = new Set();
+const adminClients = new Map(); // socket -> authenticated session
 // Active room publisher sockets keyed by publisher DB id
 const roomPublisherClients = new Map();
 // In-memory chat history by publisher id
@@ -357,7 +363,8 @@ function getPublisherChatHistory(publisherId) {
 
 function broadcastAdminMessage(payload) {
   if (adminClients.size === 0) return;
-  for (const socket of adminClients) {
+  for (const [socket, session] of adminClients) {
+    if (payload?.data?.roomSlug && !canAccessRoom(session, payload.data.roomSlug)) continue;
     try {
       socket.send(JSON.stringify(payload));
     } catch (e) {
@@ -512,7 +519,8 @@ function notifyRecordingStatusChange(roomSlug, status) {
     ...normalizedStatus
   });
 
-  for (const socket of adminClients) {
+  for (const [socket, session] of adminClients) {
+    if (!canAccessRoom(session, roomSlug)) continue;
     try {
       socket.send(message);
     } catch (e) {
@@ -698,7 +706,8 @@ function notifyAdmins(channelId, source = 'main') {
     subscribers: channelStats.subscribers
   };
 
-  for (const socket of adminClients) {
+  for (const [socket, session] of adminClients) {
+    if (!canAccessRoom(session, roomInfo.slug)) continue;
     try {
       socket.send(JSON.stringify(update));
     } catch (e) {
@@ -782,6 +791,8 @@ async function createWebRtcTransport() {
 async function registerMainWsRoutes(fastify) {
   fastify.get('/ws', { websocket: true }, (connection, req) => {
     const clientId = uuidv4();
+    const session = currentSession(req);
+    const wsPublisher = req.query?.token ? verifyPublisherToken(req.query.token) : null;
     fastify.log.info(`New connection: ${clientId}`);
 
     // Store client info
@@ -814,6 +825,11 @@ async function registerMainWsRoutes(fastify) {
 
       const { action, data } = payload;
       fastify.log.info(`Received action: ${action} from ${clientId}`);
+
+      if (typeof action === 'string' && action.startsWith('admin-') && session?.role !== 'admin') {
+        connection.send(JSON.stringify({ action: 'error', data: { message: 'Admin sign in required' } }));
+        return;
+      }
 
       switch (action) {
         case 'get-rtpCapabilities':
@@ -1068,6 +1084,19 @@ async function registerMainWsRoutes(fastify) {
           break;
 
         case 'create-publisher-transport':
+          {
+            const publisherId = Number(data.publisherId);
+            const publisher = publisherId && getDatabase().prepare('SELECT id, room_id, name, channel_name FROM publishers WHERE id = ?').get(publisherId);
+            const room = publisher && getRoomById(publisher.room_id);
+            const permitted = room && data.channelId === `${room.slug}:${publisher.channel_name}` &&
+              ((wsPublisher && wsPublisher.id === publisher.id) ||
+               canAccessRoom(session, room.slug));
+            if (!permitted) {
+              connection.send(JSON.stringify({ action: 'error', data: { message: 'Publisher access denied' } }));
+              break;
+            }
+            data.publisherName = publisher.name;
+          }
           if (!data.channelId) {
             connection.send(JSON.stringify({
               action: 'error',
@@ -1457,6 +1486,11 @@ async function registerMainWsRoutes(fastify) {
         case 'stop-broadcasting':
           fastify.log.info(`Client ${clientId} stopping broadcasting in channel ${data.channelId}`);
 
+          if (!clientInfo.isPublisher || clientInfo.channelId !== data.channelId) {
+            connection.send(JSON.stringify({ action: 'error', data: { message: 'Publisher channel mismatch' } }));
+            break;
+          }
+
           if (!data.channelId || !channels.has(data.channelId)) {
             fastify.log.warn(`Channel ${data.channelId} does not exist`);
             break;
@@ -1686,7 +1720,7 @@ async function registerRoomWsRoutes(fastify) {
     const iceServers = DEFAULT_ICE_SERVERS;
 
     // Get available channels for this room
-    const channels = getChannelsByRoom(room.id);
+    const channels = getRoomLanguages(room.id);
 
     // Prepare configuration message with channels
     const config = {
@@ -1730,21 +1764,21 @@ async function registerRoomWsRoutes(fastify) {
 
     fastify.log.info(`New publisher connection for room: ${slug}, client: ${clientId}`);
 
-    // Verify token is provided
-    if (!token) {
-      fastify.log.warn(`Missing token for publisher connection to room ${slug}`);
+    // Existing token links remain valid; the studio uses a room session and publisher ID.
+    if (!token && !req.query.publisherId) {
+      fastify.log.warn(`Missing publisher credentials for room ${slug}`);
       connection.send(JSON.stringify({
         type: 'error',
-        data: { message: 'Missing token' }
+        data: { message: 'Sign in to the studio or use a publisher link' }
       }));
       connection.close();
       return;
     }
 
     // Verify publisher token
-    const publisher = verifyPublisherToken(token);
+    const publisher = token ? verifyPublisherToken(token) : getPublisherById(Number(req.query.publisherId));
 
-    if (!publisher) {
+    if (!publisher || (!token && !canAccessRoom(currentSession(req), slug))) {
       fastify.log.warn(`Invalid token for publisher connection to room ${slug}`);
       connection.send(JSON.stringify({
         type: 'error',
@@ -1788,7 +1822,7 @@ async function registerRoomWsRoutes(fastify) {
     const iceServers = DEFAULT_ICE_SERVERS;
     const transcriptionStatus = transcriptionRuntime ? transcriptionRuntime.getRoomTranscriptionStatus(room.id) : null;
 
-    const channelsForRoom = getChannelsByRoom(room.id);
+    const channelsForRoom = getRoomLanguages(room.id);
 
     // Prepare configuration message with channel name
     const config = {
@@ -1812,6 +1846,10 @@ async function registerRoomWsRoutes(fastify) {
     // Handle messages (WebRTC signaling relay)
     connection.on('message', async (message) => {
       try {
+        if (!token && !canAccessRoom(currentSession(req), slug)) {
+          connection.close(1008, 'Room session expired');
+          return;
+        }
         const payload = JSON.parse(message.toString());
 
         if (payload.type === 'get-config') {
@@ -1858,28 +1896,35 @@ async function registerRoomWsRoutes(fastify) {
 
     connection.on('close', () => {
       fastify.log.info(`Publisher ${clientId} (${publisher.name}) disconnected from room ${slug}`);
-      roomPublisherClients.delete(publisher.id);
+      if (roomPublisherClients.get(publisher.id)?.socket === connection) {
+        roomPublisherClients.delete(publisher.id);
+      }
     });
   });
 }
 
 // Admin WebSocket endpoint
 async function registerAdminWsRoutes(fastify) {
-  // Admin endpoint: /ws/admin (no auth required; single-user deployment)
+  // Owner and room co-hosts receive live updates scoped to their access.
   fastify.get('/ws/admin', { websocket: true }, (connection, req) => {
+    const session = currentSession(req);
+    if (!session) {
+      connection.close(1008, 'Sign in required');
+      return;
+    }
     fastify.log.info('Admin WebSocket connected');
 
-    adminClients.add(connection);
+    adminClients.set(connection, session);
 
     // Send initial channel stats
-    const stats = getAllChannelStats();
+    const stats = session.role === 'admin' ? getAllChannelStats() : { [session.roomSlug]: getAllChannelStats()[session.roomSlug] || {} };
     connection.send(JSON.stringify({
       type: 'channel-stats',
       stats
     }));
 
     // Send initial recording status for all rooms
-    const recordingStats = getAllRecordingStatus();
+    const recordingStats = session.role === 'admin' ? getAllRecordingStatus() : { [session.roomSlug]: getAllRecordingStatus()[session.roomSlug] || {} };
     connection.send(JSON.stringify({
       type: 'recording-stats',
       stats: recordingStats
@@ -1887,17 +1932,21 @@ async function registerAdminWsRoutes(fastify) {
 
     connection.on('message', async (message) => {
       try {
+        if (!currentSession(req)) {
+          connection.close(1008, 'Session expired');
+          return;
+        }
         const payload = JSON.parse(message.toString());
 
         if (payload.type === 'refresh') {
           // Send updated stats
-          const stats = getAllChannelStats();
+          const stats = session.role === 'admin' ? getAllChannelStats() : { [session.roomSlug]: getAllChannelStats()[session.roomSlug] || {} };
           connection.send(JSON.stringify({
             type: 'channel-stats',
             stats
           }));
           // Also send recording status
-          const recordingStats = getAllRecordingStatus();
+          const recordingStats = session.role === 'admin' ? getAllRecordingStatus() : { [session.roomSlug]: getAllRecordingStatus()[session.roomSlug] || {} };
           connection.send(JSON.stringify({
             type: 'recording-stats',
             stats: recordingStats
@@ -1909,7 +1958,7 @@ async function registerAdminWsRoutes(fastify) {
           if (!publisherId || !roomSlug || !text) return;
 
           const room = getRoomBySlug(roomSlug);
-          if (!room) return;
+          if (!room || !canAccessRoom(session, roomSlug)) return;
 
           const db = getDatabase();
           const pubStmt = db.prepare('SELECT id, name, room_id FROM publishers WHERE id = ?');
@@ -1949,7 +1998,7 @@ async function registerAdminWsRoutes(fastify) {
           if (!publisherId || !roomSlug) return;
 
           const room = getRoomBySlug(roomSlug);
-          if (!room) return;
+          if (!room || !canAccessRoom(session, roomSlug)) return;
 
           const db = getDatabase();
           const pubStmt = db.prepare('SELECT id, room_id FROM publishers WHERE id = ?');
@@ -2036,6 +2085,7 @@ function createHttpsServer() {
 
   fastifyHttps.decorate('transcriptionRuntime', transcriptionRuntime);
   fastifyHttps.decorate('notifyRecordingStatusChange', notifyRecordingStatusChange);
+  fastifyHttps.register(registerAuthRoutes);
   fastifyHttps.register(registerApiRoutes);
 
   // Register WebSocket routes on HTTPS server
@@ -2060,9 +2110,12 @@ function createHttpsServer() {
     return reply.sendFile('index.html');
   });
 
-  fastifyHttps.get('/admin', async (request, reply) => {
+  fastifyHttps.get('/admin', { preHandler: requireAdmin }, async (request, reply) => {
     return reply.sendFile('admin.html');
   });
+  fastifyHttps.get('/admin.html', { preHandler: requireAdmin }, async (request, reply) => reply.sendFile('admin.html'));
+
+  fastifyHttps.get('/studio', async (request, reply) => reply.sendFile('studio.html'));
 
   return fastifyHttps;
 }

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { currentSession, canAccessRoom } from '../auth.js';
 import path from 'path';
 import { spawn, execSync } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
@@ -1491,10 +1492,14 @@ export class TranscriptionRuntime {
     return docState;
   }
 
-  async authenticateTranscriptSocket(roomSlug, token) {
+  async authenticateTranscriptSocket(roomSlug, token, request) {
     const room = this.getRoomBySlug(roomSlug);
     if (!room) {
       return { ok: false, status: 404, message: 'Room not found' };
+    }
+
+    if (canAccessRoom(currentSession(request), roomSlug)) {
+      return { ok: true, room, authMode: 'admin' };
     }
 
     if (token) {
@@ -1528,7 +1533,7 @@ export class TranscriptionRuntime {
           socket.close();
           return;
         }
-        const auth = await this.authenticateTranscriptSocket(roomSlug, token);
+        const auth = await this.authenticateTranscriptSocket(roomSlug, token, req);
         if (!auth.ok) {
           socket.send(JSON.stringify({ type: 'error', message: auth.message }));
           socket.close();

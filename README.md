@@ -33,6 +33,7 @@ LISTEN_IP=0.0.0.0
 ANNOUNCED_IP=127.0.0.1
 PORT=3000
 HTTPS_PORT=3001
+ADMIN_PASSWORD=choose-a-private-owner-password
 ```
 
 3. Start the server:
@@ -44,6 +45,12 @@ npm start
 ```
 
 On first start, a default `main` room is created automatically.
+
+Open `/studio` and sign in as owner with `ADMIN_PASSWORD`. Set a room PIN there,
+then give co-hosts and publishers the studio address, room code, and PIN. A room
+PIN grants access only to that room; anyone with the PIN can choose a publisher
+identity, so share it only with the room team.
+Use HTTPS when people sign in over a network outside a trusted local setup.
 
 ## Primary Endpoints
 
@@ -62,6 +69,7 @@ On first start, a default `main` room is created automatically.
 
 ## Web UI
 
+- `http://localhost:3000/studio` (owner, co-host, and publisher workspace)
 - `http://localhost:3000/` (default listener for the `main` room)
 - `http://localhost:3000/admin` (admin dashboard: rooms, publishers, recordings, transcripts)
 - `http://localhost:3000/room/:slug/publish?token=...` (publisher)

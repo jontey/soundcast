@@ -1,4 +1,5 @@
-import { createRoom, getRoomBySlug, updateRoom, listAllRooms, deleteRoom } from '../db/models/room.js';
+import { createRoom, getRoomBySlug, updateRoom, listAllRooms, deleteRoom, setRoomPin, getRoomLanguages, setRoomLanguages } from '../db/models/room.js';
+import { authorizeRoomApi, revokeRoomSessions, currentSession } from '../auth.js';
 import { createPublisher, listPublishersByRoom, deletePublisher, getPublisherById, updatePublisher } from '../db/models/publisher.js';
 import { startRecording, stopRecording, getRecordingStatus, isRecording } from '../recording/recorder.js';
 import { listRecordingsByRoomId } from '../db/models/recording.js';
@@ -8,9 +9,46 @@ import { listTranscriptionSessionsByRoom, countTranscriptionSessionsByRoom } fro
  * Register REST API routes
  */
 export async function registerApiRoutes(fastify) {
+  fastify.addHook('preHandler', authorizeRoomApi);
   // GET /api/config - Get public configuration
   fastify.get('/api/config', async (request, reply) => {
     return {};
+  });
+
+  fastify.put('/api/rooms/:room_slug/access', async (request, reply) => {
+    const pin = request.body?.pin;
+    if (typeof pin !== 'string' || pin.length < 6 || pin.length > 64) {
+      return reply.code(400).send({ message: 'PIN must be 6 to 64 characters' });
+    }
+    if (!setRoomPin(request.params.room_slug, pin)) {
+      return reply.code(404).send({ message: 'Room not found' });
+    }
+    revokeRoomSessions(request.params.room_slug);
+    return { ok: true };
+  });
+
+  fastify.get('/api/rooms/:room_slug/languages', async (request, reply) => {
+    const room = getRoomBySlug(request.params.room_slug);
+    if (!room) return reply.code(404).send({ message: 'Room not found' });
+    return { languages: getRoomLanguages(room.id) };
+  });
+
+  fastify.put('/api/rooms/:room_slug/languages', async (request, reply) => {
+    const room = getRoomBySlug(request.params.room_slug);
+    if (!room) return reply.code(404).send({ message: 'Room not found' });
+    const languages = request.body?.languages;
+    if (!Array.isArray(languages) || languages.length < 1 || languages.length > 30 ||
+        languages.some(name => typeof name !== 'string' || !name.trim() || name.trim().length > 60) ||
+        new Set(languages.map(name => name.trim().toLocaleLowerCase())).size !== languages.length) {
+      return reply.code(400).send({ message: 'Enter 1 to 30 unique language names, up to 60 characters each' });
+    }
+    const normalized = languages.map(name => name.trim());
+    const assigned = listPublishersByRoom(room.id).map(publisher => publisher.channel_name);
+    if (assigned.some(name => !normalized.includes(name))) {
+      return reply.code(409).send({ message: 'Move publishers off a language before removing it' });
+    }
+    setRoomLanguages(room.id, normalized);
+    return { languages: normalized };
   });
 
   // POST /api/rooms - Create a new room
@@ -150,7 +188,7 @@ export async function registerApiRoutes(fastify) {
     const { name, channel_name } = request.body;
 
     // Validate required fields
-    if (!name || !channel_name) {
+    if (typeof name !== 'string' || !name.trim() || name.trim().length > 80 || typeof channel_name !== 'string' || !channel_name) {
       return reply.code(400).send({
         error: 'Bad Request',
         message: 'Missing required fields: name, channel_name'
@@ -167,9 +205,11 @@ export async function registerApiRoutes(fastify) {
         });
       }
 
+      if (!getRoomLanguages(room.id).includes(channel_name)) return reply.code(400).send({ message: 'Choose an available language' });
+
       const publisher = createPublisher({
         room_id: room.id,
-        name,
+        name: name.trim(),
         channel_name
       });
 
@@ -178,7 +218,7 @@ export async function registerApiRoutes(fastify) {
         room_slug: room.slug,
         name: publisher.name,
         channel_name: publisher.channel_name,
-        join_token: publisher.join_token
+        ...(currentSession(request)?.role === 'admin' ? { join_token: publisher.join_token } : {})
       });
     } catch (error) {
       console.error('Error creating publisher:', error);
@@ -210,7 +250,7 @@ export async function registerApiRoutes(fastify) {
           id: publisher.id,
           name: publisher.name,
           channel_name: publisher.channel_name,
-          join_token: publisher.join_token,
+          ...(currentSession(request)?.role === 'admin' ? { join_token: publisher.join_token } : {}),
           created_at: publisher.created_at
         }))
       });
@@ -254,8 +294,15 @@ export async function registerApiRoutes(fastify) {
         });
       }
 
+      if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.trim().length > 80)) {
+        return reply.code(400).send({ message: 'Enter a name up to 80 characters' });
+      }
+      if (channel_name !== undefined && !getRoomLanguages(room.id).includes(channel_name)) {
+        return reply.code(400).send({ message: 'Choose an available language' });
+      }
+
       const updatedPublisher = updatePublisher(parseInt(id), {
-        name,
+        name: name?.trim(),
         channel_name
       });
 
@@ -334,6 +381,7 @@ export async function registerApiRoutes(fastify) {
       }
 
       const deleted = deleteRoom(room_slug);
+      if (deleted) revokeRoomSessions(room_slug);
 
       if (!deleted) {
         return reply.code(500).send({
