@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "vite build"
   },
+  "dependencies": {
+    "mediasoup-client": "3.18.3"
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "5.1.1",
     "svelte": "5.57.1",
