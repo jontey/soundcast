@@ -775,6 +775,7 @@
 
   <script src="/js/transcript-sync.js"></script>
   <script src="/js/floating-chat-widget.js"></script>
+  <script src="/js/api-client.js"></script>
   <script>
     const API_BASE = window.location.origin + '/api';
     let adminWs = null;
@@ -1223,20 +1224,16 @@
       connectAdminWebSocket();
     }
 
+    // Shared REST client wrapper (domain-specific; delegates to SoundcastApi).
+    async function api(path, options = {}) { return window.SoundcastApi.request(path, options); }
+
     async function loadRooms(event) {
       if (event) event.preventDefault();
 
       document.getElementById('roomsList').innerHTML = '<div class="loading">Loading rooms...</div>';
 
       try {
-        const response = await fetch(`${API_BASE}/rooms`);
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to load rooms');
-        }
-
-        const data = await response.json();
+        const data = await api(`${API_BASE}/rooms`);
 
         // Success - show authenticated view
         showAuthenticatedView();
@@ -1351,13 +1348,7 @@
 
       try {
         // Fetch with caching
-        const data = await apiCache.get(`publishers-${slug}`, async () => {
-          const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
-            headers: {  }
-          });
-          if (!response.ok) throw new Error('Failed to load publishers');
-          return response.json();
-        });
+        const data = await apiCache.get(`publishers-${slug}`, () => api(`${API_BASE}/rooms/${slug}/publishers`));
 
         // Keep publisher channel cache current for transcript tab resolution.
         state.publishers[slug] = data.publishers;
@@ -1492,15 +1483,7 @@
     // Copy all publisher URLs for a room
     async function copyAllPublisherUrls(slug) {
       try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
-          headers: {  }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to load publishers');
-        }
-
-        const data = await response.json();
+        const data = await api(`${API_BASE}/rooms/${slug}/publishers`);
 
         if (data.publishers.length === 0) {
           showError('No publishers to copy');
@@ -1588,22 +1571,11 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const channel_name = document.getElementById('publisherChannelName').value;
 
       try {
-        const body = { name, channel_name };
-
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
+        const data = await api(`${API_BASE}/rooms/${slug}/publishers`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
+          body: JSON.stringify({ name, channel_name })
         });
 
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to add publisher');
-        }
-
-        const data = await response.json();
         document.getElementById('newPublisherToken').textContent = data.join_token;
         document.getElementById('publisherJoinUrl').textContent = `${getSecureBaseUrl()}/room/${slug}/publish?token=${data.join_token}`;
         document.getElementById('newPublisherTokenDisplay').style.display = 'block';
@@ -1634,20 +1606,10 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const channel_name = document.getElementById('editPublisherChannelName').value;
 
       try {
-        const body = { name, channel_name };
-
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
+        await api(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
+          body: JSON.stringify({ name, channel_name })
         });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to update publisher');
-        }
 
         showSuccess('Publisher updated successfully!');
         closeModal('editPublisherModal');
@@ -1664,17 +1626,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       }
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
-          method: 'DELETE',
-          headers: {
-            
-          }
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to delete publisher');
-        }
+        await api(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, { method: 'DELETE' });
 
         showSuccess('Publisher deleted successfully!');
         loadPublishersAndLiveStatus(slug); // Refresh the combined table
@@ -1689,17 +1641,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       }
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}`, {
-          method: 'DELETE',
-          headers: {
-            
-          }
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to delete room');
-        }
+        await api(`${API_BASE}/rooms/${slug}`, { method: 'DELETE' });
 
         showSuccess('Room deleted successfully!');
         loadRooms(); // Refresh the list
@@ -1762,10 +1704,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       if (!room) {
         // Fetch room data
         try {
-          const response = await fetch(`${API_BASE}/rooms`, {
-            headers: {  }
-          });
-          const data = await response.json();
+          const data = await api(`${API_BASE}/rooms`);
           room = data.rooms.find(r => r.slug === slug);
         } catch (error) {
           showError('Failed to load room data');
@@ -1794,21 +1733,10 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const slug = document.getElementById('editRoomSlug').value.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
+        await api(`${API_BASE}/rooms/${originalSlug}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name,
-            slug
-          })
+          body: JSON.stringify({ name, slug })
         });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to update room');
-        }
 
         showSuccess('Room updated successfully!');
         closeModal('editRoomModal');
@@ -1824,20 +1752,10 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       const name = document.getElementById('roomName').value;
 
       try {
-        const response = await fetch(`${API_BASE}/rooms`, {
+        await api(`${API_BASE}/rooms`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            name
-          })
+          body: JSON.stringify({ name })
         });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.message || 'Failed to create room');
-        }
 
         showSuccess('Room created successfully!');
         closeModal('createRoomModal');
@@ -2138,16 +2056,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     async function loadRoomTranscripts(roomSlug) {
       try {
         const sessionState = getTranscriptSessionState(roomSlug);
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions?limit=${sessionState.limit}&offset=${sessionState.offset}`, {
-          headers: {  }
-        });
-
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.message || 'Failed to load transcription sessions');
-        }
-
-        const data = await response.json();
+        const data = await api(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions?limit=${sessionState.limit}&offset=${sessionState.offset}`);
         transcriptSessions[roomSlug] = data.sessions || [];
         sessionState.total = data.pagination?.total || 0;
 
@@ -2208,15 +2117,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
     async function loadTranscriptSession(roomSlug, sessionId) {
       const sessionState = getTranscriptSessionState(roomSlug);
       try {
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${sessionId}`, {
-          headers: {  }
-        });
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          throw new Error(error.message || 'Failed to load transcription session');
-        }
-
-        const payload = await response.json();
+        const payload = await api(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${sessionId}`);
         sessionState.selectedSessionId = payload.transcriptionSessionId;
         sessionState.selectedSession = {
           id: payload.transcriptionSessionId,
@@ -2289,18 +2190,10 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       }
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${selectedSession.id}/stop`, {
+        await api(`${API_BASE}/rooms/${roomSlug}/transcriptions/sessions/${selectedSession.id}/stop`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            
-          },
           body: JSON.stringify({ reason: 'Stopped from admin' })
         });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(payload.message || 'Failed to stop transcription session');
-        }
         sessionState.followActive = false;
         await loadRoomTranscripts(roomSlug);
       } catch (error) {
@@ -2319,16 +2212,7 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
       setTranscriptStatus(roomSlug, `Restarting transcription for ${channelName}...`);
 
       try {
-        const response = await fetch(`${API_BASE}/rooms/${roomSlug}/transcriptions/channels/${encodeURIComponent(channelName)}/restart`, {
-          method: 'POST',
-          headers: {
-            
-          }
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(payload.message || 'Failed to restart transcription channel');
-        }
+        const payload = await api(`${API_BASE}/rooms/${roomSlug}/transcriptions/channels/${encodeURIComponent(channelName)}/restart`, { method: 'POST' });
         showSuccess(payload.message || `Restarted transcription for ${channelName}`);
         await loadTranscriptSession(roomSlug, getTranscriptSessionState(roomSlug).selectedSessionId);
       } catch (error) {

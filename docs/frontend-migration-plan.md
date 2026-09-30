@@ -64,7 +64,7 @@ D7 is resolved. The user removed Open-in-Chrome because it did not work. Delete 
 
 Keep the HTML entries. Each slice must leave the pages loading.
 
-1. Extract `api/client`. Cover the REST surface in spec §1.5. Studio and admin are the first callers.
+1. Extract `api/client`. Cover the REST surface in spec §1.5. Studio and admin are the first callers. **Done.** `src/public/js/api-client.js` exposes `window.SoundcastApi.request()`. Studio's inline `api()` and a new admin domain `api()` delegate to it. All admin room/publisher/transcription mutations plus the live-status cache route through it. The recording toggle's 503-retry stays on raw fetch intentionally. Parse OK on both pages. Isolated server: studio loads with a session, admin loads, room create returns 201 and lists.
 2. Extract `signaling/room`, `signaling/admin`, and `chat/client`. Preserve the live reconnect caps (D6). Do not add request IDs.
 3. Keep transcript sockets in `transcripts/sync`. Move URL construction there. Do not add `signaling/transcripts`.
 4. Extract `media/listener`, `media/publisher`, `media/monitor`, and `media/playback`. Keep the two publisher profiles (D13). Distinguish stop from terminal dispose. Add a generation counter so a stale `getUserMedia` cannot attach after stop.

@@ -114,6 +114,7 @@
   </main>
   <script src="/js/bundles/mediasoup-client.js"></script>
   <script src="/js/studio-media.js"></script>
+  <script src="/js/api-client.js"></script>
   <script>
     const $ = id => document.getElementById(id);
     const state = { auth: null, rooms: [], publishers: [], languages: [], activePublisherId: null, ws: null, stats: {}, recording: {}, chat: [] };
@@ -140,12 +141,7 @@
       $('listenBtn').disabled = listenerMedia.active;
       $('stopListenBtn').disabled = !listenerMedia.active;
     }
-    async function api(path, options = {}) {
-      const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.message || `Request failed (${response.status})`);
-      return payload;
-    }
+    async function api(path, options = {}) { return window.SoundcastApi.request(path, options); }
     function status(message) { $('topStatus').textContent = message; }
     function currentRoom() { return $('roomSelect').value; }
     function currentPublisher() { return state.publishers.find(p => p.id === state.activePublisherId); }
