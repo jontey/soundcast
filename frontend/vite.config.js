@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   plugins: [svelte()],
+  base: '/app/',
   build: {
     outDir: resolve(__dirname, '../dist/frontend'),
     emptyOutDir: true,

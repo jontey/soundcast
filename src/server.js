@@ -56,6 +56,22 @@ function getRnnoiseAssetsDir() {
   return null;
 }
 
+// Built Svelte/Vite output (separate frontend package). Null when not built.
+function getFrontendDistDir() {
+  const candidatePaths = [
+    path.join(__dirname, '..', 'dist', 'frontend'),
+    path.join(process.cwd(), 'dist', 'frontend')
+  ];
+
+  for (const candidate of candidatePaths) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 // Create fastify instance
 const fastify = Fastify({
   logger: true
@@ -239,6 +255,19 @@ fastify.register(fastifyStatic, {
 });
 registerSharedHttpSurface(fastify);
 
+const frontendDistDir = getFrontendDistDir();
+if (frontendDistDir) {
+  // Built Svelte entries + assets under /app to avoid a second wildcard static root.
+  fastify.register(fastifyStatic, {
+    root: frontendDistDir,
+    prefix: '/app/',
+    decorateReply: false
+  });
+  console.log('Serving built frontend from:', frontendDistDir, 'at /app/');
+} else {
+  console.warn('Built frontend not found at dist/frontend. Svelte pages will be unavailable.');
+}
+
 // Register WebSocket plugin
 fastify.register(fastifyWebsocket, {
   options: {
@@ -282,6 +311,15 @@ fastify.get('/admin', { preHandler: requireAdmin }, async (request, reply) => {
 fastify.get('/admin.html', { preHandler: requireAdmin }, async (request, reply) => reply.sendFile('admin.html'));
 
 fastify.get('/studio', async (request, reply) => reply.sendFile('studio.html'));
+
+// Opt-in Svelte listener page. The default /room/:slug/listen above serves the HTML listener.
+fastify.get('/room/:slug/listen-v2', async (request, reply) => {
+  const { slug } = request.params;
+  const room = getRoomBySlug(slug);
+  if (!room) return reply.code(404).send('Room not found');
+  if (!frontendDistDir) return reply.code(503).send('Frontend not built');
+  return reply.redirect(`/app/listener/index.html?room=${encodeURIComponent(slug)}`);
+});
 
 // mediasoup configuration
 const mediasoupConfig = {
