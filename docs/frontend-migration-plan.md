@@ -80,6 +80,18 @@ Start this only after phase C slices stay working.
 4. Cut over studio, then admin, then listener, then publisher.
 5. Fail the Docker image build if frontend assets are missing.
 
+## Working prototype status
+
+The listener proof-of-concept is end-to-end verified in two isolated browsers:
+
+- Publisher: HTML `room-publish.html` with a fake-audio mic (Chrome `--use-fake-device-for-media-stream`), token auth, broadcasting on `main:English`.
+- Listener: Svelte `listen-v2` → `/app/listener/index.html` reusing `frontend/src/lib/media.js` `ListenerMedia`.
+- Server confirmed `produce-audio` then `Created 1 consumers for listener`.
+- Listener UI showed `Listening to 1 publisher / 1 audio stream`; `<audio>` `paused:false` with 1 srcObject track — actively playing the remote stream.
+- HTML studio page and HTML listener/publisher remain the default and are unaffected.
+
+Not yet verified on a physical device with a real microphone. That remains the release check.
+
 ### E. Release checks still outstanding
 
 These do not block phase A. They block calling the migration done.
