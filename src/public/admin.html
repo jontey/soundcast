@@ -1331,8 +1331,7 @@
             <textarea id="transcript-editor-${room.slug}" class="transcript-editor" placeholder="Live transcript will appear here"></textarea>
           </div>
 
-          <!-- Hidden publisher management panel -->
-          <div id="publishers-${room.slug}" class="interpreters-list" style="display: none;"></div>
+          </div>
         </div>
       `).join('');
 
@@ -1594,7 +1593,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
           method: 'POST',
           headers: {
-            ,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(body)
@@ -1641,7 +1639,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         const response = await fetch(`${API_BASE}/rooms/${slug}/publishers/${publisherId}`, {
           method: 'PUT',
           headers: {
-            ,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(body)
@@ -1661,59 +1658,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         showError(error.message);
       }
     }
-
-    async function showPublishers(slug) {
-      const container = document.getElementById(`publishers-${slug}`);
-
-      if (container.style.display === 'block') {
-        container.style.display = 'none';
-        return;
-      }
-
-      container.innerHTML = '<div style="padding: 10px;">Loading...</div>';
-      container.style.display = 'block';
-
-      try {
-        const response = await fetch(`${API_BASE}/rooms/${slug}/publishers`, {
-          headers: {
-            
-          }
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to load publishers');
-        }
-
-        const data = await response.json();
-
-        if (data.publishers.length === 0) {
-          container.innerHTML = '<div style="padding: 10px; color: #718096;">No publishers added yet</div>';
-          return;
-        }
-
-        container.innerHTML = data.publishers.map(pub => `
-          <div class="interpreter-item" style="flex-direction: column; align-items: stretch;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-              <div class="interpreter-info">
-                <div class="interpreter-name">${escapeHtml(pub.name)}</div>
-                <div class="interpreter-lang">Channel: ${escapeHtml(pub.channel_name)}</div>
-              </div>
-              <div style="display: flex; gap: 5px;">
-                <button onclick="showEditPublisherModal('${slug}', ${pub.id}, '${escapeAttr(pub.name)}', '${escapeAttr(pub.channel_name)}')" class="btn btn-primary" style="padding: 5px 10px; font-size: 12px;">Edit</button>
-                <button onclick="deletePublisher('${slug}', ${pub.id})" class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;">Delete</button>
-              </div>
-            </div>
-            <div class="url-value" style="font-size: 11px;">
-              <span style="word-break: break-all;">${getSecureBaseUrl()}/room/${slug}/publish?token=${escapeHtml(pub.join_token)}</span>
-              <button class="copy-btn" onclick="copyToClipboard('${escapeAttr(getSecureBaseUrl() + '/room/' + slug + '/publish?token=' + pub.join_token)}')">Copy</button>
-            </div>
-          </div>
-        `).join('');
-      } catch (error) {
-        container.innerHTML = '<div style="padding: 10px; color: #f56565;">Failed to load publishers</div>';
-      }
-    }
-
     async function deletePublisher(slug, publisherId) {
       if (!confirm('Are you sure you want to delete this publisher?')) {
         return;
@@ -1853,7 +1797,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         const response = await fetch(`${API_BASE}/rooms/${originalSlug}`, {
           method: 'PUT',
           headers: {
-            ,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -1884,7 +1827,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
         const response = await fetch(`${API_BASE}/rooms`, {
           method: 'POST',
           headers: {
-            ,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -1966,7 +1908,6 @@ ${baseUrl}/room/${slug}/publish?token=${p.join_token}`
             response = await fetch(`${API_BASE}/rooms/${roomSlug}/recordings/start`, {
               method: 'POST',
               headers: {
-                ,
                 'Content-Type': 'application/json'
               },
               body: JSON.stringify({

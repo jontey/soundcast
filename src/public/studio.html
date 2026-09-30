@@ -276,8 +276,36 @@
     $('recordBtn').addEventListener('click', async () => {
       const slug = currentRoom(), active = Boolean(state.recording[slug]?.isRecording);
       try {
-        await api(`/api/rooms/${encodeURIComponent(slug)}/recordings/${active ? 'stop' : 'start'}`, { method: 'POST', body: JSON.stringify(active ? {} : { enable_transcription: false }) });
-        status(active ? 'Recording stopped' : 'Recording started');
+        if (!active) {
+          let eventName = prompt('Event name (required):', state.recording[slug]?.eventName || '');
+          if (eventName === null) return;
+          eventName = eventName.trim();
+          if (!eventName) return status('Event name is required');
+
+          let response = await fetch(`/api/rooms/${encodeURIComponent(slug)}/recordings/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_name: eventName, enable_transcription: false })
+          });
+
+          if (response.status === 503) {
+            const errorPayload = await response.json().catch(() => ({}));
+            const reason = errorPayload.message || 'Transcription is unavailable';
+            if (!confirm(`${reason}\n\nStart recording without transcription?`)) throw new Error(reason);
+            response = await fetch(`/api/rooms/${encodeURIComponent(slug)}/recordings/start`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ event_name: eventName, enable_transcription: false })
+            });
+          }
+
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.message || `Request failed (${response.status})`);
+          status('Recording started');
+        } else {
+          await api(`/api/rooms/${encodeURIComponent(slug)}/recordings/stop`, { method: 'POST', body: JSON.stringify({}) });
+          status('Recording stopped');
+        }
       } catch (error) { status(error.message); }
     });
     $('savePinBtn').addEventListener('click', async () => {

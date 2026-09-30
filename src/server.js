@@ -152,6 +152,27 @@ Success
     .send(html);
 }
 
+function registerSharedHttpSurface(fastifyInstance) {
+  const rnnoiseAssetsDir = getRnnoiseAssetsDir();
+  if (rnnoiseAssetsDir) {
+    fastifyInstance.register(fastifyStatic, {
+      root: rnnoiseAssetsDir,
+      prefix: '/vendor/web-noise-suppressor/',
+      decorateReply: false
+    });
+  } else {
+    console.warn('RNNoise assets not found in node_modules. Publisher RNNoise toggle will fallback to browser suppression.');
+  }
+
+  fastifyInstance.get('/', async (request, reply) => {
+    const mainRoom = getRoomBySlug('main');
+    if (!mainRoom) {
+      return reply.sendFile('index.html');
+    }
+    return reply.redirect('/room/main/listen');
+  });
+}
+
 function registerCaptivePortalRoutes(fastifyInstance) {
   fastifyInstance.post('/api/captive/release', async (request, reply) => {
     const clientKey = markCaptiveClientReleased(request);
@@ -216,17 +237,7 @@ fastify.register(fastifyStatic, {
   root: publicDir,
   prefix: '/' // optional: default '/'
 });
-
-const rnnoiseAssetsDir = getRnnoiseAssetsDir();
-if (rnnoiseAssetsDir) {
-  fastify.register(fastifyStatic, {
-    root: rnnoiseAssetsDir,
-    prefix: '/vendor/web-noise-suppressor/',
-    decorateReply: false
-  });
-} else {
-  console.warn('RNNoise assets not found in node_modules. Publisher RNNoise toggle will fallback to browser suppression.');
-}
+registerSharedHttpSurface(fastify);
 
 // Register WebSocket plugin
 fastify.register(fastifyWebsocket, {
@@ -271,15 +282,6 @@ fastify.get('/admin', { preHandler: requireAdmin }, async (request, reply) => {
 fastify.get('/admin.html', { preHandler: requireAdmin }, async (request, reply) => reply.sendFile('admin.html'));
 
 fastify.get('/studio', async (request, reply) => reply.sendFile('studio.html'));
-
-// Landing page: default listener page (users can change rooms in the UI).
-fastify.get('/', async (request, reply) => {
-  const mainRoom = getRoomBySlug('main');
-  if (!mainRoom) {
-    return reply.sendFile('index.html');
-  }
-  return reply.redirect('/room/main/listen');
-});
 
 // mediasoup configuration
 const mediasoupConfig = {
@@ -2076,6 +2078,7 @@ function createHttpsServer() {
     root: publicDir,
     prefix: '/'
   });
+  registerSharedHttpSurface(fastifyHttps);
 
   fastifyHttps.register(fastifyWebsocket, {
     options: {
