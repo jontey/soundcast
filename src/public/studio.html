@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Soundcast Studio</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #16233b; background: #f3f5fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #192d56; color: white; padding: 16px max(20px, calc((100vw - 1440px)/2)); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    h1 { font-size: 1.3rem; margin: 0; }
+    h2 { font-size: 1.1rem; margin: 0 0 14px; }
+    main { max-width: 1440px; margin: 24px auto; padding: 0 20px; }
+    .card { background: white; border: 1px solid #dce2ec; border-radius: 14px; padding: 20px; box-shadow: 0 3px 14px #192d560d; }
+    .login { max-width: 460px; margin: 8vh auto; }
+    .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+    .field { display: flex; flex-direction: column; gap: 5px; min-width: 160px; flex: 1; }
+    label { font-weight: 600; font-size: .85rem; }
+    input, select, textarea, button { font: inherit; }
+    input, select, textarea { min-height: 42px; border: 1px solid #b9c4d6; border-radius: 8px; padding: 8px 10px; background: white; width: 100%; }
+    button, .button { min-height: 42px; padding: 9px 16px; border: 0; border-radius: 8px; background: #2e54a6; color: white; font-weight: 650; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+    button.secondary, .button.secondary { background: #e8edf8; color: #19345d; }
+    button:disabled { opacity: .5; cursor: default; }
+    .stack { display: grid; gap: 18px; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr); gap: 18px; }
+    .controls-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 18px; }
+    .pane { min-width: 0; }
+    .media-status { min-height: 26px; font-weight: 600; color: #234779; }
+    .meter { height: 12px; background: #e4eaf3; border-radius: 999px; overflow: hidden; margin: 16px 0; }
+    .meter span { display: block; height: 100%; width: 0; background: #36a56a; transition: width .1s; }
+    .media-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    .media-actions button { flex: 1; }
+    .audio-player { width: 100%; margin-top: 18px; }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; font-weight: 650; color: #294b89; }
+    .hint { color: #52637c; font-size: .87rem; line-height: 1.4; }
+    .error { color: #a5272f; min-height: 1.3em; }
+    .status { min-height: 1.3em; color: #24683c; }
+    .live-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .live-pill { padding: 9px 12px; border-radius: 8px; background: #e8edf8; font-size: .9rem; }
+    .messages { height: 86px; overflow: auto; background: #f7f9fc; border: 1px solid #dce2ec; border-radius: 8px; padding: 10px; font-size: .88rem; }
+    .hidden { display: none !important; }
+    @media(max-width: 900px) { .workspace, .controls-grid { grid-template-columns: 1fr; } header { padding: 16px 20px; } }
+  </style>
+</head>
+<body>
+  <header><h1>Soundcast Studio</h1><button id="logoutBtn" class="secondary hidden">Sign out</button></header>
+  <main>
+    <section id="loginView" class="card login stack">
+      <div><h2>Join the studio</h2><p class="hint">Use the room name and PIN your organizer gave you. No special link is needed.</p></div>
+      <div class="field"><label for="loginRole">I am joining as</label><select id="loginRole"><option value="room">Room co-host or publisher</option><option value="admin">Owner</option></select></div>
+      <div id="roomLoginFields" class="stack"><div class="field"><label for="loginRoom">Room code</label><input id="loginRoom" autocomplete="off" placeholder="main"></div><div class="field"><label for="loginPin">Room PIN</label><input id="loginPin" type="password" autocomplete="current-password"></div></div>
+      <div id="adminLoginFields" class="field hidden"><label for="loginPassword">Owner password</label><input id="loginPassword" type="password" autocomplete="current-password"></div>
+      <button id="loginBtn">Enter studio</button><div id="loginError" class="error" role="alert"></div>
+    </section>
+
+    <div id="studioView" class="stack hidden">
+      <section class="card">
+        <div class="row">
+          <div class="field"><label for="roomSelect">Room</label><select id="roomSelect"></select></div>
+          <div class="field" id="pinField"><label for="roomPin">Room PIN for co-hosts</label><input id="roomPin" type="password" placeholder="At least 6 characters"></div>
+          <button id="savePinBtn">Set room PIN</button>
+          <a id="adminToggleBtn" class="button secondary" href="/admin" target="_blank" rel="noopener">Advanced admin</a>
+        </div>
+        <p id="roomHint" class="hint">Everyone with this room PIN can enter a broadcast name and help manage this room. Share it privately.</p>
+        <details><summary>Available languages</summary><p class="hint">Add or remove the languages this room can broadcast and listen to. Separate names with commas or new lines.</p><div class="row"><div class="field"><label for="roomLanguages">Languages</label><textarea id="roomLanguages" rows="3" placeholder="English, Bahasa Malaysia"></textarea></div><button id="saveLanguagesBtn">Save languages</button></div></details>
+        <details id="ownerRoomTools"><summary>Create another room</summary><div class="row" style="margin-top:12px"><div class="field"><label for="newRoomName">Room name</label><input id="newRoomName" placeholder="Main Stage"></div><div class="field"><label for="newRoomSlug">Room code</label><input id="newRoomSlug" placeholder="main-stage"></div><button id="createRoomBtn">Create room</button></div></details>
+        <div id="topStatus" class="status" role="status"></div>
+      </section>
+
+      <div class="controls-grid">
+      <section class="card">
+        <h2>Room team</h2>
+        <div class="row">
+          <div class="field"><label for="broadcastName">Broadcast as</label><input id="broadcastName" maxlength="80" placeholder="Your name" autocomplete="name"></div>
+          <div class="field"><label for="broadcastChannel">Broadcast channel</label><select id="broadcastChannel"></select></div>
+        </div>
+        <p class="hint">Enter your name and choose a language, then open the microphone. You can change language while live by stopping and starting again.</p>
+      </section>
+
+      <section class="card">
+        <h2>Live room</h2>
+        <div id="liveStats" class="live-grid" aria-live="polite">Connecting to live status…</div>
+        <div class="row">
+          <button id="recordBtn" class="secondary">Start recording</button>
+          <div class="field"><label for="chatPublisher">Message publisher</label><select id="chatPublisher"></select></div>
+          <div class="field"><label for="chatText">Message</label><input id="chatText" maxlength="1000" placeholder="Check your microphone…"></div>
+          <button id="sendChatBtn">Send</button>
+        </div>
+        <div id="chatMessages" class="messages" aria-live="polite"></div>
+      </section>
+      </div>
+
+      <div class="workspace">
+        <section class="card pane">
+          <h2>Microphone</h2>
+          <p id="micStatus" class="media-status" role="status">Choose your name to broadcast.</p>
+          <div class="field"><label for="micDevice">Microphone</label><select id="micDevice"><option value="">Default microphone</option></select></div>
+          <div class="meter" aria-label="Microphone level"><span id="micLevel"></span></div>
+          <div class="media-actions"><button id="startBroadcastBtn">Start broadcast</button><button id="stopBroadcastBtn" class="secondary" disabled>Stop broadcast</button><button id="muteBroadcastBtn" class="secondary" disabled>Mute microphone</button></div>
+          <p class="hint"><span id="micListenerCount">0 listeners</span> on this channel. Other publishers can broadcast to the same channel.</p>
+        </section>
+        <section class="card pane">
+          <h2>Listen</h2>
+          <div class="field"><label for="listenChannel">Monitor channel</label><select id="listenChannel"></select></div>
+          <div class="media-actions"><button id="listenBtn">Start listening</button><button id="stopListenBtn" class="secondary" disabled>Stop listening</button></div>
+          <p id="listenStatus" class="media-status" role="status">Choose a channel to monitor.</p>
+          <audio id="monitorAudio" class="audio-player" controls autoplay playsinline></audio>
+          <p class="hint"><span id="monitorTrackCount">0 audio streams</span>. Use headphones when monitoring your own broadcast.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script src="/js/bundles/mediasoup-client.js"></script>
+  <script src="/js/signaling.js"></script>
+  <script src="/js/studio-media.js"></script>
+  <script src="/js/api-client.js"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const state = { auth: null, rooms: [], publishers: [], languages: [], activePublisherId: null, ws: null, stats: {}, recording: {}, chat: [] };
+    const publisherMedia = new SoundcastStudioMedia.PublisherMedia({
+      onStatus: message => { $('micStatus').textContent = message; renderMediaButtons(); },
+      onDevices: (devices, selectedId) => {
+        const previous = $('micDevice').value;
+        $('micDevice').replaceChildren(new Option('Default microphone', ''), ...devices.map(device => new Option(device.label || 'Microphone', device.deviceId)));
+        $('micDevice').value = selectedId || previous || '';
+      },
+      onLevel: value => { $('micLevel').style.width = `${value}%`; },
+      onListeners: count => { $('micListenerCount').textContent = `${count} listener${count === 1 ? '' : 's'}`; }
+    });
+    const listenerMedia = new SoundcastStudioMedia.ListenerMedia({
+      audio: $('monitorAudio'),
+      onStatus: message => { $('listenStatus').textContent = message; renderMediaButtons(); },
+      onTracks: count => { $('monitorTrackCount').textContent = `${count} audio stream${count === 1 ? '' : 's'}`; }
+    });
+    let micMuted = false;
+    function renderMediaButtons() {
+      $('startBroadcastBtn').disabled = publisherMedia.active;
+      $('stopBroadcastBtn').disabled = !publisherMedia.active;
+      $('muteBroadcastBtn').disabled = !publisherMedia.active;
+      $('listenBtn').disabled = listenerMedia.active;
+      $('stopListenBtn').disabled = !listenerMedia.active;
+    }
+    async function api(path, options = {}) { return window.SoundcastApi.request(path, options); }
+    function status(message) { $('topStatus').textContent = message; }
+    function currentRoom() { return $('roomSelect').value; }
+    function currentPublisher() { return state.publishers.find(p => p.id === state.activePublisherId); }
+    function renderLoginRole() {
+      const owner = $('loginRole').value === 'admin';
+      $('roomLoginFields').classList.toggle('hidden', owner);
+      $('adminLoginFields').classList.toggle('hidden', !owner);
+    }
+    async function showStudio(auth) {
+      state.auth = auth;
+      $('loginView').classList.add('hidden');
+      $('studioView').classList.remove('hidden');
+      $('logoutBtn').classList.remove('hidden');
+      const owner = auth.role === 'admin';
+      $('pinField').classList.toggle('hidden', !owner);
+      $('savePinBtn').classList.toggle('hidden', !owner);
+      $('adminToggleBtn').classList.toggle('hidden', !owner);
+      $('ownerRoomTools').classList.toggle('hidden', !owner);
+      $('roomHint').classList.toggle('hidden', !owner);
+      if (owner) {
+        const data = await api('/api/rooms');
+        state.rooms = data.rooms;
+      } else {
+        state.rooms = [{ slug: auth.roomSlug, name: auth.roomSlug }];
+      }
+      $('roomSelect').replaceChildren(...state.rooms.map(room => new Option(room.name, room.slug)));
+      if (owner && state.rooms.some(room => room.slug === 'main')) $('roomSelect').value = 'main';
+      $('roomSelect').disabled = !owner;
+      connectLive();
+      await loadRoom();
+    }
+    async function loadRoom() {
+      const slug = currentRoom();
+      if (!slug) return;
+      await Promise.all([publisherMedia.stop(), listenerMedia.stop()]);
+      state.activePublisherId = null;
+      $('micStatus').textContent = 'Choose your name to broadcast.';
+      $('listenStatus').textContent = 'Choose a channel to monitor.';
+      renderMediaButtons();
+      const [data, languageData] = await Promise.all([api(`/api/rooms/${encodeURIComponent(slug)}/publishers`), api(`/api/rooms/${encodeURIComponent(slug)}/languages`)]);
+      state.publishers = data.publishers;
+      state.languages = languageData.languages;
+      $('roomLanguages').value = state.languages.join(', ');
+      refreshTeamControls();
+      status(`${state.publishers.length} publisher${state.publishers.length === 1 ? '' : 's'} in ${slug}`);
+      renderLive();
+      renderRecording();
+    }
+    function refreshTeamControls() {
+      const selectedChatPublisher = $('chatPublisher').value;
+      const selectedListenChannel = $('listenChannel').value;
+      $('chatPublisher').replaceChildren(new Option('Choose publisher', ''), ...state.publishers.map(p => new Option(p.name, String(p.id))));
+      $('chatPublisher').value = selectedChatPublisher;
+      const channels = state.languages;
+      const selectedBroadcastChannel = $('broadcastChannel').value;
+      $('broadcastChannel').replaceChildren(new Option('Choose language', ''), ...channels.map(name => new Option(name, name)));
+      if (channels.includes(selectedBroadcastChannel)) $('broadcastChannel').value = selectedBroadcastChannel;
+      $('listenChannel').replaceChildren(new Option('Choose channel', ''), ...channels.map(name => new Option(name, name)));
+      if (channels.includes(selectedListenChannel)) $('listenChannel').value = selectedListenChannel;
+    }
+    function renderLive() {
+      const roomStats = state.stats[currentRoom()] || {};
+      const names = [...new Set([...state.languages, ...Object.keys(roomStats)])];
+      $('liveStats').replaceChildren(...names.map(name => {
+        const item = document.createElement('div'); item.className = 'live-pill';
+        const counts = roomStats[name] || { publishers: 0, subscribers: 0 };
+        item.textContent = `${name}: ${counts.publishers} live publisher${counts.publishers === 1 ? '' : 's'}, ${counts.subscribers} listener${counts.subscribers === 1 ? '' : 's'}`;
+        return item;
+      }));
+      if (!names.length) $('liveStats').textContent = 'Add a language to create the first channel.';
+    }
+    function renderRecording() {
+      const active = Boolean(state.recording[currentRoom()]?.isRecording);
+      $('recordBtn').textContent = active ? 'Stop recording' : 'Start recording';
+    }
+    function renderChat() {
+      $('chatMessages').replaceChildren(...state.chat.map(message => {
+        const line = document.createElement('div');
+        line.textContent = `${message.publisherName || 'Publisher'} ${message.sender === 'admin' ? '← team' : '→ team'}: ${message.text}`;
+        return line;
+      }));
+      $('chatMessages').scrollTop = $('chatMessages').scrollHeight;
+    }
+    function connectLive() {
+      if (state.ws) state.ws.close();
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${location.host}/ws/admin`);
+      state.ws = ws;
+      ws.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'channel-stats') { state.stats = message.stats || {}; renderLive(); }
+        if (message.type === 'channel-update') {
+          if (!state.stats[message.roomSlug]) state.stats[message.roomSlug] = {};
+          state.stats[message.roomSlug][message.channelName] = { publishers: message.publishers, subscribers: message.subscribers };
+          renderLive();
+        }
+        if (message.type === 'recording-stats') { state.recording = message.stats || {}; renderRecording(); }
+        if (message.type === 'recording-status') { state.recording[message.roomSlug] = message; renderRecording(); }
+        if (message.type === 'publisher-chat-history') { state.chat = message.data.messages || []; renderChat(); }
+        if (message.type === 'publisher-chat-message' && message.data.roomSlug === currentRoom() && String(message.data.publisherId) === $('chatPublisher').value) {
+          state.chat.push(message.data); renderChat();
+        }
+      };
+      ws.onclose = () => { if (state.auth && state.ws === ws) setTimeout(connectLive, 3000); };
+    }
+    $('loginRole').addEventListener('change', renderLoginRole);
+    $('loginBtn').addEventListener('click', async () => {
+      $('loginError').textContent = '';
+      try {
+        const owner = $('loginRole').value === 'admin';
+        const body = owner ? { role: 'admin', password: $('loginPassword').value } : { role: 'room', room_slug: $('loginRoom').value.trim(), pin: $('loginPin').value };
+        const auth = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(body) });
+        await showStudio(auth);
+      } catch (error) { $('loginError').textContent = error.message; }
+    });
+    $('logoutBtn').addEventListener('click', async () => { await Promise.all([publisherMedia.stop(), listenerMedia.stop()]); await api('/api/auth/logout', { method: 'POST', body: '{}' }); location.reload(); });
+    $('roomSelect').addEventListener('change', loadRoom);
+    $('chatPublisher').addEventListener('change', () => {
+      state.chat = []; renderChat();
+      if (state.ws?.readyState === WebSocket.OPEN && $('chatPublisher').value) state.ws.send(JSON.stringify({ type: 'admin-chat-history-request', data: { roomSlug: currentRoom(), publisherId: Number($('chatPublisher').value) } }));
+    });
+    $('sendChatBtn').addEventListener('click', () => {
+      const publisherId = Number($('chatPublisher').value), text = $('chatText').value.trim();
+      if (!publisherId || !text || state.ws?.readyState !== WebSocket.OPEN) return status('Choose a publisher and enter a message');
+      state.ws.send(JSON.stringify({ type: 'admin-chat-send', data: { roomSlug: currentRoom(), publisherId, text } }));
+      $('chatText').value = '';
+    });
+    $('recordBtn').addEventListener('click', async () => {
+      const slug = currentRoom(), active = Boolean(state.recording[slug]?.isRecording);
+      try {
+        if (!active) {
+          let eventName = prompt('Event name (required):', state.recording[slug]?.eventName || '');
+          if (eventName === null) return;
+          eventName = eventName.trim();
+          if (!eventName) return status('Event name is required');
+
+          let response = await fetch(`/api/rooms/${encodeURIComponent(slug)}/recordings/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event_name: eventName, enable_transcription: false })
+          });
+
+          if (response.status === 503) {
+            const errorPayload = await response.json().catch(() => ({}));
+            const reason = errorPayload.message || 'Transcription is unavailable';
+            if (!confirm(`${reason}\n\nStart recording without transcription?`)) throw new Error(reason);
+            response = await fetch(`/api/rooms/${encodeURIComponent(slug)}/recordings/start`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ event_name: eventName, enable_transcription: false })
+            });
+          }
+
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.message || `Request failed (${response.status})`);
+          status('Recording started');
+        } else {
+          await api(`/api/rooms/${encodeURIComponent(slug)}/recordings/stop`, { method: 'POST', body: JSON.stringify({}) });
+          status('Recording stopped');
+        }
+      } catch (error) { status(error.message); }
+    });
+    $('savePinBtn').addEventListener('click', async () => {
+      try { await api(`/api/rooms/${encodeURIComponent(currentRoom())}/access`, { method: 'PUT', body: JSON.stringify({ pin: $('roomPin').value }) }); $('roomPin').value = ''; status('Room PIN saved'); }
+      catch (error) { status(error.message); }
+    });
+    $('saveLanguagesBtn').addEventListener('click', async () => {
+      const languages = $('roomLanguages').value.split(/[,\n]/).map(value => value.trim()).filter(Boolean);
+      try {
+        const result = await api(`/api/rooms/${encodeURIComponent(currentRoom())}/languages`, { method: 'PUT', body: JSON.stringify({ languages }) });
+        state.languages = result.languages;
+        $('roomLanguages').value = state.languages.join(', ');
+        refreshTeamControls(); renderLive(); status('Available languages saved');
+      } catch (error) { status(error.message); }
+    });
+    async function startBroadcast() {
+      const name = $('broadcastName').value.trim();
+      const channel_name = $('broadcastChannel').value;
+      if (!name || !channel_name) return status('Enter your name and choose a language');
+      $('startBroadcastBtn').disabled = true;
+      try {
+        let pub = currentPublisher();
+        if (!pub) {
+          pub = await api(`/api/rooms/${encodeURIComponent(currentRoom())}/publishers`, { method: 'POST', body: JSON.stringify({ name, channel_name }) });
+          state.publishers.push(pub);
+          state.activePublisherId = pub.id;
+          refreshTeamControls(); renderLive();
+        } else if (pub.name !== name || pub.channel_name !== channel_name) {
+          pub = await api(`/api/rooms/${encodeURIComponent(currentRoom())}/publishers/${pub.id}`, { method: 'PUT', body: JSON.stringify({ name, channel_name }) });
+          Object.assign(currentPublisher(), pub);
+          refreshTeamControls(); renderLive();
+        }
+        await publisherMedia.start({ roomSlug: currentRoom(), publisherId: pub.id, channelName: channel_name, deviceId: $('micDevice').value });
+        micMuted = false;
+        $('muteBroadcastBtn').textContent = 'Mute microphone';
+      } catch (error) { status(error.message); }
+      renderMediaButtons();
+    }
+    $('startBroadcastBtn').addEventListener('click', startBroadcast);
+    $('stopBroadcastBtn').addEventListener('click', async () => { await publisherMedia.stop(); $('micStatus').textContent = 'Broadcast stopped'; renderMediaButtons(); });
+    $('muteBroadcastBtn').addEventListener('click', () => {
+      micMuted = !micMuted; publisherMedia.setMuted(micMuted);
+      $('muteBroadcastBtn').textContent = micMuted ? 'Unmute microphone' : 'Mute microphone';
+      $('micStatus').textContent = micMuted ? 'Microphone muted' : `Broadcasting to ${currentPublisher()?.channel_name || ''}`;
+    });
+    $('micDevice').addEventListener('change', async () => { if (publisherMedia.active) await startBroadcast(); });
+    $('listenBtn').addEventListener('click', async () => {
+      const channelName = $('listenChannel').value;
+      if (!channelName) return status('Choose a channel to listen to');
+      $('listenBtn').disabled = true;
+      try { await listenerMedia.start({ roomSlug: currentRoom(), channelName }); }
+      catch (error) { status(error.message); }
+      renderMediaButtons();
+    });
+    $('stopListenBtn').addEventListener('click', async () => { await listenerMedia.stop(); $('listenStatus').textContent = 'Listening stopped'; renderMediaButtons(); });
+    $('listenChannel').addEventListener('change', async () => {
+      if (!listenerMedia.active) return;
+      if ($('listenChannel').value) await listenerMedia.start({ roomSlug: currentRoom(), channelName: $('listenChannel').value });
+      else await listenerMedia.stop();
+      renderMediaButtons();
+    });
+    $('createRoomBtn').addEventListener('click', async () => {
+      const name = $('newRoomName').value.trim(), slug = $('newRoomSlug').value.trim();
+      if (!name) return status('Enter a room name');
+      try {
+        const room = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ name, slug }) });
+        state.rooms.push(room);
+        $('roomSelect').add(new Option(room.name, room.slug));
+        $('roomSelect').value = room.slug;
+        $('newRoomName').value = ''; $('newRoomSlug').value = '';
+        $('ownerRoomTools').open = false;
+        await loadRoom(); status(`${room.name} created. Set a PIN before inviting the room team.`);
+      } catch (error) { status(error.message); }
+    });
+    window.addEventListener('beforeunload', () => { publisherMedia.dispose(); listenerMedia.dispose(); });
+    api('/api/auth/me').then(showStudio).catch(() => {});
+  </script>
+</body>
+</html>

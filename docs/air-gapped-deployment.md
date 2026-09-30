@@ -1,12 +1,11 @@
-# Air-Gapped Single-Tenant Deployment
+# Air-Gapped Deployment
 
-This guide covers deploying SoundCast in an air-gapped (offline) environment with single-tenant mode.
+This guide covers deploying SoundCast in an air-gapped (offline) environment.
 
 ## Overview
 
-In single-tenant mode:
-- A default tenant is auto-created on first startup
-- Admin UI auto-logs in with the default API key
+- A default `main` room is auto-created on first startup
+- No API key or login is required to access the admin dashboard
 - No internet connection required
 - Uses the embedded mediasoup SFU (no separate SFU server needed)
 
@@ -43,8 +42,6 @@ docker run -d \
   --name soundcast \
   -p 3000:3000 \
   -p 40000-40100:40000-40100/udp \
-  -e SINGLE_TENANT=true \
-  -e ADMIN_KEY=admin \
   -e ANNOUNCED_IP=$HOST_IP \
   -v soundcast-data:/app/data \
   soundcast-local
@@ -56,34 +53,37 @@ Or using docker-compose:
 HOST_IP=192.168.1.100 docker-compose up -d
 ```
 
-### 4. Access the Admin UI
+### 4. Access the Web UI
 
-Open in browser:
-```
-http://192.168.1.100:3000/tenant-admin
-```
-
-The admin UI will auto-login in single-tenant mode.
+- **Listener**: `http://192.168.1.100:3000/` (default `main` room)
+- **Admin dashboard**: `http://192.168.1.100:3000/admin`
+- **Specific listener**: `http://192.168.1.100:3000/room/<slug>/listen`
 
 ## Creating a Room
 
-1. Click "Create Room"
-2. Fill in:
-   - **Name**: e.g., "Conference Room"
+From the admin dashboard:
 
+1. Click "Create Room"
+2. Fill in a name (e.g., "Conference Room")
 3. Click "Create Room"
+
+Or via the CLI:
+
+```bash
+node src/cli/manage.js create-room "Conference Room"
+```
 
 ## Adding a Publisher
 
-1. Find your room in the list
+1. Find your room in the admin dashboard
 2. Click "Add Publisher"
 3. Enter a channel name (e.g., "main")
 4. Copy the generated publisher URL
 
 ## Accessing Audio
 
-- **Publisher URL**: `http://<ip>:3000/room/<slug>/publish?token=<token>`
 - **Listener URL**: `http://<ip>:3000/room/<slug>/listen`
+- **Publisher URL**: `http://<ip>:3000/room/<slug>/publish?token=<token>`
 
 ## ICE Configuration for Air-Gapped Networks
 
@@ -116,7 +116,6 @@ docker run -d \
   --name soundcast \
   -p 3000:3000 \
   -p 40000-40100:40000-40100/udp \
-  -e SINGLE_TENANT=true \
   -e ANNOUNCED_IP=192.168.1.100 \
   -v soundcast-data:/app/data \
   soundcast-local
@@ -132,15 +131,13 @@ If you have Node.js available on the target:
 
 ```bash
 npm install
-SINGLE_TENANT=true ANNOUNCED_IP=192.168.1.100 node src/server.js
+ANNOUNCED_IP=192.168.1.100 node src/server.js
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SINGLE_TENANT` | `false` | Enable single-tenant auto-bootstrap |
-| `ADMIN_KEY` | `admin` | API key for the default tenant |
 | `ANNOUNCED_IP` | `127.0.0.1` | Your server's LAN IP (for WebRTC) |
 | `PORT` | `3000` | HTTP server port |
 | `DB_PATH` | `./soundcast.db` | SQLite database path |
@@ -166,7 +163,3 @@ Ensure the data directory is writable:
 ```bash
 docker exec soundcast ls -la /app/data
 ```
-
-## Security Note
-
-Single-tenant mode exposes the API key via `/api/config`. This is intentional for ease of use in air-gapped environments. For production deployments with security requirements, use multi-tenant mode with proper API key management.

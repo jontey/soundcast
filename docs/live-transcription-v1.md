@@ -11,7 +11,7 @@ This document describes the current implementation.
 
 ## Lifecycle
 
-1. Tenant admin starts recording with:
+1. Admin starts recording with:
    - `event_name` (required)
    - `enable_transcription` (default `true`)
 2. Node verifies sidecar readiness.

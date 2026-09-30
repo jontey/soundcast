@@ -1,4 +1,5 @@
 import { getDatabase } from '../database.js';
+import bcrypt from 'bcryptjs';
 import { deletePublishersByRoom } from './publisher.js';
 
 /**
@@ -18,23 +19,21 @@ function generateSlug(name, id) {
 /**
  * Create a new room
  * @param {object} roomData - Room data
- * @param {number} roomData.tenant_id - Tenant ID
  * @param {string} roomData.name - Room name
  * @returns {object} Created room
  */
-export function createRoom({ tenant_id, name, slug }) {
+export function createRoom({ name, slug }) {
   const db = getDatabase();
 
   // First insert without slug to get the ID
   const stmt = db.prepare(
-    'INSERT INTO rooms (tenant_id, name, slug) VALUES (?, ?, ?)'
+    'INSERT INTO rooms (name, slug) VALUES (?, ?)'
   );
 
   // Temporary slug (will be updated)
   const tempSlug = `temp-${Date.now()}`;
 
   const result = stmt.run(
-    tenant_id,
     name,
     tempSlug
   );
@@ -60,7 +59,7 @@ export function createRoom({ tenant_id, name, slug }) {
 export function getRoomById(id) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE id = ?'
+    'SELECT id, name, slug, created_at FROM rooms WHERE id = ?'
   );
   return stmt.get(id);
 }
@@ -73,7 +72,7 @@ export function getRoomById(id) {
 export function getRoomBySlug(slug) {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE slug = ?'
+    'SELECT id, name, slug, created_at FROM rooms WHERE slug = ?'
   );
   return stmt.get(slug);
 }
@@ -133,16 +132,45 @@ export function updateRoom(slug, updates) {
 }
 
 /**
- * List rooms by tenant ID
- * @param {number} tenant_id - Tenant ID
+ * List all rooms
  * @returns {array} Array of room objects
  */
-export function listRoomsByTenant(tenant_id) {
+export function listAllRooms() {
   const db = getDatabase();
   const stmt = db.prepare(
-    'SELECT id, tenant_id, name, slug, created_at FROM rooms WHERE tenant_id = ? ORDER BY created_at DESC'
+    'SELECT id, name, slug, created_at FROM rooms ORDER BY created_at DESC'
   );
-  return stmt.all(tenant_id);
+  return stmt.all();
+}
+
+export function setRoomPin(slug, pin) {
+  const room = getRoomBySlug(slug);
+  if (!room) return false;
+  getDatabase().prepare('UPDATE rooms SET room_pin_hash = ? WHERE id = ?')
+    .run(bcrypt.hashSync(pin, 10), room.id);
+  return true;
+}
+
+export function verifyRoomPin(slug, pin) {
+  const row = getDatabase().prepare('SELECT id, room_pin_hash FROM rooms WHERE slug = ?').get(slug);
+  return row?.room_pin_hash && bcrypt.compareSync(pin, row.room_pin_hash) ? row.id : null;
+}
+
+export function getRoomLanguages(roomId) {
+  const db = getDatabase();
+  const saved = db.prepare('SELECT name FROM room_languages WHERE room_id = ? ORDER BY position').all(roomId).map(row => row.name);
+  if (saved.length) return saved;
+  const existing = db.prepare('SELECT DISTINCT channel_name AS name FROM publishers WHERE room_id = ? ORDER BY channel_name').all(roomId).map(row => row.name);
+  return existing.length ? existing : ['English'];
+}
+
+export function setRoomLanguages(roomId, languages) {
+  const db = getDatabase();
+  db.transaction(() => {
+    db.prepare('DELETE FROM room_languages WHERE room_id = ?').run(roomId);
+    const insert = db.prepare('INSERT INTO room_languages (room_id, name, position) VALUES (?, ?, ?)');
+    languages.forEach((name, position) => insert.run(roomId, name, position));
+  })();
 }
 
 /**
@@ -184,6 +212,6 @@ export default {
   getRoomById,
   getRoomBySlug,
   updateRoom,
-  listRoomsByTenant,
+  listAllRooms,
   deleteRoom
 };

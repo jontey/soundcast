@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { currentSession, canAccessRoom } from '../auth.js';
 import path from 'path';
 import { spawn, execSync } from 'child_process';
 import { setTimeout as sleep } from 'timers/promises';
@@ -92,11 +93,10 @@ function parseTranscriptWsRequest(req) {
 
   let roomSlug = params.room_slug;
   let channelName = params.channel_name;
-  let apiKey = query.apiKey;
   let token = query.token;
   let sessionIdRaw = query.sessionId;
 
-  if (!roomSlug || !channelName || (!apiKey && !token) || sessionIdRaw === undefined || sessionIdRaw === null) {
+  if (!roomSlug || !channelName || sessionIdRaw === undefined || sessionIdRaw === null) {
     const host = req?.headers?.host || 'localhost';
     const protocol = req?.socket?.encrypted ? 'https' : 'http';
     const parsed = new URL(req?.url || '/', `${protocol}://${host}`);
@@ -109,7 +109,6 @@ function parseTranscriptWsRequest(req) {
       }
     }
 
-    apiKey = apiKey || parsed.searchParams.get('apiKey') || undefined;
     token = token || parsed.searchParams.get('token') || undefined;
     if (sessionIdRaw === undefined || sessionIdRaw === null) {
       sessionIdRaw = parsed.searchParams.get('sessionId');
@@ -123,7 +122,6 @@ function parseTranscriptWsRequest(req) {
   return {
     roomSlug,
     channelName,
-    apiKey,
     token,
     sessionId: invalidSessionId ? null : parsedSessionId,
     hasSessionId,
@@ -176,13 +174,11 @@ class TranscriptDocState {
 }
 
 export class TranscriptionRuntime {
-  constructor({ fastify, verifyPublisherToken, verifyTenantApiKey, getRoomBySlug, getRoomById, listRoomsByTenant }) {
+  constructor({ fastify, verifyPublisherToken, getRoomBySlug, getRoomById }) {
     this.fastify = fastify;
     this.verifyPublisherToken = verifyPublisherToken;
-    this.verifyTenantApiKey = verifyTenantApiKey;
     this.getRoomBySlug = getRoomBySlug;
     this.getRoomById = getRoomById;
-    this.listRoomsByTenant = listRoomsByTenant;
 
     this.sessions = new Map(); // roomId -> sessionState
     this.blockedSessions = new Map(); // roomId -> blocked session metadata
@@ -1496,23 +1492,13 @@ export class TranscriptionRuntime {
     return docState;
   }
 
-  async authenticateTranscriptSocket(roomSlug, apiKey, token) {
+  async authenticateTranscriptSocket(roomSlug, token, request) {
     const room = this.getRoomBySlug(roomSlug);
     if (!room) {
       return { ok: false, status: 404, message: 'Room not found' };
     }
 
-    if (apiKey) {
-      const tenant = this.verifyTenantApiKey(apiKey);
-      if (!tenant) {
-        return { ok: false, status: 403, message: 'Invalid API key' };
-      }
-
-      const tenantRooms = this.listRoomsByTenant(tenant.id);
-      const allowed = tenantRooms.some((r) => r.id === room.id);
-      if (!allowed) {
-        return { ok: false, status: 403, message: 'Room not allowed for tenant' };
-      }
+    if (canAccessRoom(currentSession(request), roomSlug)) {
       return { ok: true, room, authMode: 'admin' };
     }
 
@@ -1524,7 +1510,7 @@ export class TranscriptionRuntime {
       return { ok: true, room, authMode: 'publisher' };
     }
 
-    return { ok: false, status: 401, message: 'Missing apiKey or token' };
+    return { ok: false, status: 401, message: 'Missing publisher token' };
   }
 
   registerWsRoute(fastifyInstance) {
@@ -1536,7 +1522,7 @@ export class TranscriptionRuntime {
           return;
         }
 
-        const { roomSlug, channelName, apiKey, token, sessionId, hasSessionId, invalidSessionId } = parseTranscriptWsRequest(req);
+        const { roomSlug, channelName, token, sessionId, hasSessionId, invalidSessionId } = parseTranscriptWsRequest(req);
         if (!roomSlug || !channelName) {
           socket.send(JSON.stringify({ type: 'error', message: 'Invalid transcript websocket path' }));
           socket.close();
@@ -1547,7 +1533,7 @@ export class TranscriptionRuntime {
           socket.close();
           return;
         }
-        const auth = await this.authenticateTranscriptSocket(roomSlug, apiKey, token);
+        const auth = await this.authenticateTranscriptSocket(roomSlug, token, req);
         if (!auth.ok) {
           socket.send(JSON.stringify({ type: 'error', message: auth.message }));
           socket.close();

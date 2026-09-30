@@ -8,7 +8,7 @@ recordings/
 
 # Build artifacts
 build/
-lib/
+/lib/
 src/native/build/
 
 # Whisper models (large binary files)

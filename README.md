@@ -1,13 +1,13 @@
 # Soundcast
 
-Soundcast is a real-time audio broadcasting platform built with Node.js, Fastify, mediasoup, and WebSockets. It supports tenant-admin room management, publisher token flows, listener playback, and room recording.
+Soundcast is a real-time audio broadcasting platform built with Node.js, Fastify, mediasoup, and WebSockets. It supports room management, publisher token flows, listener playback, and room recording.
 
 ## Features
 
 - Real-time one-to-many audio broadcasting over WebRTC
-- Tenant-scoped room and publisher management
+- Room and publisher management via the built-in admin dashboard
 - Publisher token authentication
-- Live publisher/listener status in tenant admin
+- Live publisher/listener status in the admin dashboard
 - Room recording with per-track output
 - Live room transcription (MLX sidecar on macOS Apple Silicon)
 - Embedded SFU signaling at `/ws` (client-derived `ws(s)://<host>/ws`)
@@ -33,8 +33,7 @@ LISTEN_IP=0.0.0.0
 ANNOUNCED_IP=127.0.0.1
 PORT=3000
 HTTPS_PORT=3001
-SINGLE_TENANT=true
-ADMIN_KEY=admin
+ADMIN_PASSWORD=choose-a-private-owner-password
 ```
 
 3. Start the server:
@@ -44,6 +43,14 @@ npm run dev
 # or
 npm start
 ```
+
+On first start, a default `main` room is created automatically.
+
+Open `/studio` and sign in as owner with `ADMIN_PASSWORD`. Set a room PIN there,
+then give co-hosts and publishers the studio address, room code, and PIN. A room
+PIN grants access only to that room; anyone with the PIN can choose a publisher
+identity, so share it only with the room team.
+Use HTTPS when people sign in over a network outside a trusted local setup.
 
 ## Primary Endpoints
 
@@ -62,9 +69,20 @@ npm start
 
 ## Web UI
 
-- `http://localhost:3000/tenant-admin`
-- `http://localhost:3000/room/:slug/publish?token=...`
-- `http://localhost:3000/room/:slug/listen`
+- `http://localhost:3000/studio` (owner, co-host, and publisher workspace)
+- `http://localhost:3000/` (default listener for the `main` room)
+- `http://localhost:3000/admin` (admin dashboard: rooms, publishers, recordings, transcripts)
+- `http://localhost:3000/room/:slug/publish?token=...` (publisher)
+- `http://localhost:3000/room/:slug/listen` (listener)
+
+## CLI
+
+```bash
+node src/cli/manage.js create-room "Main Stage" main
+node src/cli/manage.js list-rooms
+node src/cli/manage.js create-publisher 1 main "Main Speaker"
+node src/cli/manage.js list-publishers 1
+```
 
 ## MLX Transcription Sidecar (Local)
 
